@@ -59,7 +59,7 @@ operator-led workflows, not yet for unattended production automation.
 | Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
 | Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASE CANDIDATE — see `AAW_PRODUCT_MVP_V0_2.md` |
 | Dynamic planner | PLANNED |
-| Repair merge/rejoin | PLANNED |
+| Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 
 ## Product app (MVP V0.2 — release candidate `0.2.0-rc1`)
 
@@ -148,7 +148,9 @@ reporting guidance and operating boundaries.
   bundled in this repository.
 - ORCA supervision and local Qwen preprocessing are opt-in experiments, not
   policy authority or automatic fallbacks.
-- Static workflow branches do not yet merge or rejoin automatically.
+- Static workflow branches merge only through an explicitly declared `MERGE`
+  node (`ALL_REQUIRED`/`ANY_COMPLETED`); there is no implicit or automatic
+  join, and no planner-driven graph mutation yet.
 - Focused green tests do not prove provider availability, runtime credentials,
   or a release authorization.
 
@@ -156,8 +158,10 @@ reporting guidance and operating boundaries.
 
 Near-term work focuses on completing portable configuration, stabilizing the
 Control Center and execution-identity surfaces, and improving descriptive
-analytics. Dynamic planning and repair merge/rejoin remain planned and require
-separate design and safety gates.
+analytics. Path-scoped branch context and a declared `MERGE`/rejoin primitive
+are implemented (see `AAW_PATH_SCOPED_BRANCH_CONTEXT_MERGE_V0_1.md`). Dynamic
+planner-driven graph mutation remains planned and requires separate design and
+safety gates.
 
 ## Test status
 

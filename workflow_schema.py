@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 
-NODE_TYPES = {"IMPLEMENT", "REVIEW", "MACHINE_GATE", "REPAIR", "HUMAN_GATE", "FINAL_GATE"}
+NODE_TYPES = {"IMPLEMENT", "REVIEW", "MACHINE_GATE", "REPAIR", "HUMAN_GATE", "FINAL_GATE", "MERGE"}
 OUTCOMES = {"PASS", "FAIL", "BLOCKED", "INVALID"}
 LLM_NODE_TYPES = {"IMPLEMENT", "REVIEW", "REPAIR"}
 TERMINALS = {"STOP", "HUMAN_REQUIRED"}
@@ -26,6 +26,12 @@ PREDICATE_KEYS = {"verdict", "outcome", "has_findings", "min_severity"}
 VERDICTS = {"PASS", "REPAIR", "BLOCKED"}
 SEVERITY_LADDER = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 EDGE_FIELDS = {"edge_id", "to", "when", "kind", "label", "legacy"}
+
+# AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Kept as workflow_schema's
+# own copy rather than importing routing_contract, matching how ROUTING_MODES/
+# EDGE_KINDS/VERDICTS above are already duplicated instead of shared — the two
+# modules stay decoupled by convention.
+MERGE_POLICIES = {"ALL_REQUIRED", "ANY_COMPLETED"}
 
 
 # AAW CANVAS FUNCTIONALIZATION V0.1 — error attribution.
@@ -140,6 +146,29 @@ def _validate_workflow(data: Any) -> dict[str, Any]:
     known = set(ids)
     types = {str(node["id"]): node.get("type") for node in nodes}
 
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Every edge_id in the
+    # whole graph that targets a given node, computed once up front so a MERGE
+    # node's `expected_incoming` can be checked for an *exact* match (closed
+    # input set — no undeclared incoming edge, no declared slot with nothing
+    # behind it) rather than inferred from geometry. Legacy on_pass/on_fail
+    # synthesizes the same `{node_id}:LEGACY_PASS`/`LEGACY_FAIL` edge ids
+    # `routing_contract.compile_edges` uses at runtime, so this check reflects
+    # what the runner actually routes on.
+    edges_by_target: dict[str, set[str]] = {}
+    for candidate in nodes:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = candidate.get("id")
+        if candidate.get("edges") is not None and isinstance(candidate["edges"], list):
+            for edge in candidate["edges"]:
+                if isinstance(edge, dict) and isinstance(edge.get("to"), str) and isinstance(edge.get("edge_id"), str):
+                    edges_by_target.setdefault(edge["to"], set()).add(edge["edge_id"])
+        elif isinstance(candidate_id, str):
+            if isinstance(candidate.get("on_pass"), str):
+                edges_by_target.setdefault(candidate["on_pass"], set()).add(f"{candidate_id}:LEGACY_PASS")
+            if isinstance(candidate.get("on_fail"), str):
+                edges_by_target.setdefault(candidate["on_fail"], set()).add(f"{candidate_id}:LEGACY_FAIL")
+
     for node in nodes:
         node_id = node["id"]
         _SUBJECT.set((str(node_id), None))  # every rule below is about this node
@@ -170,6 +199,21 @@ def _validate_workflow(data: Any) -> dict[str, Any]:
             command = node.get("command")
             _require(isinstance(command, list) and command and all(isinstance(x, str) and x for x in command), f"{node_id}: command must be a non-empty argv array")
             _require(type(node.get("timeout_seconds")) is int and node["timeout_seconds"] > 0, f"{node_id}: timeout_seconds must be positive")
+        elif node_type == "MERGE":
+            _require(node.get("model") in (None, ""), f"{node_id}: MERGE must not bind an LLM model")
+            _require(node.get("merge_policy") in MERGE_POLICIES,
+                     f"{node_id}: merge_policy must be one of {sorted(MERGE_POLICIES)}")
+            expected = node.get("expected_incoming")
+            _require(isinstance(expected, list) and expected and all(isinstance(x, str) and x for x in expected),
+                     f"{node_id}: expected_incoming must be a non-empty array of edge ids")
+            _require(len(expected) == len(set(expected)), f"{node_id}: expected_incoming must not repeat an edge id")
+            actual = edges_by_target.get(str(node_id), set())
+            # Closed input set (V0.1): no undeclared edge may feed a MERGE, and
+            # no declared slot may be backed by nothing. Optional/partial
+            # incoming sets are an explicit future contract, not an inference.
+            _require(set(expected) == actual,
+                     f"{node_id}: expected_incoming must exactly equal the graph's declared incoming edges "
+                     f"(declared {sorted(expected)}, graph has {sorted(actual)})")
         else:
             _require(node.get("model") in (None, ""), f"{node_id}: gate must not bind an LLM model")
 
