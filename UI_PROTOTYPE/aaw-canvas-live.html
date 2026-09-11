@@ -1,0 +1,1971 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AAW Canvas — Live</title>
+<!--
+  AAW CANVAS FUNCTIONALIZATION V0.1 — the executable canvas.
+  Builds on AAW UX RUNTIME BRIDGE V0.1 / AAW MULTIROUTING RUNTIME CONTRACT V0.1.
+
+  There is no simulated execution anywhere in this file. No planned verdict, no
+  scripted timeline, no local engine. Every fact drawn here came from the AAW
+  bridge over HTTP/SSE:
+
+    BUILD topology      GET  /api/workflow            workflow_projection
+    positions           GET  /api/layout              separate layout store
+    validation          POST /api/workflow/validate   the runner's own validator
+    write               POST /api/workflow/save       atomic + stale-checked
+    create              POST /api/workflow/create
+    runtime             GET  /api/run/stream          routing journal, SSE
+    node detail         GET  /api/run/node            structured, never parsed
+    run from here       POST /api/run/start {resume_from}
+    reset downstream    POST /api/run/reset-downstream
+    stop                POST /api/run/cancel          real child termination
+    partial work        GET  /api/run/worktree        real `git status`
+
+  Node state comes from NODE_STARTED / NODE_COMPLETED, verdicts from
+  NODE_COMPLETED.verdict, edge state from EDGE_SELECTED / EDGE_HELD, repair
+  lineage from BRANCH_CREATED, inherited upstream from RUN_RESUMED. Nothing on
+  this canvas is recovered from prose.
+
+  BUILD holds a *draft* of the definition. The draft is never authority: it is
+  validated by the bridge and only an accepted candidate is written. An invalid
+  draft stays editable and the last valid saved workflow is untouched.
+-->
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --ground:#0a0c0d; --grid:#171d1f;
+  --panel:#14181a; --panel-2:#1a2023; --panel-3:#212a2d;
+  --edge:#232a2d; --edge-2:#2f383c; --edge-3:#3e4a4f;
+  --ink:#e8ecec; --ink-2:#939c9f; --ink-3:#5f686c; --ink-4:#454e52;
+  --live:#57a0f5; --pass:#4f9a73; --repair:#c99340; --halt:#d4594c; --hold:#6b7478;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --r:6px;
+}
+html,body{height:100%;overflow:hidden}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:none;border:0;padding:0;cursor:pointer}
+:focus-visible{outline:1.5px solid var(--live);outline-offset:2px;border-radius:3px}
+.lab{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+/* ── instrument bar ── */
+#bar{height:46px;flex:0 0 46px;display:flex;align-items:center;gap:10px;padding:0 12px;
+  background:var(--panel);border-bottom:1px solid var(--edge);position:relative;z-index:40}
+.glyph{width:15px;height:15px;border:1.5px solid var(--ink-3);border-radius:2px;position:relative;flex:0 0 auto}
+.glyph::after{content:"";position:absolute;inset:3px;background:var(--live);border-radius:1px}
+.sep{width:1px;height:18px;background:var(--edge-2);flex:0 0 auto}
+select{background:var(--ground);border:1px solid var(--edge-2);border-radius:5px;height:27px;padding:0 8px;
+  font-family:var(--mono);font-size:11px;color:var(--ink-2);max-width:250px}
+.seg{display:flex;background:var(--ground);border:1px solid var(--edge-2);border-radius:5px;padding:2px;gap:2px;flex:0 0 auto}
+.seg button{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.1em;padding:4px 12px 3px;border-radius:3px;color:var(--ink-3)}
+.seg button[aria-pressed=true]{background:var(--panel-3);color:var(--ink)}
+#status{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:9px;overflow:hidden}
+#statusText{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#statusText b{color:var(--ink);font-weight:600}
+#statusText code{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--ink-4);flex:0 0 auto}
+.pulse[data-k=live]{background:var(--live);box-shadow:0 0 0 3px rgba(87,160,245,.16);animation:bp 1.4s ease-in-out infinite}
+.pulse[data-k=repair]{background:var(--repair);box-shadow:0 0 0 3px rgba(201,147,64,.16)}
+.pulse[data-k=pass]{background:var(--pass)}
+.pulse[data-k=halt]{background:var(--halt);box-shadow:0 0 0 3px rgba(212,89,76,.16)}
+@keyframes bp{50%{box-shadow:0 0 0 7px rgba(87,160,245,0)}}
+.btn{display:inline-flex;align-items:center;gap:7px;height:27px;padding:0 11px;border:1px solid var(--edge-2);border-radius:5px;
+  font-size:12px;color:var(--ink-2);background:var(--panel-2);white-space:nowrap}
+.btn:hover{border-color:var(--edge-3);color:var(--ink);background:var(--panel-3)}
+.btn[disabled]{opacity:.35;pointer-events:none}
+.btn.go{border-color:rgba(87,160,245,.4);color:#cfe1fb;background:rgba(87,160,245,.11)}
+.btn.stop{border-color:rgba(212,89,76,.42);color:#f0c4be;background:rgba(212,89,76,.12)}
+.btn.ok{border-color:rgba(79,154,115,.45);color:#a8d8bf;background:rgba(79,154,115,.11)}
+.btn.sm{height:23px;padding:0 8px;font-size:11px}
+.tri{width:0;height:0;border-left:7px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent}
+.sq{width:8px;height:8px;background:currentColor;border-radius:1px}
+#wfNew{background:var(--ground);border:1px solid var(--live);border-radius:5px;height:27px;padding:0 8px;
+  font-family:var(--mono);font-size:11px;color:var(--ink);width:250px}
+#seqchip{font-family:var(--mono);font-size:10px;color:var(--ink-4);flex:0 0 auto;white-space:nowrap}
+#dirty{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;padding:2px 6px 1px;border-radius:3px;
+  border:1px solid var(--edge-2);color:var(--ink-4);flex:0 0 auto}
+#dirty[data-k=dirty]{border-color:rgba(201,147,64,.5);color:#e6c288}
+#dirty[data-k=bad]{border-color:rgba(212,89,76,.5);color:#f0c4be}
+#dirty[data-k=saved]{border-color:rgba(79,154,115,.45);color:#a8d8bf}
+
+/* ── build palette ── */
+#palette{position:absolute;left:10px;top:10px;z-index:25;display:flex;flex-direction:column;gap:5px;
+  background:rgba(20,24,26,.95);border:1px solid var(--edge-2);border-radius:8px;padding:7px}
+body[data-mode=run] #palette{display:none}
+#palette .lab{padding:0 3px 2px}
+#palette .draft-actions{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding-bottom:5px;margin-bottom:2px;border-bottom:1px solid var(--edge)}
+#palette .draft-actions #btnDiscardDraft{grid-column:1 / -1}
+#palette button{display:flex;align-items:center;gap:7px;height:26px;padding:0 9px 0 7px;border-radius:5px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;color:var(--ink-2);border:1px solid transparent}
+#palette button:hover{background:var(--panel-3);border-color:var(--edge-2);color:var(--ink)}
+#palette button i{width:8px;height:8px;border-radius:2px;background:var(--ink-4);flex:0 0 auto}
+#palette button[data-t=IMPLEMENT] i{background:var(--live)}
+#palette button[data-t=REVIEW] i{background:var(--pass)}
+#palette button[data-t=REPAIR] i{background:var(--repair)}
+#palette button[data-t=MACHINE_GATE] i{background:var(--ink-2)}
+#palette button[data-t=HUMAN_GATE] i{background:#8e86e8}
+#palette .hint{font-size:10px;color:var(--ink-4);max-width:150px;padding:3px 4px 1px;line-height:1.4}
+
+/* ── canvas ── */
+#stage{flex:1 1 auto;position:relative;overflow:hidden;background:var(--ground);touch-action:none}
+#stage.panning{cursor:grabbing}
+#stage.wiring{cursor:crosshair}
+#grid{position:absolute;inset:0;pointer-events:none;
+  background-image:radial-gradient(circle at 1px 1px,var(--grid) 1px,transparent 0);background-size:24px 24px}
+#world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+#wires{position:absolute;left:0;top:0;overflow:visible}
+
+.wire{fill:none;stroke:var(--edge-2);stroke-width:1.5}
+.whit{fill:none;stroke:transparent;stroke-width:14;cursor:pointer;pointer-events:stroke}
+.wire[data-s=selected]{stroke:var(--pass);stroke-width:2.4}
+.wire[data-s=active]{stroke:var(--live);stroke-width:2.4;stroke-dasharray:5 6;animation:flow .55s linear infinite}
+.wire[data-s=repair]{stroke:var(--repair);stroke-width:2.4}
+.wire[data-s=held]{stroke:var(--hold);stroke-width:1.5;stroke-dasharray:2 5;opacity:.55}
+.wire[data-s=template]{stroke:var(--edge);stroke-dasharray:1 6}
+.wire[data-pick=true]{stroke:var(--live);stroke-width:2.6}
+.wire[data-bad=true]{stroke:var(--halt);stroke-width:2.4;stroke-dasharray:4 3}
+.wire.ghost{stroke:var(--live);stroke-width:2;stroke-dasharray:5 5;opacity:.85}
+@keyframes flow{to{stroke-dashoffset:-11}}
+@media (prefers-reduced-motion:reduce){.wire[data-s=active]{animation:none}.pulse{animation:none!important}}
+
+.wlabel{position:absolute;transform:translate(-50%,-50%);font-family:var(--mono);font-size:9px;font-weight:500;
+  letter-spacing:.09em;padding:2px 5px 1px;border-radius:3px;background:var(--ground);
+  border:1px solid var(--edge-2);color:var(--ink-3);white-space:nowrap;pointer-events:none}
+.wlabel[data-s=selected]{border-color:rgba(79,154,115,.5);color:#a8d8bf}
+.wlabel[data-s=repair]{border-color:rgba(201,147,64,.5);color:#e6c288}
+.wlabel[data-s=held]{border-color:var(--edge);color:var(--ink-4)}
+.wlabel[data-pick=true]{border-color:var(--live);color:#cfe1fb}
+.wlabel[data-bad=true]{border-color:rgba(212,89,76,.6);color:#f0c4be}
+
+/* ── node ── */
+.node{position:absolute;width:216px;height:88px;background:var(--panel);border:1px solid var(--edge-2);
+  border-radius:var(--r);padding:9px 11px 0;cursor:pointer;opacity:.62}
+.node::before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--edge-3);
+  border-radius:var(--r) var(--r) 0 0}
+.node:hover{opacity:.98;border-color:var(--edge-3)}
+.node[data-sel=true]{border-color:var(--live);opacity:1}
+.node[data-s=pending]{opacity:.5}
+.node[data-s=running]{opacity:1;border-color:rgba(87,160,245,.55);box-shadow:0 0 0 3px rgba(87,160,245,.1)}
+.node[data-s=running]::before{background:var(--live)}
+.node[data-s=done]{opacity:.72}
+.node[data-s=done]::before{background:var(--pass)}
+.node[data-s=inherited]{opacity:.6}
+.node[data-s=inherited]::before{background:var(--pass)}
+.node[data-s=repair]{opacity:1;border-color:rgba(201,147,64,.5)}
+.node[data-s=repair]::before{background:var(--repair)}
+.node[data-s=halt]{opacity:1;border-color:rgba(212,89,76,.5)}
+.node[data-s=halt]::before{background:var(--halt)}
+.node[data-s=cancelled]{opacity:.55;border-style:dashed}
+.node[data-s=cancelled]::before{background:var(--halt)}
+.node[data-tmpl=true]{border-style:dashed;opacity:.42}
+.node[data-minted=true]{border-color:rgba(201,147,64,.55)}
+.node[data-bad=true]{border-color:var(--halt);opacity:1;box-shadow:0 0 0 3px rgba(212,89,76,.12)}
+.node[data-reset=true]{outline:1.5px dashed rgba(201,147,64,.6);outline-offset:3px}
+.nhead{display:flex;align-items:baseline;gap:7px}
+.nid{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}
+.ntype{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-4);text-transform:uppercase}
+.ndot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--ink-4)}
+.node[data-s=running] .ndot{background:var(--live)}
+.node[data-s=done] .ndot,.node[data-s=inherited] .ndot{background:var(--pass)}
+.node[data-s=repair] .ndot{background:var(--repair)}
+.node[data-s=halt] .ndot{background:var(--halt)}
+.ntitle{margin-top:3px;font-size:12.5px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ndesc{margin-top:2px;font-size:11px;color:var(--ink-3);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.nbadge{position:absolute;right:9px;bottom:7px;font-family:var(--mono);font-size:9px;letter-spacing:.09em;
+  padding:1px 5px;border-radius:3px;border:1px solid var(--edge-2);color:var(--ink-3);background:var(--panel)}
+.nbadge[data-v=PASS]{border-color:rgba(79,154,115,.5);color:#a8d8bf}
+.nbadge[data-v=REPAIR]{border-color:rgba(201,147,64,.5);color:#e6c288}
+.nbadge[data-v=BLOCKED]{border-color:rgba(212,89,76,.5);color:#f0c4be}
+.nstart{position:absolute;left:9px;bottom:7px;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;
+  padding:1px 5px;border-radius:3px;border:1px solid rgba(87,160,245,.45);color:#cfe1fb;background:var(--panel)}
+
+/* ports — only in BUILD, and only what a wire needs */
+.port{position:absolute;top:50%;width:13px;height:13px;margin-top:-6.5px;border-radius:50%;
+  background:var(--panel-3);border:1.5px solid var(--edge-3);opacity:0;transition:opacity .1s}
+.port.out{right:-7px;cursor:crosshair}
+.port.in{left:-7px}
+body[data-mode=build] .node:hover .port,body[data-mode=build] .node[data-sel=true] .port{opacity:1}
+body[data-mode=build] .port.out:hover{background:var(--live);border-color:var(--live);opacity:1}
+body[data-mode=build] .node[data-drop=true] .port.in{opacity:1;background:var(--live);border-color:var(--live)}
+.node[data-drop=true]{border-color:var(--live);opacity:1}
+
+/* the diagnostic lives on the element that caused it */
+.nerr{position:absolute;left:0;right:0;top:100%;margin-top:5px;background:rgba(212,89,76,.12);
+  border:1px solid rgba(212,89,76,.5);border-radius:5px;padding:5px 8px;font-family:var(--mono);
+  font-size:10px;line-height:1.45;color:#f0c4be;pointer-events:none;z-index:3}
+
+/* verdict card, glued under the node that issued it */
+.vcard{position:absolute;width:216px;background:var(--panel-2);border:1px solid rgba(201,147,64,.4);
+  border-radius:var(--r);padding:8px 10px;font-size:11px;color:var(--ink-2);pointer-events:none}
+.vcard b{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.11em;color:#e6c288;margin-bottom:3px}
+.vcard p{margin:0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ── overlays ── */
+#insp{position:absolute;right:10px;top:10px;bottom:10px;width:392px;background:var(--panel);
+  border:1px solid var(--edge-2);border-radius:8px;z-index:30;display:none;flex-direction:column;overflow:hidden}
+#insp[data-open=true]{display:flex}
+.ihead{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--edge)}
+.ihead .nid{font-size:11px;color:var(--ink)}
+.ibody{flex:1 1 auto;overflow:auto;padding:12px}
+.ibody section{margin-bottom:14px}
+.ibody h4{margin:0 0 5px;font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3)}
+.ibody p{margin:0;font-size:12px;color:var(--ink-2);white-space:pre-wrap}
+.ibody ul{margin:0;padding-left:16px;font-size:12px;color:var(--ink-2)}
+.ibody code{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.ibody details{border-top:1px solid var(--edge);padding-top:9px;margin-top:4px}
+.ibody summary{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px}
+.ibody summary::-webkit-details-marker{display:none}
+.ibody summary::before{content:"▸";font-size:9px;color:var(--ink-4)}
+.ibody details[open] summary::before{content:"▾"}
+.ibody details > *:not(summary){margin-top:9px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:11.5px}
+.kv dt{font-family:var(--mono);font-size:10px;color:var(--ink-4);letter-spacing:.04em}
+.kv dd{margin:0;color:var(--ink-2);font-family:var(--mono);font-size:10.5px;word-break:break-all}
+.edgerow{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;padding:2px 0}
+.edgerow button{margin-left:auto}
+.pill{padding:1px 5px;border-radius:3px;border:1px solid var(--edge-2);color:var(--ink-3);letter-spacing:.08em}
+.pill[data-k=SELECTED]{border-color:rgba(79,154,115,.5);color:#a8d8bf}
+.pill[data-k=HELD]{border-color:var(--edge);color:var(--ink-4)}
+.pill[data-k=RUNNING]{border-color:rgba(87,160,245,.5);color:#cfe1fb}
+.pill[data-k=COMPLETED]{border-color:rgba(79,154,115,.5);color:#a8d8bf}
+.pill[data-k=INHERITED]{border-color:rgba(79,154,115,.35);color:#7fae95}
+textarea,input[type=text]{width:100%;background:var(--ground);border:1px solid var(--edge-2);border-radius:5px;
+  padding:6px 8px;font-family:var(--mono);font-size:11px;color:var(--ink)}
+textarea{min-height:92px;resize:vertical}
+input[type=text]{height:27px}
+.fld{margin-bottom:8px}
+.fld label{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--ink-4);margin-bottom:3px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ibody select{max-width:none;width:100%}
+.row{display:flex;gap:7px;margin-top:7px;flex-wrap:wrap}
+.note{margin-top:7px;font-size:11px;font-family:var(--mono);white-space:pre-wrap;line-height:1.5}
+.note[data-k=ok]{color:#a8d8bf}
+.note[data-k=bad]{color:#f0c4be}
+.note[data-k=warn]{color:#e6c288}
+.danger{color:#f0c4be;border-color:rgba(212,89,76,.42)}
+
+#tape{position:absolute;left:10px;bottom:10px;width:430px;max-height:186px;background:rgba(20,24,26,.94);
+  border:1px solid var(--edge-2);border-radius:8px;z-index:20;display:flex;flex-direction:column;overflow:hidden}
+body[data-mode=build] #tape{display:none}
+.thead{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--edge)}
+#tapeBody{overflow:auto;padding:5px 10px 8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);line-height:1.6}
+#tapeBody div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#tapeBody b{color:var(--ink-2);font-weight:500}
+#tapeBody i{color:var(--ink-4);font-style:normal}
+
+/* the cancellation / partial-work banner: a measured fact, not a disclaimer */
+#warn{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:35;max-width:640px;
+  background:rgba(212,89,76,.14);border:1px solid rgba(212,89,76,.5);border-radius:8px;
+  padding:9px 12px;display:none}
+#warn[data-open=true]{display:block}
+#warn h5{margin:0 0 3px;font-family:var(--mono);font-size:10px;letter-spacing:.11em;color:#f0c4be}
+#warn p{margin:0;font-size:11.5px;color:var(--ink-2)}
+#warn .row{margin-top:7px}
+
+#menu{position:absolute;z-index:45;background:var(--panel);border:1px solid var(--edge-2);border-radius:7px;
+  padding:5px;display:none;flex-direction:column;gap:2px;box-shadow:0 8px 26px rgba(0,0,0,.55)}
+#menu[data-open=true]{display:flex}
+#menu button{display:flex;align-items:center;gap:7px;height:25px;padding:0 10px 0 8px;border-radius:4px;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-2);white-space:nowrap}
+#menu button:hover{background:var(--panel-3);color:var(--ink)}
+#menu i{width:8px;height:8px;border-radius:2px;background:var(--ink-4)}
+#menu button[data-t=IMPLEMENT] i{background:var(--live)}
+#menu button[data-t=REVIEW] i{background:var(--pass)}
+#menu button[data-t=REPAIR] i{background:var(--repair)}
+#menu button[data-t=HUMAN_GATE] i{background:#8e86e8}
+
+#boot{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:50;
+  background:var(--ground);font-family:var(--mono);font-size:12px;color:var(--ink-3);text-align:center;padding:24px}
+#boot[hidden]{display:none}
+</style>
+</head>
+<body data-mode="build">
+<div id="app">
+  <div id="bar">
+    <div class="glyph"></div>
+    <select id="wfPick" title="workflow (loaded from AAW WORKFLOWS/)"></select>
+    <input type="text" id="wfNew" placeholder="new workflow id  ⏎" hidden>
+    <button class="btn sm" id="btnNew" title="author a new workflow through the bridge">New</button>
+    <div class="sep"></div>
+    <div class="seg" role="group" aria-label="mode">
+      <button id="mBuild" aria-pressed="true">BUILD</button>
+      <button id="mRun" aria-pressed="false">RUN</button>
+    </div>
+    <span id="dirty" data-k="">clean</span>
+    <button class="btn sm" id="btnSave">Save</button>
+    <div class="sep"></div>
+    <div id="status"><span class="pulse" id="pulse"></span><span id="statusText">idle</span></div>
+    <span id="seqchip"></span>
+    <button class="btn sm" id="btnReconnect" title="drop the stream and resume from the last rendered sequence">Reconnect</button>
+    <button class="btn go" id="btnRun"><span class="tri"></span>Run</button>
+  </div>
+  <div id="stage">
+    <div id="grid"></div>
+    <div id="world"><svg id="wires"></svg></div>
+
+    <div id="palette">
+      <span class="lab">Add node</span>
+      <div class="draft-actions">
+        <button class="btn sm" id="btnUndo" title="Undo last BUILD edit (Ctrl+Z)">Undo</button>
+        <button class="btn sm" id="btnRedo" title="Redo BUILD edit (Ctrl+Shift+Z / Ctrl+Y)">Redo</button>
+        <button class="btn sm" id="btnDiscardDraft" title="Restore the last saved workflow and layout">Discard unsaved</button>
+      </div>
+      <button data-t="IMPLEMENT"><i></i>IMPLEMENT</button>
+      <button data-t="REVIEW"><i></i>REVIEW</button>
+      <button data-t="MACHINE_GATE"><i></i>MACHINE_GATE</button>
+      <button data-t="REPAIR"><i></i>REPAIR template</button>
+      <button data-t="HUMAN_GATE"><i></i>HUMAN_GATE</button>
+      <span class="hint">Drag the right-hand port of a node onto another node to wire it, or into empty space to create the next one.</span>
+    </div>
+
+    <div id="warn" data-open="false">
+      <h5 id="warnTitle">RUN_CANCELLED · PARTIAL_WORK_PRESENT</h5>
+      <p id="warnText"></p>
+      <div class="row">
+        <button class="btn sm" id="warnInspect">Inspect what remains</button>
+        <button class="btn sm" id="warnClose">Dismiss</button>
+      </div>
+    </div>
+
+    <aside id="insp" data-open="false">
+      <div class="ihead"><span class="nid" id="iId">—</span><span class="ntype" id="iType"></span>
+        <button class="btn sm" id="iClose" style="margin-left:auto">Close</button></div>
+      <div class="ibody" id="iBody"></div>
+    </aside>
+
+    <div id="menu" data-open="false"></div>
+
+    <div id="tape">
+      <div class="thead"><span class="lab">Routing journal</span><span class="lab" id="tapeMeta" style="margin-left:auto"></span></div>
+      <div id="tapeBody"><div><i>no run yet</i></div></div>
+    </div>
+    <div id="boot">connecting to the AAW bridge…</div>
+  </div>
+</div>
+
+<script src="/ui/draft_history.js"></script>
+<script>
+"use strict";
+(function () {
+/* ─────────────────────────── constants ───────────────────────────
+   NW/NH/COLUMN/ROW/BRANCH_ROW mirror workflow_layout so a branch minted while
+   the stream is live lands where the bridge would have placed it. */
+const NW = 216, NH = 88, COLUMN = 296, ROW = 168, BRANCH_ROW = 280;
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const clone = (v) => JSON.parse(JSON.stringify(v));
+
+const stage = $("#stage"), world = $("#world"), wires = $("#wires");
+const insp = $("#insp"), tapeBody = $("#tapeBody"), menu = $("#menu");
+
+/* Node defaults. Every field here is one `workflow_schema.validate_workflow`
+   demands of that type — this is not a template library, it is the minimum a
+   new node needs to be a legal node. */
+const NODE_TYPES = ["IMPLEMENT", "REVIEW", "MACHINE_GATE", "REPAIR", "HUMAN_GATE"];
+const DEFAULTS = {
+  IMPLEMENT: { role: "CODE_IMPLEMENTER", capability: "CODE_IMPLEMENTER", model: "gpt-5.6-sol",
+    effort: "medium", instructions: "Implement the supplied goal in the isolated worktree. Keep the change narrowly scoped and add or update focused tests. Do not merge, push, create a PR, or alter the canonical checkout.",
+    acceptance: ["The requested behaviour is implemented in the isolated worktree."] },
+  REVIEW: { role: "INDEPENDENT_REVIEWER", model: "gpt-5.6-sol", effort: "high",
+    instructions: "Review the implementation in a fresh, read-only context. Do not edit files.\n\nYou do not choose the next node: set `verdict` and the deterministic gate routes.\nverdict = PASS when the work meets the acceptance criteria.\nverdict = REPAIR when it is fixable inside the current scope; then `next_brief` is mandatory and becomes the binding brief of the repair branch.\nverdict = BLOCKED when a human decision is required.",
+    acceptance: ["The review ran in a fresh read-only context.", "A REPAIR verdict carries a concrete, self-contained next_brief."] },
+  REPAIR: { role: "CODE_IMPLEMENTER", capability: "CODE_IMPLEMENTER", model: "gpt-5.6-sol",
+    effort: "medium", instructions: "Repair template. This node is never entered directly: the gate mints an explicit lineage child from it and the reviewer's next_brief is appended as INHERITED_BRIEF.\n\nMake only the changes the inherited brief requires.",
+    acceptance: ["Every point of the inherited brief is addressed.", "No change outside the scope the brief names."] },
+  MACHINE_GATE: { role: null, model: null, effort: null,
+    instructions: "Run the pre-approved focused test command without a shell.",
+    acceptance: ["The command exits with code 0."],
+    command: ["python", "-m", "pytest", "-q"], timeout_seconds: 300 },
+  HUMAN_GATE: { role: null, model: null, effort: null,
+    instructions: "Human acceptance. The runner never merges, pushes or opens a PR.",
+    acceptance: ["A human verdict is recorded against the candidate."] },
+};
+
+/* ─────────────────────────── model ───────────────────────────
+   `saved` is the last definition the bridge accepted. `draft` is what the
+   user is editing. They are separate on purpose: an invalid draft must stay
+   editable without ever standing in for the saved workflow, and the only
+   path from draft to disk is POST /api/workflow/save, which validates. */
+const S = {
+  contract: null, workflows: [], workflowId: null,
+  saved: null, savedHash: null, savedLayout: { nodes: {} },
+  draft: null, graph: null,              // graph = projection of the *draft* when valid
+  diagnostics: [], draftValid: true, dirty: false,
+  // True between a draft mutation and the bridge's answer about it. While it
+  // is set the canvas draws the draft itself: the projection on hand belongs
+  // to the previous edit, and drawing that would show a node the user just
+  // deleted, or hide one they just created.
+  graphStale: false,
+  layout: { nodes: {} },
+  mode: "build",
+  run: null, runnerStatus: null, lastSequence: 0, stream: null,
+  nodeState: {}, edgeState: {}, minted: {}, decisions: {},
+  resetCone: [],                          // node ids Reset downstream marked
+  selected: null, selectedEdge: null,
+  view: { x: 190, y: 120, k: 1 },
+};
+const draftHistory = new DraftHistory(100);
+
+/* ─────────────────────────── transport ─────────────────────────── */
+async function api(path, options) {
+  const response = await fetch(path, Object.assign(
+    { headers: { "Content-Type": "application/json" } }, options || {}));
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = { error: "BAD_JSON", message: text.slice(0, 400) }; }
+  if (!response.ok) {
+    const err = new Error((data && data.message) || response.statusText);
+    err.payload = data || {};
+    throw err;
+  }
+  return data;
+}
+
+/* ─────────────────────────── boot ─────────────────────────── */
+async function boot() {
+  try {
+    S.contract = await api("/api/contract");
+    await refreshWorkflows();
+    const pick = $("#wfPick");
+    pick.addEventListener("change", () => openWorkflow(pick.value));
+    await openWorkflow(pick.value);
+    $("#boot").hidden = true;
+  } catch (error) {
+    $("#boot").innerHTML = "bridge unreachable.<br><br>start it with:<br>" +
+      "<b>python aaw_bridge_server.py --repo &lt;repo&gt; --worktree &lt;worktree&gt;</b><br><br>" +
+      esc(error.message);
+  }
+}
+
+async function refreshWorkflows(prefer) {
+  const listing = await api("/api/workflows");
+  S.workflows = listing.workflows;
+  const usable = S.workflows.filter((row) => row.valid);
+  if (!usable.length && !prefer) throw new Error("no valid workflow in " + listing.workflows_root);
+  const pick = $("#wfPick");
+  pick.innerHTML = S.workflows.map((row) =>
+    `<option value="${esc(row.workflow_id)}">${esc(row.workflow_id)}` +
+    (row.valid ? ` · ${row.node_count} nodes` : " · DOES NOT VALIDATE") + `</option>`).join("");
+  const want = prefer || (usable.some((r) => r.workflow_id === "MULTIROUTING_SLICE_V1")
+    ? "MULTIROUTING_SLICE_V1" : usable[0].workflow_id);
+  pick.value = want;
+  return want;
+}
+
+async function openWorkflow(id) {
+  closeStream();
+  const payload = await api("/api/workflow?workflow_id=" + encodeURIComponent(id));
+  S.workflowId = payload.workflow_id;
+  S.saved = payload.definition;
+  S.savedHash = payload.semantic_hash;
+  S.draft = clone(payload.definition);
+  S.graph = payload.projection;
+  S.diagnostics = payload.valid ? [] : (payload.errors || []).map((m) => ({ message: m }));
+  S.draftValid = Boolean(payload.valid);
+  S.graphStale = false;
+  S.dirty = false;
+  S.layout = { nodes: Object.assign({}, (payload.layout && payload.layout.nodes) || {}),
+               viewport: payload.layout && payload.layout.viewport };
+  S.savedLayout = clone(S.layout);
+  S.nodeState = {}; S.edgeState = {}; S.minted = {}; S.decisions = {}; S.resetCone = [];
+  S.run = null; S.runnerStatus = null; S.lastSequence = 0;
+  S.selected = null; S.selectedEdge = null;
+  draftHistory.reset(historyState());
+  if (S.layout.viewport) S.view = Object.assign({}, S.view, S.layout.viewport);
+  setMode("build");
+  closeWarn();
+  tapeBody.innerHTML = "<div><i>no run yet</i></div>";
+  if (!payload.valid) {
+    // The bridge hands back a workflow that no longer validates, with the
+    // reason. Say so and keep it editable; do not draw an empty graph as if
+    // it were the workflow.
+    setStatus("halt", `<b>${esc(payload.workflow_id)}</b> does not validate — ` +
+      esc((payload.errors || []).join("; ")) + " · editable, not runnable");
+  } else {
+    describeGraph();
+  }
+  closeInspector();
+  markDirty();
+  render();
+}
+
+function describeGraph() {
+  if (!S.graph) return;
+  setStatus(null, `<b>${esc(S.graph.workflow_id)}</b> · ${S.graph.nodes.length} nodes · ` +
+    `${S.graph.edges.length} declared edges · semantic <code>${esc(String(S.graph.semantic_hash).slice(0, 12))}</code>`);
+}
+
+/* ─────────────────────────── draft model ───────────────────────────
+   Pure functions over `S.draft`. None of them writes anything: a mutation is
+   only ever a proposal until the bridge accepts it. */
+function draftNodes() { return (S.draft && S.draft.nodes) || []; }
+function draftNode(id) { return draftNodes().find((n) => n.id === id) || null; }
+
+function nextNodeId() {
+  const used = new Set(draftNodes().map((n) => n.id));
+  Object.keys(S.minted).forEach((id) => used.add(id));
+  for (let i = 1; i < 1000; i += 1) {
+    const id = "N" + String(i).padStart(2, "0");
+    if (!used.has(id)) return id;
+  }
+  return "N" + Date.now();
+}
+
+function nextEdgeId(from, to) {
+  const used = new Set();
+  draftNodes().forEach((n) => (n.edges || []).forEach((e) => used.add(e.edge_id)));
+  const base = `E_${from}_${to}`;
+  if (!used.has(base)) return base;
+  for (let i = 2; i < 99; i += 1) if (!used.has(base + "_" + i)) return base + "_" + i;
+  return base + "_" + Date.now();
+}
+
+function addNode(type, x, y, deferred) {
+  const id = nextNodeId();
+  const d = DEFAULTS[type] || DEFAULTS.IMPLEMENT;
+  const node = Object.assign({
+    id, type, depends_on: [], run_if: draftNodes().length ? "ON_TRANSITION" : "ALWAYS",
+    role: null, model: null, effort: null, instructions: "", acceptance: [],
+    on_pass: null, on_fail: null,
+  }, clone(d));
+  if (type !== "HUMAN_GATE") node.routing = "FIRST_MATCH";
+  S.draft.nodes.push(node);
+  // `start_node` is a declared field and moving it is a semantic change, so it
+  // is moved in exactly two cases and never silently otherwise:
+  //   * there is no valid start node at all;
+  //   * this is the first node added to the blank workflow, whose only node is
+  //     the terminal HUMAN_GATE the schema requires. That gate cannot be the
+  //     entry point of a graph that feeds into it, and there is no other
+  //     candidate, so the choice is forced rather than guessed.
+  const current = draftNode(S.draft.start_node);
+  const blankCanvas = current && draftNodes().length === 2 && !current.edges &&
+    ["HUMAN_GATE", "FINAL_GATE"].includes(current.type);
+  if (!current || blankCanvas) S.draft.start_node = id;
+  S.layout.nodes[id] = { x: Math.round(x), y: Math.round(y) };
+  if (!deferred) touch("create node");
+  return id;
+}
+
+function addEdge(from, to, deferred) {
+  const source = draftNode(from), target = draftNode(to);
+  if (!source || from === to) return null;
+  source.edges = source.edges || [];
+  if (source.edges.some((e) => e.to === to)) return null;   // one wire per pair
+  // A REPAIR-typed target is a template: reaching it with anything but a
+  // REPAIR edge is exactly what `workflow_schema` refuses, so the kind is
+  // decided by the target's type rather than left for the user to get wrong.
+  const kind = target && target.type === "REPAIR" ? "REPAIR" : "CONTINUE";
+  const edge = { edge_id: nextEdgeId(from, to), to, when: null, kind,
+                 label: kind === "REPAIR" ? "REPAIR — new branch" : "continue" };
+  source.edges.push(edge);
+  normalizeEdgeOrder(source);
+  if (!deferred) touch("create edge");
+  return edge.edge_id;
+}
+
+function normalizeEdgeOrder(node) {
+  // `FIRST_MATCH` requires an unconditional edge to be declared last, because
+  // it shadows everything after it. Keeping that ordering is mechanical
+  // satisfaction of a declared schema rule — it decides nothing about routing.
+  if ((node.routing || "FIRST_MATCH") !== "FIRST_MATCH") return;
+  const conditional = node.edges.filter((e) => e.when && Object.keys(e.when).length);
+  const unconditional = node.edges.filter((e) => !(e.when && Object.keys(e.when).length));
+  node.edges = conditional.concat(unconditional);
+}
+
+function deleteNode(id) {
+  if (!draftNode(id)) return;
+  S.draft.nodes = draftNodes().filter((n) => n.id !== id);
+  // Every wire into a deleted node would otherwise be a broken target. Pruning
+  // dangling references is cleanup, not a routing decision.
+  draftNodes().forEach((n) => {
+    if (n.edges) n.edges = n.edges.filter((e) => e.to !== id);
+    if (n.edges && !n.edges.length) delete n.edges;
+    n.depends_on = (n.depends_on || []).filter((d) => d !== id);
+    if (n.on_pass === id) n.on_pass = null;
+    if (n.on_fail === id) n.on_fail = null;
+  });
+  delete S.layout.nodes[id];
+  if (S.draft.start_node === id) S.draft.start_node = draftNodes().length ? draftNodes()[0].id : null;
+  if (S.selected === id) closeInspector();
+  touch("delete node");
+}
+
+function deleteEdge(edgeId) {
+  draftNodes().forEach((n) => {
+    if (!n.edges) return;
+    n.edges = n.edges.filter((e) => e.edge_id !== edgeId);
+    if (!n.edges.length) delete n.edges;
+  });
+  if (S.selectedEdge === edgeId) S.selectedEdge = null;
+  touch("delete edge");
+}
+
+function findEdge(edgeId) {
+  for (const node of draftNodes()) {
+    const edge = (node.edges || []).find((e) => e.edge_id === edgeId);
+    if (edge) return { node, edge };
+  }
+  return null;
+}
+
+function insertIntoEdge(edgeId, type) {
+  const found = findEdge(edgeId);
+  if (!found) return null;
+  const from = positionOf(found.node.id), to = positionOf(found.edge.to);
+  const id = addNode(type, (from.x + to.x) / 2 + NW / 2, (from.y + to.y) / 2 + ROW * 0.55, true);
+  const onward = found.edge.to;
+  found.edge.to = id;                       // the original edge now ends at the new node
+  if (found.edge.kind === "REPAIR" && type !== "REPAIR") found.edge.kind = "CONTINUE";
+  const inserted = draftNode(id);
+  inserted.edges = [{ edge_id: nextEdgeId(id, onward), to: onward, when: null,
+                      kind: draftNode(onward) && draftNode(onward).type === "REPAIR" ? "REPAIR" : "CONTINUE",
+                      label: "continue" }];
+  touch("insert into edge");
+  return id;
+}
+
+function historyState() {
+  return { draft: clone(S.draft), layout: { nodes: clone((S.layout && S.layout.nodes) || {}) } };
+}
+
+function atSavedBaseline() {
+  return JSON.stringify(S.draft) === JSON.stringify(S.saved) &&
+    JSON.stringify((S.layout && S.layout.nodes) || {}) === JSON.stringify((S.savedLayout && S.savedLayout.nodes) || {});
+}
+
+function updateHistoryButtons() {
+  const build = S.mode === "build";
+  $("#btnUndo").disabled = !build || !draftHistory.canUndo();
+  $("#btnRedo").disabled = !build || !draftHistory.canRedo();
+  $("#btnDiscardDraft").disabled = !build || !S.dirty;
+}
+
+function touch(label) {
+  draftHistory.record(historyState(), label || "edit");
+  S.dirty = !atSavedBaseline();
+  S.graphStale = true;
+  scheduleValidate();
+  updateHistoryButtons();
+  render();
+}
+
+function applyHistory(result, verb) {
+  if (!result) return;
+  S.draft = clone(result.state.draft);
+  S.layout.nodes = clone((result.state.layout && result.state.layout.nodes) || {});
+  if (S.selected && !draftNode(S.selected)) S.selected = null;
+  if (S.selectedEdge && !findEdge(S.selectedEdge)) S.selectedEdge = null;
+  S.dirty = !atSavedBaseline();
+  S.graphStale = true;
+  scheduleValidate();
+  updateHistoryButtons();
+  markDirty(); render();
+  setStatus(null, `<b>${esc(verb)}</b> · ${esc(result.label)} · runtime and Git history unchanged`);
+  if (S.selected) openInspector(S.selected, { keep: true });
+  else if (S.selectedEdge) openEdgeInspector(S.selectedEdge, { keep: true });
+}
+
+function undoDraft() { applyHistory(draftHistory.undo(), "undo"); }
+function redoDraft() { applyHistory(draftHistory.redo(), "redo"); }
+function discardDraft() {
+  if (!S.dirty) return;
+  S.draft = clone(S.saved);
+  S.layout = clone(S.savedLayout);
+  S.dirty = false; S.graphStale = true; S.diagnostics = [];
+  S.selected = null; S.selectedEdge = null;
+  draftHistory.reset(historyState());
+  scheduleValidate(); updateHistoryButtons(); markDirty(); closeInspector(); render();
+  setStatus(null, "<b>discarded unsaved BUILD changes</b> · restored the last saved workflow and layout");
+}
+
+/* ─────────────────────────── validation ───────────────────────────
+   The candidate is validated by the bridge, which calls the same
+   `validate_workflow` the runner loads a workflow through. There is no
+   client-side rule set to drift from it. */
+let validateTimer = null;
+function scheduleValidate() {
+  clearTimeout(validateTimer);
+  validateTimer = setTimeout(validateDraft, 180);
+}
+
+async function validateDraft() {
+  if (!S.draft) return;
+  let report;
+  try {
+    report = await api("/api/workflow/validate", { method: "POST",
+      body: JSON.stringify({ candidate: S.draft }) });
+  } catch (error) {
+    S.draftValid = false;
+    S.graphStale = false;
+    S.diagnostics = [{ message: error.message }];
+    markDirty(); render(); return;
+  }
+  S.draftValid = Boolean(report.valid);
+  S.graphStale = false;
+  S.diagnostics = report.valid ? [] : (report.diagnostics && report.diagnostics.length
+    ? report.diagnostics : (report.errors || []).map((m) => ({ message: m })));
+  if (report.valid) {
+    // Draw the draft the way the runtime will read it: the projection is the
+    // bridge's, computed from the candidate, not a local approximation.
+    S.graph = report.projection;
+    describeGraph();
+  }
+  markDirty();
+  render();
+  if (S.selected) openInspector(S.selected, { keep: true });
+  if (S.selectedEdge) openEdgeInspector(S.selectedEdge, { keep: true });
+}
+
+function markDirty() {
+  const chip = $("#dirty");
+  const kind = !S.draftValid ? "bad" : (S.dirty ? "dirty" : "saved");
+  chip.dataset.k = S.dirty || !S.draftValid ? kind : "";
+  chip.textContent = !S.draftValid ? `invalid · ${S.diagnostics.length} issue${S.diagnostics.length === 1 ? "" : "s"}`
+    : (S.dirty ? "unsaved" : "saved");
+  $("#btnSave").disabled = !S.dirty || !S.draftValid;
+  $("#btnSave").classList.toggle("ok", S.dirty && S.draftValid);
+  updateHistoryButtons();
+}
+
+function diagnosticsFor(nodeId) {
+  return S.diagnostics.filter((d) => d.node_id === nodeId && !d.edge_id);
+}
+function diagnosticForEdge(edgeId) {
+  return S.diagnostics.find((d) => d.edge_id === edgeId) || null;
+}
+
+/* ─────────────────────────── save ─────────────────────────── */
+async function saveWorkflow() {
+  if (!S.dirty) return;
+  try {
+    const report = await api("/api/workflow/save", { method: "POST",
+      body: JSON.stringify({ workflow_id: S.workflowId, candidate: S.draft,
+                             base_semantic_hash: S.savedHash }) });
+    S.saved = clone(S.draft);
+    S.savedHash = report.semantic_hash;
+    S.savedLayout = clone(S.layout);
+    S.dirty = false;
+    draftHistory.reset(historyState());
+    markDirty();
+    setStatus("pass", report.written
+      ? `<b>saved</b> · <code>${esc(String(report.previous_semantic_hash).slice(0, 10))}…</code> → ` +
+        `<code>${esc(String(report.semantic_hash).slice(0, 10))}…</code> · stripped visual: ` +
+        `${(report.stripped_visual_fields || []).length}`
+      : `<b>no write</b> · ${esc(report.reason)}`);
+    await persistLayout(true);
+  } catch (error) {
+    const payload = error.payload || {};
+    S.draftValid = false;
+    if ((payload.diagnostics || []).length) S.diagnostics = payload.diagnostics;
+    markDirty(); render();
+    setStatus("halt", `<b>save refused</b> (${esc(payload.error || "?")}) — ${esc(payload.message || error.message)}` +
+      (payload.error === "STALE_BASE_HASH" ? " · the file moved under this edit; reopen it" : ""));
+  }
+}
+
+/* `New` names the workflow inline rather than in a native prompt: a modal
+   dialog stops the canvas, and the id is the only thing being asked for. */
+function promptNewWorkflow() {
+  const field = $("#wfNew");
+  $("#wfPick").hidden = true;
+  field.hidden = false;
+  field.value = "";
+  field.focus();
+}
+function cancelNewWorkflow() {
+  $("#wfNew").hidden = true;
+  $("#wfPick").hidden = false;
+}
+
+async function newWorkflow(id) {
+  if (!id) return;
+  cancelNewWorkflow();
+  try {
+    const blank = await api("/api/workflow/blank?workflow_id=" + encodeURIComponent(id));
+    await api("/api/workflow/create", { method: "POST",
+      body: JSON.stringify({ workflow_id: id, candidate: blank.candidate }) });
+    const chosen = await refreshWorkflows(id);
+    await openWorkflow(chosen);
+    setStatus("pass", `<b>${esc(id)}</b> created · one HUMAN_GATE, because the schema requires one · add nodes from the palette`);
+  } catch (error) {
+    const payload = error.payload || {};
+    setStatus("halt", `<b>cannot create</b> (${esc(payload.error || "?")}) — ${esc(payload.message || error.message)}`);
+  }
+}
+
+/* ─────────────────────────── geometry ─────────────────────────── */
+function positionOf(nodeId) {
+  const minted = S.minted[nodeId];
+  if (minted && minted.__pos) return minted.__pos;
+  const stored = S.layout.nodes[nodeId];
+  if (stored) return { x: stored.x, y: stored.y };
+  return { x: 0, y: 0 };
+}
+function toWorld(clientX, clientY) {
+  const rect = stage.getBoundingClientRect();
+  return { x: (clientX - rect.left - S.view.x) / S.view.k,
+           y: (clientY - rect.top - S.view.y) / S.view.k };
+}
+function centerOfView() {
+  const rect = stage.getBoundingClientRect();
+  return toWorld(rect.left + rect.width / 2 - NW / 2 * S.view.k,
+                 rect.top + rect.height / 2 - NH / 2 * S.view.k);
+}
+function freeSpot(x, y) {
+  // Never drop a new node exactly on an existing one; step down a lane until
+  // the slot is clear. Layout only — semantics are untouched.
+  let spot = { x: Math.round(x), y: Math.round(y) };
+  const taken = () => Object.keys(S.layout.nodes).some((id) => {
+    const p = S.layout.nodes[id];
+    return Math.abs(p.x - spot.x) < NW * 0.7 && Math.abs(p.y - spot.y) < NH * 0.8;
+  });
+  for (let i = 0; i < 40 && taken(); i += 1) spot = { x: spot.x, y: spot.y + ROW * 0.65 };
+  return spot;
+}
+
+/* ─────────────────────────── graph read model ───────────────────────────
+   In BUILD the drawn graph is the draft's projection (or, when the draft does
+   not validate, the draft itself so the user can see and fix it). In RUN it
+   is the same projection plus whatever the runtime minted. */
+function projectionUsable() { return Boolean(S.draftValid && S.graph && !S.graphStale); }
+
+function allNodes() {
+  let rows;
+  if (projectionUsable()) {
+    rows = S.graph.nodes.slice();
+  } else {
+    rows = draftNodes().map((n) => ({
+      node_id: n.id, node_type: n.type, node_kind: "DECLARED", role: n.role,
+      instructions: n.instructions, acceptance: n.acceptance, model: n.model,
+      effort: n.effort, capability: n.capability, command: n.command,
+      routing: n.routing, depends_on: n.depends_on, is_repair_template: false,
+    }));
+  }
+  Object.keys(S.minted).forEach((id) => {
+    const row = S.minted[id];
+    rows.push({ node_id: id, node_type: row.node_type, node_kind: row.node_kind,
+                role: row.role, instructions: row.instructions, acceptance: row.acceptance,
+                carry_forward: row.carry_forward, lineage: row.lineage, minted: true });
+  });
+  return rows;
+}
+
+function allEdges() {
+  let rows;
+  if (projectionUsable()) {
+    rows = S.graph.edges.slice();
+  } else {
+    rows = [];
+    draftNodes().forEach((n) => (n.edges || []).forEach((e, position) => rows.push({
+      edge_id: e.edge_id, from: n.id, to: e.to, kind: e.kind || "CONTINUE",
+      when: e.when, label: e.label, position, routing: n.routing || "FIRST_MATCH",
+    })));
+  }
+  // One extra edge per minted branch: the declared REPAIR edge points at the
+  // template, which is never entered. The lineage edge is what actually ran.
+  Object.keys(S.minted).forEach((id) => {
+    const lineage = S.minted[id].lineage || {};
+    rows.push({ edge_id: "lineage:" + id, from: lineage.origin_node_id, to: id,
+                kind: "REPAIR", label: "REPAIR · " + id, lineage: true });
+  });
+  return rows;
+}
+
+/* ─────────────────────────── render ─────────────────────────── */
+function render() {
+  world.style.transform = `translate(${S.view.x}px,${S.view.y}px) scale(${S.view.k})`;
+  world.querySelectorAll(".node,.wlabel,.vcard").forEach((el) => el.remove());
+  if (!S.draft) { wires.innerHTML = ""; return; }
+
+  const nodes = allNodes(), edges = allEdges();
+  const byId = {};
+  nodes.forEach((n) => { byId[n.node_id] = n; });
+
+  let svg = "";
+  const labels = [];
+  edges.forEach((edge) => {
+    const from = byId[edge.from], to = byId[edge.to];
+    if (!from || !to) return;             // terminals (STOP/HUMAN_REQUIRED) have no box
+    const a = positionOf(edge.from), b = positionOf(edge.to);
+    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+    const mid = Math.max(28, Math.abs(x2 - x1) * 0.45);
+    const path = `M${x1},${y1} C${x1 + mid},${y1} ${x2 - mid},${y2} ${x2},${y2}`;
+    const state = edgeVisual(edge, byId);
+    const bad = Boolean(diagnosticForEdge(edge.edge_id));
+    const picked = S.selectedEdge === edge.edge_id;
+    svg += `<path class="wire" data-s="${state}" data-bad="${bad}" data-pick="${picked}" d="${path}"></path>`;
+    if (!edge.lineage) svg += `<path class="whit" data-edge="${esc(edge.edge_id)}" d="${path}"></path>`;
+    const label = edge.lineage ? edge.label : edgeLabel(edge);
+    if (label) {
+      const held = S.edgeState[edge.edge_id];
+      const text = state === "held" && held && held.hold_reason
+        ? `${label} · ${held.hold_reason.replace(/_/g, " ").toLowerCase()}` : label;
+      labels.push({ x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 12, text, state, bad, picked });
+    }
+  });
+  if (wiring && wiring.ghost) svg += `<path class="wire ghost" d="${wiring.ghost}"></path>`;
+  wires.innerHTML = svg;
+
+  labels.forEach((l) => {
+    const el = document.createElement("div");
+    el.className = "wlabel";
+    el.dataset.s = l.state; el.dataset.bad = String(l.bad); el.dataset.pick = String(l.picked);
+    el.style.left = l.x + "px"; el.style.top = l.y + "px";
+    el.textContent = l.text;
+    world.appendChild(el);
+  });
+
+  nodes.forEach((node) => {
+    const pos = positionOf(node.node_id);
+    const runtime = S.nodeState[node.node_id] || {};
+    const errors = diagnosticsFor(node.node_id);
+    const el = document.createElement("div");
+    el.className = "node";
+    el.dataset.id = node.node_id;
+    el.dataset.s = runtime.state || "pending";
+    el.dataset.sel = String(S.selected === node.node_id);
+    el.dataset.bad = String(errors.length > 0);
+    if (S.resetCone.includes(node.node_id)) el.dataset.reset = "true";
+    if (node.is_repair_template) el.dataset.tmpl = "true";
+    if (node.minted) el.dataset.minted = "true";
+    if (wiring && wiring.over === node.node_id) el.dataset.drop = "true";
+    el.style.left = pos.x + "px"; el.style.top = pos.y + "px";
+    const title = node.is_repair_template ? "REPAIR template — never entered"
+      : (node.minted ? "minted repair branch" : (node.role || node.node_type));
+    el.innerHTML =
+      `<div class="nhead"><span class="nid">${esc(node.node_id)}</span>` +
+      `<span class="ntype">${esc(node.node_type)}</span><span class="ndot"></span></div>` +
+      `<div class="ntitle">${esc(title)}</div>` +
+      `<div class="ndesc">${esc(firstLine(node.instructions))}</div>` +
+      (runtime.verdict ? `<span class="nbadge" data-v="${esc(runtime.verdict)}">${esc(runtime.verdict)}</span>` : "") +
+      (runtime.state === "inherited" ? `<span class="nbadge">INHERITED</span>` : "") +
+      (S.draft.start_node === node.node_id && !node.minted ? `<span class="nstart">START</span>` : "") +
+      `<span class="port in"></span><span class="port out" data-port="${esc(node.node_id)}"></span>` +
+      (errors.length ? `<div class="nerr">${errors.map((e) => esc(e.message)).join("<br>")}</div>` : "");
+    world.appendChild(el);
+
+    /* the reviewer's verdict lives on the graph, glued to the node that issued it */
+    if (runtime.verdict === "REPAIR" && runtime.next_brief) {
+      const card = document.createElement("div");
+      card.className = "vcard";
+      card.style.left = pos.x + "px"; card.style.top = (pos.y + NH + (errors.length ? 62 : 10)) + "px";
+      card.innerHTML = `<b>VERDICT REPAIR · next_brief</b><p>${esc(runtime.next_brief)}</p>`;
+      world.appendChild(card);
+    }
+  });
+}
+
+function firstLine(text) {
+  const line = String(text || "").split("\n").find((l) => l.trim());
+  return (line || "").slice(0, 150);
+}
+
+function edgeLabel(edge) {
+  if (edge.label) return edge.label;
+  const when = edge.when;
+  if (when && Object.keys(when).length) {
+    return Object.keys(when).map((k) => `${k}=${when[k]}`).join(" ");
+  }
+  return edge.kind || "CONTINUE";
+}
+
+function edgeVisual(edge, byId) {
+  const record = S.edgeState[edge.edge_id];
+  if (edge.lineage) return "repair";
+  if (record && record.state === "selected") {
+    const target = S.nodeState[edge.to];
+    if (target && target.state === "running") return "active";
+    return edge.kind === "REPAIR" ? "repair" : "selected";
+  }
+  if (record && record.state === "held") return "held";
+  if (byId[edge.to] && byId[edge.to].is_repair_template) return "template";
+  return "idle";
+}
+
+/* ─────────────────────────── status + tape ─────────────────────────── */
+function setStatus(kind, html) {
+  $("#pulse").dataset.k = kind || "";
+  $("#statusText").innerHTML = html;
+}
+function seqchip() {
+  $("#seqchip").textContent = S.run ? `${S.run.run_id} · seq ${S.lastSequence}` : "";
+}
+function tapePush(event) {
+  const line = document.createElement("div");
+  line.innerHTML = `<i>${String(event.sequence).padStart(3, "0")}</i> ` +
+    `<b>${esc(event.event_type)}</b> ${esc(event.node_id || "")} ${esc(eventDetail(event))}`;
+  tapeBody.appendChild(line);
+  while (tapeBody.children.length > 300) tapeBody.removeChild(tapeBody.firstChild);
+  tapeBody.scrollTop = tapeBody.scrollHeight;
+}
+function eventDetail(event) {
+  const p = event.payload || {};
+  switch (event.event_type) {
+    case "NODE_COMPLETED": return `outcome=${p.outcome} verdict=${p.verdict}`;
+    case "GATE_EVALUATED": return `${p.routing_mode} verdict=${p.verdict} no_route=${p.no_route}`;
+    case "EDGE_SELECTED": return `${p.edge_id} -> ${p.to}`;
+    case "EDGE_HELD": return `${p.edge_id} -> ${p.to} (${p.hold_reason})`;
+    case "BRANCH_CREATED": return `from ${p.origin_node_id} template=${p.template_id}`;
+    case "ROUTE_UNRESOLVED": return `${p.status} considered=${(p.candidates_considered || []).join(",")}`;
+    case "RUN_CANCELLED": return `${p.reason} @${p.at_boundary} abandoned=${(p.abandoned_frontier || []).join(",")}`;
+    case "RUN_RESUMED": return `from ${p.source_run_id} inherited=${(p.inherited_nodes || []).join(",")}`;
+    case "HUMAN_DECISION_REQUIRED": return `candidate=${p.candidate_id}`;
+    default: return p.node_type ? `type=${p.node_type}` : "";
+  }
+}
+
+/* ─────────────────────────── run ─────────────────────────── */
+async function startRun(resumeFrom) {
+  if (S.dirty) {
+    setStatus("halt", "<b>unsaved edits</b> — a run executes the file, not the draft. Save first, or reopen to discard.");
+    return;
+  }
+  const goal = "AAW canvas run: " + S.workflowId;
+  setMode("run");
+  closeWarn();
+  S.nodeState = {}; S.edgeState = {}; S.minted = {}; S.decisions = {}; S.resetCone = [];
+  S.lastSequence = 0; tapeBody.innerHTML = "";
+  setStatus("live", resumeFrom ? `starting from ${esc(resumeFrom.from_node)}…` : "starting run…");
+  render();
+  const body = { workflow_id: S.workflowId, goal };
+  if (resumeFrom) body.resume_from = resumeFrom;
+  try {
+    S.run = await api("/api/run/start", { method: "POST", body: JSON.stringify(body) });
+  } catch (error) {
+    const payload = error.payload || {};
+    setStatus("halt", `<b>cannot start</b> (${esc(payload.error || "?")}) — ${esc(payload.message || error.message)}`);
+    S.run = null; syncRunButton(); return;
+
+  }
+  syncRunButton(); seqchip();
+  openStream(0);
+}
+
+function openStream(since) {
+  closeStream();
+  if (!S.run) return;
+  const url = `/api/run/stream?run_id=${encodeURIComponent(S.run.run_id)}&since=${since}`;
+  const stream = new EventSource(url);
+  S.stream = stream;
+  syncRunButton();
+  stream.addEventListener("routing", (message) => {
+    const event = JSON.parse(message.data);
+    if (event.sequence <= S.lastSequence) return;   // idempotent replay
+    S.lastSequence = event.sequence;
+    applyEvent(event);
+    tapePush(event);
+    seqchip();
+    render();
+    if (S.selected) openInspector(S.selected, { keep: true });
+  });
+  stream.addEventListener("status", (message) => {
+    const info = JSON.parse(message.data);
+    S.runnerStatus = info.runner_status;
+    paintStatus(info);
+  });
+  stream.addEventListener("done", async (message) => {
+    const info = JSON.parse(message.data);
+    S.runnerStatus = info.runner_status;
+    paintStatus({ lifecycle: "SETTLED", runner_status: info.runner_status });
+    closeStream(); syncRunButton();
+    // A run can settle without ever entering a node — a dirty worktree is
+    // refused by the runner's workspace guard before the first node. That
+    // failure is reported on the handle, not in the journal, so it is read
+    // here rather than left as a silent `SETTLED · seq 0`.
+    let error = null;
+    try {
+      error = (await api("/api/run?run_id=" + encodeURIComponent(S.run.run_id))).run.error;
+    } catch (_) { /* the status line is already correct without it */ }
+    if (error) setStatus("halt", `<b>${esc(info.runner_status || "FAILED")}</b> — ${esc(error)}`);
+    if (info.runner_status === "CANCELLED" || error) checkPartialWork();
+  });
+  stream.onerror = () => {
+    if (stream.readyState === EventSource.CLOSED) { closeStream(); syncRunButton(); }
+  };
+}
+function closeStream() { if (S.stream) { S.stream.close(); S.stream = null; } }
+
+function paintStatus(info) {
+  const status = info.runner_status || info.lifecycle;
+  const kind = { COMPLETED: "pass", READY_FOR_EXTERNAL_INTEGRATION: "pass",
+                 WAITING_FOR_HUMAN: "repair", CANCELLED: "halt", NO_ROUTE: "halt",
+                 BLOCKED: "halt", INVALID: "halt", RUNNER_ERROR: "halt" }[status]
+              || (info.lifecycle === "ACTIVE" ? "live" : null);
+  const active = Object.keys(S.nodeState).filter((id) => S.nodeState[id].state === "running");
+  const where = active.length ? ` · running <code>${esc(active.join(", "))}</code>` : "";
+  setStatus(kind, `<b>${esc(status || "…")}</b> · <code>${esc(S.run ? S.run.run_id : "")}</code>` +
+    `${where} · seq ${S.lastSequence}`);
+  $("#tapeMeta").textContent = `${S.lastSequence} events · resumable`;
+  if (info.lifecycle === "SETTLED") syncRunButton();
+}
+
+/* The whole runtime→canvas mapping. One switch, structured fields only. */
+function applyEvent(event) {
+  const p = event.payload || {};
+  const id = event.node_id;
+  switch (event.event_type) {
+    case "RUN_RESUMED":
+      // Everything this run inherited instead of executing. One structured
+      // event, so a canvas subscribed to this run alone paints the upstream
+      // correctly without reading the source run's files.
+      (p.inherited || []).forEach((row) => {
+        S.nodeState[row.node_id] = { state: "inherited", outcome: row.outcome,
+          verdict: row.verdict, execution_id: row.execution_id, inherited: true };
+      });
+      (p.minted_nodes || []).forEach((row) => {
+        const origin = positionOf((row.lineage || {}).origin_node_id);
+        row.__pos = { x: origin.x + COLUMN,
+                      y: origin.y + BRANCH_ROW + ROW * Math.max(1, (row.lineage || {}).branch_index || 1) };
+        S.minted[row.node_id] = row;
+      });
+      S.resetCone = (p.reset_nodes || []).slice();
+      break;
+    case "NODE_STARTED":
+      S.nodeState[id] = Object.assign(S.nodeState[id] || {}, { state: "running", node_type: p.node_type });
+      break;
+    case "NODE_COMPLETED":
+      S.nodeState[id] = Object.assign(S.nodeState[id] || {}, {
+        state: p.verdict === "REPAIR" ? "repair" : (p.verdict === "BLOCKED" ? "halt" : "done"),
+        outcome: p.outcome, verdict: p.verdict, summary: p.summary,
+        next_brief: p.next_brief, carry_forward: p.carry_forward || [],
+        artifacts: p.artifacts || [], execution_id: p.execution_id, artifact: p.artifact,
+        inherited: false,
+      });
+      break;
+    case "NODE_FAILED":
+      S.nodeState[id] = Object.assign(S.nodeState[id] || {}, {
+        state: "halt", outcome: p.outcome, summary: p.summary, routable: false });
+      break;
+    case "GATE_EVALUATED":
+      S.decisions[id] = Object.assign(S.decisions[id] || { selected: [], held: [] }, {
+        verdict: p.verdict, outcome: p.outcome, routing_mode: p.routing_mode,
+        no_route: p.no_route, decision_hash: p.decision_hash, candidates: p.candidates });
+      break;
+    case "EDGE_SELECTED":
+      S.edgeState[p.edge_id] = { state: "selected", to: p.to, kind: p.kind };
+      (S.decisions[id] = S.decisions[id] || { selected: [], held: [] }).selected.push(p);
+      break;
+    case "EDGE_HELD":
+      S.edgeState[p.edge_id] = { state: "held", to: p.to, kind: p.kind, hold_reason: p.hold_reason };
+      (S.decisions[id] = S.decisions[id] || { selected: [], held: [] }).held.push(p);
+      break;
+    case "BRANCH_CREATED": {
+      const projection = p.node || { node_id: id, node_type: "REPAIR", lineage: p.lineage };
+      const origin = positionOf((p.lineage || {}).origin_node_id);
+      const index = Math.max(1, ((p.lineage || {}).branch_index) || 1);
+      projection.__pos = { x: origin.x + COLUMN, y: origin.y + BRANCH_ROW + ROW * index };
+      S.minted[id] = projection;
+      S.nodeState[id] = { state: "pending", node_type: projection.node_type };
+      break;
+    }
+    case "HUMAN_DECISION_REQUIRED":
+      S.nodeState[id] = Object.assign(S.nodeState[id] || {}, { state: "repair", candidate_id: p.candidate_id });
+      break;
+    case "RUN_CANCELLED":
+      (p.abandoned_frontier || []).forEach((abandoned) => {
+        S.nodeState[abandoned] = Object.assign(S.nodeState[abandoned] || {}, { state: "cancelled" });
+      });
+      if (id) S.nodeState[id] = Object.assign(S.nodeState[id] || {}, { state: "cancelled", cancel: p });
+      break;
+    case "ROUTE_UNRESOLVED":
+      S.nodeState[id] = Object.assign(S.nodeState[id] || {}, { state: "halt", no_route: true });
+      break;
+  }
+}
+
+async function stopRun() {
+  if (!S.run) return;
+  setStatus("halt", "stopping — terminating the child process the run is waiting on…");
+  try {
+    const report = await api("/api/run/cancel", { method: "POST",
+      body: JSON.stringify({ run_id: S.run.run_id, reason: "Stop pressed on the canvas" }) });
+    const killed = ((report.effect || {}).terminated_now || []);
+    setStatus("halt", `<b>cancel requested</b> · ${killed.length} child process(es) signalled` +
+      (killed.length ? ` (pid ${esc(killed.map((k) => k.process_id).join(", "))})` : ""));
+    paintPartialWork(report.worktree || {}, report.not_interrupted || []);
+  } catch (error) {
+    setStatus("halt", `cancel failed — ${esc(error.message)}`);
+  }
+}
+
+/* §4 — cancellation truthfulness. `work_state` is measured by the bridge with
+   the runner's own `git status`; nothing here implies a rollback. */
+async function checkPartialWork() {
+  if (!S.run) return;
+  try {
+    paintPartialWork(await api("/api/run/worktree?run_id=" + encodeURIComponent(S.run.run_id)), []);
+  } catch (_) { /* a probe failure must never break the canvas */ }
+}
+
+function paintPartialWork(worktree, notInterrupted) {
+  const state = worktree.work_state;
+  if (state !== "PARTIAL_WORK_PRESENT" && state !== "PARTIAL_WORK_UNKNOWN") { closeWarn(); return; }
+  const files = worktree.changed_files || [];
+  // The title names the run outcome the bridge measured, not an assumption:
+  // a run that never started because the tree was already dirty is not a
+  // cancellation, and must not be labelled as one.
+  const outcome = worktree.runner_status || "RUN_SETTLED";
+  $("#warnTitle").textContent = `${outcome} · ${state}`;
+  $("#warnText").innerHTML = state === "PARTIAL_WORK_UNKNOWN"
+    ? `the worktree could not be inspected (${esc(worktree.error || "unknown")}). ` +
+      `<b>Nothing was rolled back</b> — AAW never reverts, exactly as it never merges.`
+    : `<b>${files.length} file(s)</b> changed in <code>${esc(worktree.worktree || "")}</code> and are still there. ` +
+      `Run <code>${esc(worktree.originating_run_id || worktree.run_id || "?")}</code> owns the frozen snapshot: ` +
+      `<b>${worktree.mixed_change_possible ? "not proven — cleanup is refused" : "proven"}</b>. ` +
+      `Inspect, keep, or safely discard it here before the next Run.` +
+      (notInterrupted.length ? "<br>" + notInterrupted.map(esc).join("<br>") : "");
+  $("#warn").dataset.open = "true";
+  $("#warn").__worktree = worktree;
+}
+function closeWarn() { $("#warn").dataset.open = "false"; }
+
+function syncRunButton() {
+  const running = Boolean(S.run && S.stream);
+  const button = $("#btnRun");
+  button.classList.toggle("go", !running);
+  button.classList.toggle("stop", running);
+  button.innerHTML = running ? '<span class="sq"></span>Stop' : '<span class="tri"></span>Run';
+  $("#btnReconnect").disabled = !S.run;
+}
+
+/* ─────────────────────────── inspector ───────────────────────────
+   §3. PRIMARY is the work; SECONDARY is the machinery, collapsed. During a
+   run the content comes from GET /api/run/node — structured runtime facts,
+   never a parsed log. */
+/* One token per open. `openInspector` awaits the bridge for node detail, so a
+   second selection can start while the first is still in flight; without this
+   the slower response wins the panel and `wireNodeEditor` binds the previous
+   node's id to the newer node's fields — an edit landing on the wrong node. */
+let inspectorToken = 0;
+
+async function openInspector(nodeId, options) {
+  const token = ++inspectorToken;
+  const keep = options && options.keep;
+  S.selected = nodeId; S.selectedEdge = null;
+  const node = allNodes().find((n) => n.node_id === nodeId);
+  if (!node) { closeInspector(); return; }
+  const scroll = keep ? $("#iBody").scrollTop : 0;
+  const openSections = keep
+    ? Array.from($("#iBody").querySelectorAll("details")).map((d) => d.open) : [];
+
+  let detail = null;
+  if (S.run) {
+    try {
+      detail = await api(`/api/run/node?run_id=${encodeURIComponent(S.run.run_id)}` +
+        `&node_id=${encodeURIComponent(nodeId)}`);
+    } catch (_) { detail = null; }
+  }
+
+  const minted = S.minted[nodeId];
+  const runtime = S.nodeState[nodeId] || {};
+  const decision = S.decisions[nodeId];
+  const primary = (detail && detail.primary) || {};
+  const secondary = (detail && detail.secondary) || {};
+  $("#iId").textContent = nodeId;
+  $("#iType").textContent = node.node_type +
+    (minted ? " · MINTED" : (node.is_repair_template ? " · TEMPLATE" : ""));
+
+  const parts = [];
+  const errors = diagnosticsFor(nodeId);
+  if (errors.length) {
+    // Where a diagnostic has one obvious repair, offer it here rather than
+    // leaving the user to work out which field the sentence is about.
+    const inbound = draftNodes().some((n) => (n.edges || []).some((e) => e.to === nodeId));
+    const fixable = S.mode === "build" && !inbound && !minted &&
+      S.draft.start_node !== nodeId && errors.some((e) => e.message.includes("unreachable"));
+    parts.push(section("Validation",
+      errors.map((e) => `<p style="color:#f0c4be">${esc(e.message)}</p>`).join("") +
+      (fixable ? `<div class="row"><button class="btn sm" id="fixStart">Make ${esc(nodeId)} the start node</button></div>` : "")));
+  }
+
+  /* ── PRIMARY ── */
+  const state = primary.state || (runtime.state ? runtime.state.toUpperCase() : "PENDING");
+  const verdict = primary.verdict || runtime.verdict;
+  const outcome = primary.outcome || runtime.outcome;
+  parts.push(section("State", `<div class="edgerow">` +
+    `<span class="pill" data-k="${esc(runtime.inherited ? "INHERITED" : state)}">${esc(runtime.inherited ? "INHERITED" : state)}</span>` +
+    (outcome ? `<span class="pill">outcome ${esc(outcome)}</span>` : "") +
+    (verdict ? `<span class="pill" data-k="${esc(verdict)}">verdict ${esc(verdict)}</span>` : "") +
+    `</div>` + (runtime.inherited
+      ? `<p style="margin-top:6px;font-size:11px">inherited from the source run of a Run-from-here; not re-executed</p>` : "")));
+
+  const brief = primary.instructions != null ? primary.instructions : node.instructions;
+  if (brief) parts.push(section("Brief / instructions", `<p>${esc(brief)}</p>`));
+
+  const summary = primary.summary || runtime.summary;
+  if (summary) parts.push(section("Summary", `<p>${esc(summary)}</p>`));
+
+  const nextBrief = primary.next_brief || runtime.next_brief;
+  if (nextBrief) parts.push(section("next_brief (issued by this node)", `<p>${esc(nextBrief)}</p>`));
+
+  const inheritedBrief = primary.inherited_next_brief ||
+    ((minted && minted.lineage) ? minted.lineage.inherited_brief : null);
+  if (inheritedBrief) parts.push(section("Inherited next_brief", `<p>${esc(inheritedBrief)}</p>`));
+
+  const carry = (primary.carry_forward && primary.carry_forward.length ? primary.carry_forward
+    : (runtime.carry_forward || (minted && minted.carry_forward) || []));
+  if (carry.length) parts.push(section("carry_forward (path constraint, not acceptance)",
+    "<ul>" + carry.map((c) => `<li>${esc(c)}</li>`).join("") + "</ul>"));
+
+  const artifacts = (primary.artifacts && primary.artifacts.length) ? primary.artifacts : (runtime.artifacts || []);
+  if (artifacts.length) parts.push(section("artifacts",
+    "<ul>" + artifacts.map((a) => `<li><code>${esc(a)}</code></li>`).join("") + "</ul>"));
+
+  const acceptance = (primary.acceptance && primary.acceptance.length) ? primary.acceptance : (node.acceptance || []);
+  parts.push(section("Acceptance criteria (node)", acceptance.length
+    ? "<ul>" + acceptance.map((a) => `<li>${esc(a)}</li>`).join("") + "</ul>" : "<p>—</p>"));
+
+  if (minted || primary.lineage) {
+    const lineage = primary.lineage || minted.lineage || {};
+    parts.push(section("Lineage", `<dl class="kv">
+      <dt>template</dt><dd>${esc(lineage.template_id)}</dd>
+      <dt>origin</dt><dd>${esc(lineage.origin_node_id)} (${esc(lineage.origin_verdict)})</dd>
+      <dt>via edge</dt><dd>${esc(lineage.selected_edge_id)}</dd>
+      <dt>index</dt><dd>${esc(lineage.branch_index)}</dd></dl>`));
+  }
+
+  if (decision) {
+    const rows = (decision.selected || []).map((e) =>
+      `<div class="edgerow"><span class="pill" data-k="SELECTED">SELECTED</span>` +
+      `<span>${esc(e.edge_id)} → ${esc(e.to)}</span></div>`).concat(
+      (decision.held || []).map((e) =>
+        `<div class="edgerow"><span class="pill" data-k="HELD">HELD</span>` +
+        `<span>${esc(e.edge_id)} → ${esc(e.to)} · ${esc(e.hold_reason)}</span></div>`));
+    parts.push(section(`Gate · ${esc(decision.routing_mode || "")}`, rows.join("")));
+  }
+
+  /* ── RUN controls, per node ── */
+  if (S.mode === "run" && S.run && !minted) parts.push(runControls(nodeId));
+
+  /* ── BUILD editor ── */
+  if (S.mode === "build" && !minted) parts.push(nodeEditor(nodeId));
+
+  /* ── SECONDARY, collapsed ── */
+  parts.push(secondarySection(node, secondary, detail));
+
+  if (token !== inspectorToken) return;      // a newer selection already won
+  $("#iBody").innerHTML = parts.join("");
+  Array.from($("#iBody").querySelectorAll("details")).forEach((d, i) => {
+    if (openSections[i] !== undefined) d.open = openSections[i];
+  });
+  const fixStart = $("#fixStart");
+  if (fixStart) fixStart.addEventListener("click", () => {
+    S.draft.start_node = nodeId; touch("change start node"); openInspector(nodeId);
+  });
+  wireNodeEditor(nodeId);
+  wireRunControls(nodeId);
+  insp.dataset.open = "true";
+  $("#iBody").scrollTop = scroll;
+  if (!keep) render();
+}
+
+function secondarySection(node, secondary, detail) {
+  const rows = [
+    ["node_kind", (detail && detail.node_kind) || "DECLARED"],
+    ["model", secondary.model || node.model],
+    ["capability", secondary.capability || node.capability],
+    ["effort", secondary.effort || node.effort],
+    ["harness", secondary.harness],
+    ["profile", secondary.implementer_profile],
+    ["execution_id", secondary.execution_id],
+    ["artifact", secondary.artifact],
+    ["repair_cycle", secondary.repair_cycle],
+    ["duration_s", secondary.duration_s],
+    ["wall_time_s", (secondary.telemetry || {}).wall_time_s],
+    ["provider_session", (secondary.telemetry || {}).provider_session_id],
+    ["telemetry_status", (secondary.telemetry || {}).telemetry_status],
+  ];
+  const hashes = secondary.hashes || {};
+  const usage = secondary.usage || {};
+  return `<details><summary>Binding, telemetry &amp; identity</summary>
+    <dl class="kv">${rows.filter((r) => r[1] != null && r[1] !== "")
+      .map((r) => `<dt>${esc(r[0])}</dt><dd>${esc(r[1])}</dd>`).join("")}</dl>
+    <dl class="kv">${Object.keys(hashes).filter((k) => hashes[k])
+      .map((k) => `<dt>${esc(k)}</dt><dd>${esc(hashes[k])}</dd>`).join("") || "<dt>hashes</dt><dd>—</dd>"}</dl>
+    ${Object.keys(usage).length ? `<dl class="kv">${Object.keys(usage)
+      .map((k) => `<dt>${esc(k)}</dt><dd>${esc(usage[k])}</dd>`).join("")}</dl>` : ""}
+  </details>`;
+}
+
+function runControls(nodeId) {
+  return section("Run controls", `
+    <div class="row">
+      <button class="btn sm" id="rcHere">Run from here</button>
+      <button class="btn sm" id="rcReset">Reset downstream</button>
+    </div>
+    <div class="note" id="rcNote"></div>`);
+}
+
+function wireRunControls(nodeId) {
+  const here = $("#rcHere");
+  if (!here) return;
+  const note = $("#rcNote");
+  $("#rcReset").addEventListener("click", async () => {
+    try {
+      const report = await api("/api/run/reset-downstream", { method: "POST",
+        body: JSON.stringify({ run_id: S.run.run_id, node_id: nodeId }) });
+      S.resetCone = report.cone.nodes.slice();
+      report.cone.nodes.forEach((id) => { delete S.nodeState[id]; delete S.decisions[id]; });
+      Object.keys(S.edgeState).forEach((edgeId) => {
+        const found = findEdge(edgeId);
+        if (found && report.cone.nodes.includes(found.node.id)) delete S.edgeState[edgeId];
+      });
+      report.cone.minted.forEach((id) => { delete S.minted[id]; });
+      note.dataset.k = "warn";
+      note.textContent =
+        `cleared canvas state for ${report.cleared_ui_state.length} completed node(s): ` +
+        `${report.cone.nodes.join(", ")}\n\nreset nothing durable. still present:\n` +
+        report.retained.map((r) => "  · " + r).join("\n") + `\n\n${report.next_step}`;
+      render();
+    } catch (error) {
+      const payload = error.payload || {};
+      note.dataset.k = "bad";
+      note.textContent = `REFUSED (${payload.error || "?"}) · ${payload.message || error.message}`;
+    }
+  });
+  here.addEventListener("click", async () => {
+    // Plan first: the refusal set is closed and the user sees exactly which
+    // nodes are about to be re-executed before anything starts.
+    let plan;
+    try {
+      plan = await api(`/api/run/resume/plan?workflow_id=${encodeURIComponent(S.workflowId)}` +
+        `&source_run_id=${encodeURIComponent(S.run.run_id)}&from_node=${encodeURIComponent(nodeId)}`);
+    } catch (error) {
+      const payload = error.payload || {};
+      note.dataset.k = "bad";
+      note.textContent = `REFUSED (${payload.error || "?"}) · ${payload.message || error.message}`;
+      return;
+    }
+    const summary = plan.summary;
+    note.dataset.k = "ok";
+    note.textContent = `re-executes ${summary.reset_nodes.join(", ")}\n` +
+      `inherits ${summary.inherited_nodes.join(", ") || "(nothing)"}\nstarting…`;
+    await startRun({ source_run_id: S.run.run_id, from_node: nodeId });
+  });
+}
+
+function section(title, html) { return `<section><h4>${title}</h4>${html}</section>`; }
+function closeInspector() {
+  inspectorToken += 1;
+  insp.dataset.open = "false"; S.selected = null; S.selectedEdge = null;
+}
+
+/* ─────────────────────────── BUILD: node editor ─────────────────────────── */
+function nodeEditor(nodeId) {
+  const node = draftNode(nodeId);
+  if (!node) return "";
+  const isLlm = ["IMPLEMENT", "REVIEW", "REPAIR"].includes(node.type);
+  const others = draftNodes().filter((n) => n.id !== nodeId);
+  return section("Edit node (BUILD)", `
+    <div class="two">
+      <div class="fld"><label>type</label>
+        <select id="edType">${NODE_TYPES.map((t) =>
+          `<option value="${t}"${t === node.type ? " selected" : ""}>${t}</option>`).join("")}</select></div>
+      <div class="fld"><label>run_if</label>
+        <select id="edRunIf">${["ALWAYS", "ON_TRANSITION"].map((v) =>
+          `<option value="${v}"${v === node.run_if ? " selected" : ""}>${v}</option>`).join("")}</select></div>
+    </div>
+    <div class="fld"><label>role / name</label>
+      <input type="text" id="edRole" value="${esc(node.role || "")}"
+        placeholder="${isLlm ? "required for an LLM node" : "gates take no role"}"></div>
+    ${isLlm ? `<div class="two">
+      <div class="fld"><label>model</label><input type="text" id="edModel" value="${esc(node.model || "")}"></div>
+      <div class="fld"><label>effort</label><input type="text" id="edEffort" value="${esc(node.effort || "")}"></div>
+    </div>` : ""}
+    ${node.type === "MACHINE_GATE" ? `<div class="two">
+      <div class="fld"><label>command (argv, space separated)</label>
+        <input type="text" id="edCommand" value="${esc((node.command || []).join(" "))}"></div>
+      <div class="fld"><label>timeout_seconds</label>
+        <input type="text" id="edTimeout" value="${esc(node.timeout_seconds || 300)}"></div>
+    </div>` : ""}
+    <div class="fld"><label>instructions / brief</label>
+      <textarea id="edInstr">${esc(node.instructions || "")}</textarea></div>
+    <div class="fld"><label>acceptance (one per line)</label>
+      <textarea id="edAccept" style="min-height:56px">${esc((node.acceptance || []).join("\n"))}</textarea></div>
+    <div class="fld"><label>depends_on · required completions (not routing)</label>
+      <select id="edDepends" multiple size="${Math.min(4, Math.max(2, others.length))}">
+        ${others.map((n) => `<option value="${esc(n.id)}"${(node.depends_on || []).includes(n.id) ? " selected" : ""}>${esc(n.id)} · ${esc(n.type)}</option>`).join("")}
+      </select>
+      <p style="font-size:10.5px;color:var(--ink-4);margin-top:5px">${(node.depends_on || []).length
+        ? `This node waits until ${node.depends_on.map(esc).join(", ")} completed. These selections do not create a path or choose routing.`
+        : "No completion prerequisites. Incoming edges still decide whether this node is reached."}</p></div>
+    <h4 style="margin-top:12px">Outgoing edges</h4>
+    ${(node.edges || []).map((e) =>
+      `<div class="edgerow"><span class="pill" data-k="${esc(e.kind || "CONTINUE")}">${esc(e.kind || "CONTINUE")}</span>` +
+      `<span>→ ${esc(e.to)}</span>` +
+      `<button class="btn sm" data-open-edge="${esc(e.edge_id)}">edit</button></div>`).join("")
+      || `<p style="font-size:11px;color:var(--ink-4)">none — drag this node's right-hand port onto another node</p>`}
+    <div class="row">
+      <button class="btn sm" id="edStart"${S.draft.start_node === nodeId ? " disabled" : ""}>Set as start</button>
+      <button class="btn sm danger" id="edDelete">Delete node</button>
+    </div>`);
+}
+
+function wireNodeEditor(nodeId) {
+  const type = $("#edType");
+  if (!type) return;
+  const node = draftNode(nodeId);
+  const set = (fn, label) => { fn(draftNode(nodeId)); touch(label || "edit node property"); };
+
+  type.addEventListener("change", () => {
+    set((n) => {
+      const next = type.value;
+      const defaults = clone(DEFAULTS[next] || {});
+      // Only fields the *new* type needs are replaced; the brief and the
+      // acceptance criteria are the user's work and survive a type change.
+      n.type = next;
+      ["role", "model", "effort", "capability", "command", "timeout_seconds"].forEach((k) => delete n[k]);
+      Object.keys(defaults).forEach((k) => {
+        if (k !== "instructions" && k !== "acceptance") n[k] = defaults[k];
+      });
+      if (next === "HUMAN_GATE") { delete n.routing; delete n.edges; }
+      else n.routing = n.routing || "FIRST_MATCH";
+    }, "edit node type");
+    openInspector(nodeId);
+  });
+  $("#edRunIf").addEventListener("change", () => set((n) => { n.run_if = $("#edRunIf").value; }));
+  $("#edRole").addEventListener("input", () => set((n) => { n.role = $("#edRole").value || null; }));
+  const model = $("#edModel"); if (model) model.addEventListener("input", () => set((n) => { n.model = model.value || null; }));
+  const effort = $("#edEffort"); if (effort) effort.addEventListener("input", () => set((n) => { n.effort = effort.value || null; }));
+  const command = $("#edCommand");
+  if (command) command.addEventListener("input", () => set((n) => {
+    n.command = command.value.split(/\s+/).filter(Boolean); }));
+  const timeout = $("#edTimeout");
+  if (timeout) timeout.addEventListener("input", () => set((n) => {
+    const v = parseInt(timeout.value, 10); n.timeout_seconds = Number.isFinite(v) ? v : timeout.value; }));
+  $("#edInstr").addEventListener("input", () => set((n) => { n.instructions = $("#edInstr").value; }));
+  $("#edAccept").addEventListener("input", () => set((n) => {
+    n.acceptance = $("#edAccept").value.split("\n").map((s) => s.trim()).filter(Boolean); }));
+  $("#edDepends").addEventListener("change", () => set((n) => {
+    n.depends_on = Array.from($("#edDepends").selectedOptions).map((o) => o.value); }));
+  $("#edStart").addEventListener("click", () => { set((n) => { S.draft.start_node = n.id; }, "change start node"); openInspector(nodeId); });
+  $("#edDelete").addEventListener("click", () => { deleteNode(nodeId); });
+  Array.from($("#iBody").querySelectorAll("[data-open-edge]")).forEach((button) => {
+    button.addEventListener("click", () => openEdgeInspector(button.dataset.openEdge));
+  });
+  if (node && node.type === "HUMAN_GATE") { /* terminal by construction */ }
+}
+
+/* ─────────────────────────── BUILD: edge inspector ─────────────────────────── */
+function openEdgeInspector(edgeId, options) {
+  const found = findEdge(edgeId);
+  if (!found) { closeInspector(); render(); return; }
+  inspectorToken += 1;                       // an in-flight node render must not win
+  const keep = options && options.keep;
+  const scroll = keep ? $("#iBody").scrollTop : 0;
+  S.selectedEdge = edgeId; S.selected = null;
+  const { node, edge } = found;
+  const when = edge.when || {};
+  const predicate = Object.keys(when)[0] || "";
+  const targets = draftNodes().map((n) => n.id).concat(["STOP", "HUMAN_REQUIRED"]);
+  const diag = diagnosticForEdge(edgeId);
+  const runtime = S.edgeState[edgeId];
+  $("#iId").textContent = edgeId;
+  $("#iType").textContent = `EDGE · ${node.id} → ${edge.to}`;
+
+  const parts = [];
+  if (diag) parts.push(section("Validation", `<p style="color:#f0c4be">${esc(diag.message)}</p>` +
+    (diag.repair === "KEEP_ONLY_THIS_UNCONDITIONAL" && S.mode === "build"
+      ? `<div class="row"><button class="btn sm" id="egRepairUnconditional">Keep ${esc(edgeId)} unconditional; delete the conflicting fallback(s)</button></div>`
+      : "")));
+  if (runtime) parts.push(section("Runtime", `<div class="edgerow">` +
+    `<span class="pill" data-k="${runtime.state === "selected" ? "SELECTED" : "HELD"}">${esc(runtime.state.toUpperCase())}</span>` +
+    (runtime.hold_reason ? `<span>${esc(runtime.hold_reason)}</span>` : "") + `</div>`));
+
+  parts.push(section("Edge (BUILD)", `
+    <div class="two">
+      <div class="fld"><label>kind</label>
+        <select id="egKind">${["CONTINUE", "REPAIR", "FALLBACK"].map((k) =>
+          `<option value="${k}"${k === (edge.kind || "CONTINUE") ? " selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div class="fld"><label>target</label>
+        <select id="egTo">${targets.map((t) =>
+          `<option value="${t}"${t === edge.to ? " selected" : ""}>${t}</option>`).join("")}</select></div>
+    </div>
+    <div class="two">
+      <div class="fld"><label>predicate</label>
+        <select id="egPred">
+          <option value=""${predicate ? "" : " selected"}>unconditional</option>
+          ${["verdict", "outcome", "has_findings", "min_severity"].map((k) =>
+            `<option value="${k}"${k === predicate ? " selected" : ""}>${k}</option>`).join("")}
+        </select></div>
+      <div class="fld"><label>value</label>
+        <select id="egValue"${predicate ? "" : " disabled"}>${predicateValues(predicate, when[predicate])}</select></div>
+    </div>
+    <div class="fld"><label>label (visual only)</label>
+      <input type="text" id="egLabel" value="${esc(edge.label || "")}"></div>
+    <div class="fld"><label>routing mode of ${esc(node.id)}</label>
+      <select id="egRouting">${["FIRST_MATCH", "ALL_MATCHES"].map((m) =>
+        `<option value="${m}"${m === (node.routing || "FIRST_MATCH") ? " selected" : ""}>${m}</option>`).join("")}</select></div>
+    <div class="row">
+      <button class="btn sm" id="egInsert">Insert node into this edge</button>
+      <button class="btn sm danger" id="egDelete">Delete edge</button>
+    </div>
+    <div class="note" id="egNote"></div>`));
+
+  $("#iBody").innerHTML = parts.join("");
+  wireEdgeInspector(edgeId);
+  insp.dataset.open = "true";
+  $("#iBody").scrollTop = scroll;
+  if (!keep) render();
+}
+
+function predicateValues(key, current) {
+  const options = {
+    verdict: (S.contract && S.contract.verdicts) || ["PASS", "REPAIR", "BLOCKED"],
+    outcome: (S.contract && S.contract.outcomes) || ["PASS", "FAIL", "BLOCKED", "INVALID"],
+    has_findings: ["true", "false"],
+    min_severity: (S.contract && S.contract.severity_ladder) || ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+  }[key] || [];
+  return options.map((v) => `<option value="${esc(v)}"${String(current) === String(v) ? " selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function wireEdgeInspector(edgeId) {
+  const found = findEdge(edgeId);
+  if (!found) return;
+  const apply = (fn) => {
+    const target = findEdge(edgeId);
+    if (!target) return;
+    fn(target.edge, target.node);
+    normalizeEdgeOrder(target.node);
+    touch("edit edge property");
+    openEdgeInspector(edgeId, { keep: true });
+  };
+  $("#egKind").addEventListener("change", () => apply((e) => { e.kind = $("#egKind").value; }));
+  $("#egTo").addEventListener("change", () => apply((e) => { e.to = $("#egTo").value; }));
+  $("#egLabel").addEventListener("input", () => apply((e) => { e.label = $("#egLabel").value || null; }));
+  $("#egRouting").addEventListener("change", () => apply((_e, n) => { n.routing = $("#egRouting").value; }));
+  $("#egPred").addEventListener("change", () => apply((e) => {
+    const key = $("#egPred").value;
+    if (!key) { e.when = null; return; }
+    const first = predicateValues(key, null).match(/value="([^"]*)"/);
+    let value = first ? first[1] : null;
+    if (key === "has_findings") value = value === "true";
+    e.when = { [key]: value };
+  }));
+  $("#egValue").addEventListener("change", () => apply((e) => {
+    const key = $("#egPred").value;
+    if (!key) return;
+    let value = $("#egValue").value;
+    if (key === "has_findings") value = value === "true";
+    e.when = { [key]: value };
+  }));
+  $("#egDelete").addEventListener("click", () => { deleteEdge(edgeId); closeInspector(); render(); });
+  const repair = $("#egRepairUnconditional");
+  if (repair) repair.addEventListener("click", () => {
+    const target = findEdge(edgeId);
+    if (!target) return;
+    target.node.edges = (target.node.edges || []).filter((e) =>
+      e.edge_id === edgeId || (e.when && Object.keys(e.when).length));
+    normalizeEdgeOrder(target.node);
+    touch("repair conflicting unconditional FIRST_MATCH edges");
+    openEdgeInspector(edgeId, { keep: true });
+  });
+  $("#egInsert").addEventListener("click", (ev) => {
+    openMenu(ev.clientX, ev.clientY, (type) => {
+      const id = insertIntoEdge(edgeId, type);
+      if (id) openInspector(id);
+    });
+  });
+}
+
+/* ─────────────────────────── node type menu ─────────────────────────── */
+function openMenu(clientX, clientY, choose) {
+  menu.innerHTML = NODE_TYPES.map((t) =>
+    `<button data-t="${t}"><i></i>${t}</button>`).join("") +
+    `<button data-t=""><i style="background:transparent"></i>cancel</button>`;
+  // The menu is a child of #stage, so it is positioned in stage coordinates.
+  // Using client coordinates would offset it by the instrument bar's height.
+  const rect = stage.getBoundingClientRect();
+  menu.style.left = clamp(clientX - rect.left, 4, rect.width - 160) + "px";
+  menu.style.top = clamp(clientY - rect.top, 4, rect.height - 190) + "px";
+  menu.dataset.open = "true";
+  const onClick = (ev) => {
+    const button = ev.target.closest("button");
+    if (!button) return;
+    menu.dataset.open = "false";
+    menu.removeEventListener("click", onClick);
+    if (button.dataset.t) choose(button.dataset.t);
+  };
+  menu.addEventListener("click", onClick);
+}
+
+/* ─────────────────────────── interaction ─────────────────────────── */
+function setMode(mode) {
+  S.mode = mode;
+  document.body.dataset.mode = mode;
+  $("#mBuild").setAttribute("aria-pressed", String(mode === "build"));
+  $("#mRun").setAttribute("aria-pressed", String(mode === "run"));
+  updateHistoryButtons();
+}
+$("#mBuild").addEventListener("click", () => { setMode("build"); reopen(); });
+$("#mRun").addEventListener("click", () => { setMode("run"); reopen(); });
+function reopen() {
+  if (S.selected) openInspector(S.selected);
+  else if (S.selectedEdge) openEdgeInspector(S.selectedEdge);
+}
+$("#iClose").addEventListener("click", () => { closeInspector(); render(); });
+$("#btnRun").addEventListener("click", () => (S.run && S.stream) ? stopRun() : startRun(null));
+$("#btnSave").addEventListener("click", saveWorkflow);
+$("#btnUndo").addEventListener("click", undoDraft);
+$("#btnRedo").addEventListener("click", redoDraft);
+$("#btnDiscardDraft").addEventListener("click", discardDraft);
+$("#btnNew").addEventListener("click", promptNewWorkflow);
+$("#wfNew").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); newWorkflow($("#wfNew").value.trim()); }
+  if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cancelNewWorkflow(); }
+});
+$("#warnClose").addEventListener("click", closeWarn);
+function renderWorktreeInspector(worktree) {
+  const modified = worktree.modified_files || [];
+  const untracked = worktree.untracked_files || [];
+  const changes = worktree.changes || [];
+  $("#iId").textContent = "WORKTREE";
+  $("#iType").textContent = worktree.work_state || "";
+  $("#iBody").innerHTML =
+    section("Run ownership", `<dl><dt>originating run</dt><dd><code>${esc(worktree.originating_run_id || "?")}</code></dd>
+      <dt>worktree</dt><dd><code>${esc(worktree.worktree || "")}</code></dd>
+      <dt>ownership</dt><dd>${esc(worktree.ownership || "UNKNOWN")}</dd>
+      <dt>mixed run/user change possible</dt><dd>${worktree.mixed_change_possible ? "YES — destructive cleanup refused" : "NO — frozen snapshot still matches"}</dd>
+      <dt>resolution</dt><dd>${esc(worktree.resolution || "UNRESOLVED")}</dd></dl>` +
+      ((worktree.baseline_state || worktree.baseline_id) ?
+        `<h4>${esc(worktree.baseline_state || "AUTHORIZED WORKSPACE BASELINE")}</h4><dl>` +
+        `<dt>identity</dt><dd><code>${esc(worktree.baseline_id || "")}</code></dd>` +
+        `<dt>fingerprint</dt><dd><code>${esc(worktree.baseline_fingerprint || worktree.baseline_workspace_tree || "")}</code></dd>` +
+        `<dt>provenance</dt><dd><code>${esc((worktree.baseline_provenance || {}).originating_run_id || worktree.originating_run_id || "")}</code></dd></dl>` : "") +
+      ((worktree.proof_reasons || []).length ? `<ul>${worktree.proof_reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "")) +
+    section(`Modified files (${modified.length})`, modified.length
+      ? "<ul>" + modified.map((f) => `<li><code>${esc(f)}</code></li>`).join("") + "</ul>" : "<p>none</p>") +
+    section(`Untracked files (${untracked.length})`, untracked.length
+      ? "<ul>" + untracked.map((f) => `<li><code>${esc(f)}</code></li>`).join("") + "</ul>" : "<p>none</p>") +
+    section("Changes", changes.length ? changes.map((row) =>
+      `<details><summary><code>${esc(row.path)}</code> · ${esc(row.status)}</summary>` +
+      `<pre style="white-space:pre-wrap;font-size:10px;overflow:auto">${esc(row.diff || "no textual preview")}</pre>` +
+      (row.preview_truncated ? `<p>preview truncated</p>` : "") + `</details>`).join("") : "<p>none</p>") +
+    section("Resolve", `<div class="row">
+      <button class="btn sm" id="workKeep"${worktree.resolution !== "UNRESOLVED" ? " disabled" : ""}>Keep changes</button>
+      <button class="btn sm" id="workAdopt"${worktree.cleanup_available ? "" : " disabled"}>Adopt as baseline</button>
+      <button class="btn sm danger" id="workDiscard"${worktree.cleanup_available ? "" : " disabled"}>Discard changes produced by this run</button>
+      </div><p id="workNote" class="note">Adoption records an authorized content-addressed Git tree without a commit. Discard restores only proven run changes to the exact pre-run baseline. No hard reset, merge, branch move, commit, or runtime-history edit.</p>`);
+  insp.dataset.open = "true";
+  const keep = $("#workKeep"); if (keep) keep.addEventListener("click", async () => {
+    try {
+      const report = await api("/api/run/worktree/keep", { method: "POST",
+        body: JSON.stringify({ run_id: S.run.run_id }) });
+      $("#warn").__worktree = report; renderWorktreeInspector(report);
+      setStatus(null, "<b>changes kept</b> · worktree contents were not modified");
+    } catch (error) { $("#workNote").textContent = error.message; }
+  });
+  const adopt = $("#workAdopt"); if (adopt) adopt.addEventListener("click", async () => {
+    if (!window.confirm("Authorize these exact workspace contents as the baseline for subsequent AAW runs?")) return;
+    try {
+      const report = await api("/api/run/worktree/adopt", { method: "POST",
+        body: JSON.stringify({ run_id: S.run.run_id }) });
+      $("#warn").__worktree = report; renderWorktreeInspector(report); closeWarn();
+      setStatus("pass", `<b>AUTHORIZED WORKSPACE BASELINE</b> · ${esc(report.baseline_id || "")} · subsequent runs may start while this proof matches`);
+    } catch (error) { $("#workNote").textContent = `adoption refused — ${error.message}`; }
+  });
+  const discard = $("#workDiscard"); if (discard) discard.addEventListener("click", async () => {
+    if (!window.confirm("Discard only the exact modified and untracked files proven to belong to this run?")) return;
+    try {
+      const report = await api("/api/run/worktree/discard", { method: "POST",
+        body: JSON.stringify({ run_id: S.run.run_id }) });
+      $("#warn").__worktree = report; renderWorktreeInspector(report); closeWarn();
+      setStatus("pass", "<b>run-owned changes discarded</b> · worktree is back at the proven clean baseline · ready to rerun");
+    } catch (error) { $("#workNote").textContent = `cleanup refused — ${error.message}`; }
+  });
+}
+$("#warnInspect").addEventListener("click", async () => {
+  try {
+    const report = await api("/api/run/worktree?run_id=" + encodeURIComponent(S.run.run_id));
+    $("#warn").__worktree = report; renderWorktreeInspector(report);
+  } catch (error) { setStatus("halt", `inspection failed — ${esc(error.message)}`); }
+});
+$("#btnReconnect").addEventListener("click", () => {
+  // Deliberately keeps the rendered state and resumes from the last sequence
+  // it drew, so the UI never replays a run it has already shown.
+  closeStream();
+  setStatus("live", `reconnecting from sequence ${S.lastSequence}…`);
+  openStream(S.lastSequence);
+  syncRunButton();
+});
+Array.from(document.querySelectorAll("#palette button")).forEach((button) => {
+  button.addEventListener("click", () => {
+    const center = centerOfView();
+    const spot = freeSpot(center.x, center.y);
+    openInspector(addNode(button.dataset.t, spot.x, spot.y));
+  });
+});
+
+let drag = null, pan = null, wiring = null;
+
+stage.addEventListener("pointerdown", (ev) => {
+  if (menu.dataset.open === "true" && !ev.target.closest("#menu")) menu.dataset.open = "false";
+  if (ev.target.closest("#insp") || ev.target.closest("#palette") ||
+      ev.target.closest("#warn") || ev.target.closest("#menu")) return;
+
+  const port = ev.target.closest(".port.out");
+  if (port && S.mode === "build") {
+    wiring = { from: port.dataset.port, x: ev.clientX, y: ev.clientY, over: null, ghost: null };
+    stage.classList.add("wiring");
+    stage.setPointerCapture(ev.pointerId);
+    ev.preventDefault();
+    return;
+  }
+  const wire = ev.target.closest(".whit");
+  if (wire && S.mode === "build") { openEdgeInspector(wire.dataset.edge); return; }
+
+  const nodeEl = ev.target.closest(".node");
+  if (nodeEl && S.mode === "build") {
+    const id = nodeEl.dataset.id;
+    const pos = positionOf(id);
+    drag = { id, ox: ev.clientX, oy: ev.clientY, x: pos.x, y: pos.y, moved: false,
+             minted: Boolean(S.minted[id]) };
+    stage.setPointerCapture(ev.pointerId);
+    return;
+  }
+  if (nodeEl) { openInspector(nodeEl.dataset.id); return; }
+  pan = { x: ev.clientX, y: ev.clientY, vx: S.view.x, vy: S.view.y };
+  stage.classList.add("panning");
+  stage.setPointerCapture(ev.pointerId);
+});
+
+stage.addEventListener("pointermove", (ev) => {
+  if (wiring) {
+    const from = positionOf(wiring.from);
+    const a = { x: from.x + NW, y: from.y + NH / 2 };
+    const b = toWorld(ev.clientX, ev.clientY);
+    const mid = Math.max(28, Math.abs(b.x - a.x) * 0.45);
+    wiring.ghost = `M${a.x},${a.y} C${a.x + mid},${a.y} ${b.x - mid},${b.y} ${b.x},${b.y}`;
+    const overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+    const overNode = overEl && overEl.closest(".node");
+    wiring.over = overNode && overNode.dataset.id !== wiring.from ? overNode.dataset.id : null;
+    render();
+    return;
+  }
+  if (drag) {
+    const dx = (ev.clientX - drag.ox) / S.view.k, dy = (ev.clientY - drag.oy) / S.view.k;
+    if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
+    const next = { x: drag.x + dx, y: drag.y + dy };
+    if (drag.minted) S.minted[drag.id].__pos = next; else S.layout.nodes[drag.id] = next;
+    render();
+    return;
+  }
+  if (pan) {
+    S.view.x = pan.vx + (ev.clientX - pan.x);
+    S.view.y = pan.vy + (ev.clientY - pan.y);
+    render();
+  }
+});
+
+stage.addEventListener("pointerup", async (ev) => {
+  if (wiring) {
+    const { from, over } = wiring;
+    wiring = null;
+    stage.classList.remove("wiring");
+    if (over) {
+      const edgeId = addEdge(from, over);
+      render();
+      if (edgeId) openEdgeInspector(edgeId);
+      return;
+    }
+    // Released in empty space: create the next node there and wire to it.
+    // This is the interaction that makes a four-node graph fast.
+    const spot = toWorld(ev.clientX, ev.clientY);
+    openMenu(ev.clientX, ev.clientY, (type) => {
+      const id = addNode(type, spot.x - NW / 2, spot.y - NH / 2, true);
+      addEdge(from, id);
+      render();
+      openInspector(id);
+    });
+    render();
+    return;
+  }
+  if (drag) {
+    const { id, moved, minted } = drag; drag = null;
+    if (!moved) { openInspector(id); return; }
+    // A minted node's position is a runtime rendering decision and is never
+    // persisted: a run must not write into a BUILD artifact.
+    if (!minted) touch("move node");
+    return;
+  }
+  if (pan) { pan = null; stage.classList.remove("panning"); await persistLayout(); }
+});
+
+stage.addEventListener("dblclick", (ev) => {
+  if (S.mode !== "build") return;
+  if (ev.target.closest(".node") || ev.target.closest("#insp") ||
+      ev.target.closest("#palette") || ev.target.closest("#warn")) return;
+  const spot = toWorld(ev.clientX, ev.clientY);
+  openMenu(ev.clientX, ev.clientY, (type) => openInspector(addNode(type, spot.x - NW / 2, spot.y - NH / 2)));
+});
+
+stage.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const before = S.view.k;
+  S.view.k = clamp(before * (ev.deltaY < 0 ? 1.1 : 1 / 1.1), 0.3, 2.2);
+  const rect = stage.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  S.view.x = mx - (mx - S.view.x) * (S.view.k / before);
+  S.view.y = my - (my - S.view.y) * (S.view.k / before);
+  render();
+}, { passive: false });
+
+let layoutTimer = null;
+async function persistLayout(immediate) {
+  if (!S.workflowId) return;
+  clearTimeout(layoutTimer);
+  const write = async () => {
+    const nodes = {};
+    Object.keys(S.layout.nodes).forEach((id) => {
+      nodes[id] = { x: S.layout.nodes[id].x, y: S.layout.nodes[id].y };
+    });
+    try {
+      const saved = await api("/api/layout/save", { method: "POST",
+        body: JSON.stringify({ workflow_id: S.workflowId, layout: { nodes, viewport: S.view } }) });
+      // Layout is stored apart from the workflow: the semantic hash it records
+      // is provenance, and the graph on screen is unchanged by the save.
+      const same = S.graph && saved.workflow_semantic_hash === S.graph.semantic_hash;
+      $("#tapeMeta").textContent = `layout saved · workflow semantics ${same ? "unchanged" : "MOVED"}`;
+    } catch (_) { /* a failed layout save must never break the canvas */ }
+  };
+  if (immediate) return write();
+  layoutTimer = setTimeout(write, 260);
+}
+
+window.addEventListener("keydown", (ev) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target.tagName || "").toUpperCase());
+  if (ev.key === "Escape") {
+    menu.dataset.open = "false"; closeInspector(); closeWarn(); render(); return;
+  }
+  const command = ev.metaKey || ev.ctrlKey;
+  if (command && S.mode === "build" && ev.key.toLowerCase() === "z") {
+    ev.preventDefault(); ev.shiftKey ? redoDraft() : undoDraft(); return;
+  }
+  if (command && S.mode === "build" && ev.key.toLowerCase() === "y") {
+    ev.preventDefault(); redoDraft(); return;
+  }
+  if (typing) return;
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); startRun(null); return; }
+  if (ev.key === "s" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); saveWorkflow(); return; }
+  if ((ev.key === "Delete" || ev.key === "Backspace") && S.mode === "build") {
+    if (S.selectedEdge) { ev.preventDefault(); deleteEdge(S.selectedEdge); closeInspector(); render(); }
+    else if (S.selected && !S.minted[S.selected]) { ev.preventDefault(); deleteNode(S.selected); render(); }
+  }
+});
+
+boot();
+})();
+</script>
+</body>
+</html>

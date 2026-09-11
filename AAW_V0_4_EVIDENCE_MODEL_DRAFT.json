@@ -1,0 +1,143 @@
+{
+  "schema_version": "AAW_EVIDENCE_IDENTITY_DRAFT_V0.4",
+  "status": "ADDITIVE_BACKWARD_COMPATIBLE_DRAFT",
+  "identity_rule": "Use one execution_id per executable attempt. Do not add a parallel attempt_id.",
+  "raw_authority": [
+    "existing immutable or atomically-written JSON evidence artifacts",
+    "optional per-run append-only event ledger"
+  ],
+  "entities": {
+    "run": {
+      "key": ["run_id"],
+      "fields": {
+        "run_id": "MANDATORY",
+        "run_kind": "MANDATORY",
+        "workflow_id": "OPTIONAL",
+        "job_id": "OPTIONAL",
+        "queue_task_id": "OPTIONAL",
+        "started_at": "MANDATORY",
+        "finished_at": "OPTIONAL",
+        "status": "MANDATORY",
+        "fixture_class": "MANDATORY",
+        "source_artifacts": "MANDATORY"
+      }
+    },
+    "execution": {
+      "key": ["execution_id"],
+      "fields": {
+        "execution_id": "MANDATORY",
+        "run_id": "MANDATORY",
+        "parent_kind": "MANDATORY",
+        "node_id": "OPTIONAL",
+        "subtask_id": "OPTIONAL",
+        "node_type": "MANDATORY",
+        "retry_of_execution_id": "OPTIONAL",
+        "attempt_no": "DERIVED",
+        "provider_session_id": "OPTIONAL",
+        "started_at": "MANDATORY",
+        "ended_at": "OPTIONAL",
+        "outcome": "MANDATORY",
+        "artifact_path": "MANDATORY"
+      },
+      "constraints": [
+        "node_id is mandatory when parent_kind is WORKFLOW",
+        "subtask_id is mandatory when parent_kind is CUSTOM_SUBTASK",
+        "provider_session_id is not an execution key"
+      ]
+    },
+    "preprocess": {
+      "key": ["preprocess_id"],
+      "fields": {
+        "preprocess_id": "MANDATORY",
+        "run_id": "MANDATORY",
+        "downstream_execution_id": "MANDATORY",
+        "preprocess_type": "OPTIONAL",
+        "status": "MANDATORY",
+        "source_hashes": "MANDATORY",
+        "artifact_path": "MANDATORY"
+      }
+    },
+    "finding": {
+      "key": ["review_execution_id", "finding_id"],
+      "fields": {
+        "review_execution_id": "MANDATORY",
+        "finding_id": "MANDATORY",
+        "severity": "MANDATORY",
+        "file": "OPTIONAL",
+        "location": "OPTIONAL",
+        "required_fix": "MANDATORY"
+      },
+      "global_finding_id": "DO_NOT_INFER"
+    },
+    "commit": {
+      "key": ["run_id", "commit_hash"],
+      "fields": {
+        "run_id": "MANDATORY",
+        "commit_hash": "MANDATORY",
+        "produced_by_execution_id": "MANDATORY",
+        "subtask_id": "OPTIONAL",
+        "commit_role": "MANDATORY"
+      }
+    },
+    "candidate": {
+      "key": ["candidate_id"],
+      "fields": {
+        "candidate_id": "MANDATORY",
+        "run_id": "MANDATORY",
+        "gate_node_id": "OPTIONAL",
+        "candidate_head": "OPTIONAL",
+        "candidate_artifacts": "MANDATORY",
+        "created_at": "MANDATORY"
+      }
+    },
+    "human_decision": {
+      "key": ["human_decision_id"],
+      "fields": {
+        "human_decision_id": "MANDATORY",
+        "candidate_id": "MANDATORY",
+        "verdict": "MANDATORY",
+        "reason_code": "OPTIONAL",
+        "reason_text": "OPTIONAL",
+        "decided_at": "MANDATORY",
+        "actor_class": "MANDATORY"
+      }
+    }
+  },
+  "relationships": [
+    {"from": "run", "to": "execution", "cardinality": "1:N", "key": "execution.run_id"},
+    {"from": "execution", "to": "preprocess", "cardinality": "1:0..1", "key": "preprocess.downstream_execution_id"},
+    {"from": "review execution", "to": "finding", "cardinality": "1:N", "key": "finding.review_execution_id"},
+    {"from": "finding", "to": "repair execution", "cardinality": "N:M", "key": "repair.selected_finding_refs"},
+    {"from": "execution", "to": "commit", "cardinality": "1:0..N", "key": "commit.produced_by_execution_id"},
+    {"from": "candidate", "to": "human_decision", "cardinality": "1:0..N", "key": "human_decision.candidate_id"}
+  ],
+  "do_not_infer": [
+    "run_id from directory or filename",
+    "subtask_id from array position without the frozen job artifact",
+    "execution identity from timestamp",
+    "provider identity from model name",
+    "review identity from node type",
+    "candidate identity from current HEAD alone",
+    "fixture rows as operational performance"
+  ],
+  "minimal_event_ledger": {
+    "recommended": true,
+    "path": "03_STATS/<run_id>/events.jsonl",
+    "fields": ["schema_version", "event_id", "run_id", "sequence", "event_type", "recorded_at", "execution_id", "payload"],
+    "events": [
+      "RUN_STARTED",
+      "EXECUTION_STARTED",
+      "EXECUTION_FINISHED",
+      "COMMIT_RECORDED",
+      "HUMAN_DECISION_RECORDED",
+      "RUN_STATE_CHANGED"
+    ],
+    "authority_note": "The ledger records lifecycle and reconciliation facts. Existing result artifacts remain the content authority."
+  },
+  "derived_analytics": {
+    "preferred_store": "SQLite",
+    "rebuild_only": true,
+    "raw_files_mutated": false,
+    "unsafe_rows_visible_but_excluded_from_safe_metrics": true
+  }
+}

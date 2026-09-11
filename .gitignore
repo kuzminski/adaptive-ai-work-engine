@@ -1,0 +1,54 @@
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local runtime evidence, journals, locks, and generated output
+output/
+03_STATS/
+ROUTING/
+*.jsonl
+*.jsonl.lock
+*.lock
+*.log
+*.journal
+MULTIROUTING_EVIDENCE/
+UX_SLICE_EVIDENCE/
+LOCAL_LLM_SMOKES/
+ORCA_SMOKE_TEST/
+CUSTOM_JOB_SMOKE_TEST/
+WORKFLOW_SMOKE_TEST/
+.playwright-cli/
+
+# Local Control Center state and disposable analytics products
+CONTROL_CENTER/STATE/
+CONTROL_CENTER/QUEUES/
+CONTROL_CENTER/ANALYTICS/*.sqlite
+CONTROL_CENTER/ANALYTICS/*.sqlite-*
+CONTROL_CENTER/ANALYTICS/*.bak
+JOBS/
+
+# Databases, backups, and generated exports
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.bak
+*.tmp
+*.csv
+*.tsv
+
+# Nested repositories/worktrees and machine-bound launchers
+**/.git/
+**/.git
+*.lnk
+worktree/
+worktrees/
+
+# Local editor files
+.DS_Store
+Thumbs.db

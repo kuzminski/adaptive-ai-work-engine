@@ -1,0 +1,1294 @@
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  NON-EXECUTABLE DESIGN REFERENCE — NOT RUNTIME AUTHORITY
+  ═══════════════════════════════════════════════════════════════════════════
+
+  Archived by AAW CANVAS FUNCTIONALIZATION V0.1 (was UI_PROTOTYPE/aaw-canvas.html).
+
+  This file contains a SIMULATED execution engine: `engine()`, `plannedVerdict`,
+  `spawnRepair()` and a scripted timeline. None of it ever touched the AAW
+  runtime. It is retained only because its visual grammar and the eight UX
+  decisions in UI_PROTOTYPE/DESIGN-NOTE.md were derived here.
+
+  It lives OUTSIDE `UI_PROTOTYPE/`, which is the only directory the bridge
+  serves, so `aaw_bridge_server` cannot reach it: the static handler resolves
+  every path against UI_ROOT and refuses anything that escapes it. Asserted by
+  `test_the_bridge_cannot_serve_the_archived_simulation`.
+
+  The executable canvas is UI_PROTOTYPE/aaw-canvas-live.html.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<div style="position:fixed;inset:auto 0 0 0;z-index:99999;background:#d4594c;color:#fff;
+            font:600 12px/1.5 ui-monospace,monospace;padding:7px 14px;letter-spacing:.06em;
+            text-align:center">
+  NON-EXECUTABLE DESIGN REFERENCE — this canvas simulates execution and is not AAW runtime authority.
+  The executable canvas is UI_PROTOTYPE/aaw-canvas-live.html.
+</div>
+<title>AAW Canvas</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --ground:#0a0c0d; --grid:#171d1f;
+  --panel:#14181a; --panel-2:#1a2023; --panel-3:#212a2d;
+  --edge:#232a2d; --edge-2:#2f383c; --edge-3:#3e4a4f;
+  --ink:#e8ecec; --ink-2:#939c9f; --ink-3:#5f686c; --ink-4:#454e52;
+  --live:#57a0f5; --pass:#4f9a73; --repair:#c99340; --halt:#d4594c; --propose:#8e86e8;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  --r:6px;
+}
+html,body{height:100%;overflow:hidden}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+:focus-visible{outline:1.5px solid var(--live);outline-offset:2px;border-radius:3px}
+::selection{background:rgba(87,160,245,.28)}
+.lab{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+/* ── instrument bar ── */
+#bar{height:46px;flex:0 0 46px;display:flex;align-items:center;gap:14px;padding:0 12px 0 14px;
+  background:var(--panel);border-bottom:1px solid var(--edge);position:relative;z-index:40}
+.mark{display:flex;align-items:center;gap:9px;flex:0 0 auto}
+.glyph{width:15px;height:15px;border:1.5px solid var(--ink-3);border-radius:2px;position:relative}
+.glyph::after{content:"";position:absolute;inset:3px;background:var(--live);border-radius:1px}
+.wf{font-family:var(--mono);font-size:11.5px;letter-spacing:-.01em;color:var(--ink-4);white-space:nowrap}
+.wf b{color:var(--ink-2);font-weight:500}
+.sep{width:1px;height:18px;background:var(--edge-2);flex:0 0 auto}
+.seg{display:flex;background:var(--ground);border:1px solid var(--edge-2);border-radius:5px;padding:2px;gap:2px;flex:0 0 auto}
+.seg button{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.1em;padding:4px 12px 3px;border-radius:3px;color:var(--ink-3)}
+.seg button:hover{color:var(--ink-2)}
+.seg button[aria-pressed=true]{background:var(--panel-3);color:var(--ink)}
+#status{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:9px;overflow:hidden}
+#runid{font-family:var(--mono);font-size:10px;color:var(--ink-4);flex:0 0 auto;letter-spacing:-.02em}
+#statusText{font-size:12px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#statusText b{color:var(--ink);font-weight:500}
+#statusText code{font-family:var(--mono);font-size:11px;color:var(--ink)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--ink-4);flex:0 0 auto}
+.pulse[data-k=live]{background:var(--live);box-shadow:0 0 0 3px rgba(87,160,245,.16);animation:bp 1.4s ease-in-out infinite}
+.pulse[data-k=repair]{background:var(--repair);box-shadow:0 0 0 3px rgba(201,147,64,.16)}
+.pulse[data-k=pass]{background:var(--pass)}
+.pulse[data-k=halt]{background:var(--halt);box-shadow:0 0 0 3px rgba(212,89,76,.16)}
+@keyframes bp{50%{box-shadow:0 0 0 7px rgba(87,160,245,0)}}
+.btn{display:inline-flex;align-items:center;gap:7px;height:27px;padding:0 11px;border:1px solid var(--edge-2);border-radius:5px;
+  font-size:12px;color:var(--ink-2);background:var(--panel-2);white-space:nowrap;transition:border-color .12s,color .12s,background .12s}
+.btn:hover{border-color:var(--edge-3);color:var(--ink);background:var(--panel-3)}
+.btn[disabled]{opacity:.35;pointer-events:none}
+.btn.go{border-color:rgba(87,160,245,.4);color:#cfe1fb;background:rgba(87,160,245,.11)}
+.btn.go:hover{border-color:rgba(87,160,245,.7);background:rgba(87,160,245,.18);color:#eaf2fe}
+.btn.stop{border-color:rgba(212,89,76,.42);color:#f0c4be;background:rgba(212,89,76,.1)}
+.tri{width:0;height:0;border-left:7px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent}
+.sq{width:8px;height:8px;background:currentColor;border-radius:1px}
+
+/* ── canvas ── */
+#stage{flex:1 1 auto;position:relative;overflow:hidden;background:var(--ground);touch-action:none}
+#stage.panning{cursor:grabbing}
+#stage.spacing{cursor:grab}
+#grid{position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(circle at 1px 1px,var(--grid) 1px,transparent 0)}
+#world{position:absolute;left:0;top:0;width:0;height:0;transform-origin:0 0;will-change:transform}
+#wires{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+#layer{position:absolute;left:0;top:0;width:0;height:0}
+
+.wire{fill:none;stroke:var(--edge-2);stroke-width:1.5;transition:stroke .18s,opacity .18s}
+.wire[data-s=done]{stroke:#2c3b35}
+.wire[data-s=active]{stroke:var(--live);stroke-width:2;stroke-dasharray:5 6;animation:flow .55s linear infinite}
+.wire[data-s=repair]{stroke:var(--repair);stroke-width:2}
+.wire[data-s=repair-active]{stroke:var(--repair);stroke-width:2.2;stroke-dasharray:5 6;animation:flow .55s linear infinite}
+.wire[data-s=muted]{stroke:var(--edge);stroke-dasharray:2 5}
+.wire[data-s=ghost]{stroke:var(--propose);stroke-dasharray:5 5;opacity:.6}
+.wire.drop{stroke:var(--live);stroke-width:3;stroke-dasharray:none;animation:none}
+@keyframes flow{to{stroke-dashoffset:-11}}
+@media (prefers-reduced-motion:reduce){.wire[data-s=active]{animation:none}.pulse{animation:none!important}}
+
+.wchip{position:absolute;left:0;top:0;display:flex;align-items:center;gap:2px;pointer-events:auto;transform-origin:50% 50%}
+.wlabel{font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.1em;padding:2px 5px 1px;border-radius:3px;
+  background:var(--ground);color:var(--ink-3);white-space:nowrap;border:1px solid var(--edge)}
+.wlabel[data-k=repair]{color:var(--repair);border-color:rgba(201,147,64,.45);background:#16120c}
+.wlabel[data-k=muted]{color:var(--ink-4)}
+.wlabel[data-k=ghost]{color:var(--propose);border-color:rgba(142,134,232,.42);background:#12111c}
+.wact{width:17px;height:17px;display:none;align-items:center;justify-content:center;border:1px solid var(--edge-2);
+  background:var(--panel-2);border-radius:3px;color:var(--ink-3);font-family:var(--mono);font-size:11px;line-height:1}
+.wact:hover{color:var(--ink);border-color:var(--edge-3);background:var(--panel-3)}
+body[data-mode=build] .wchip:hover .wact{display:flex}
+
+/* ── node ── */
+.node{position:absolute;left:0;top:0;width:216px;height:88px;transform-origin:0 0;
+  background:var(--panel);border:1px solid var(--edge);border-radius:var(--r);
+  display:flex;flex-direction:column;padding:9px 11px 8px 13px;gap:3px;
+  transition:border-color .14s,box-shadow .18s,opacity .22s,background .14s}
+body[data-mode=build] .node{cursor:grab}
+body[data-mode=build] .node.dragging{cursor:grabbing}
+.node .stripe{position:absolute;left:0;top:-1px;bottom:-1px;width:2px;border-radius:var(--r) 0 0 var(--r);background:var(--edge-2);transition:background .18s}
+.n-head{display:flex;align-items:baseline;gap:7px;min-width:0}
+.n-id{font-family:var(--mono);font-size:10px;font-weight:500;color:var(--ink-4);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.n-title{margin:0;font-size:12.5px;font-weight:500;letter-spacing:-.008em;color:var(--ink-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0}
+.n-title[contenteditable=true]{color:var(--ink);outline:none;box-shadow:0 1px 0 var(--live);cursor:text;text-overflow:clip}
+.n-dot{width:6px;height:6px;border-radius:50%;background:var(--edge-3);flex:0 0 auto;align-self:center;transition:background .18s,box-shadow .18s}
+.n-desc{margin:0;font-size:11px;line-height:1.35;color:var(--ink-4);flex:1 1 auto;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.n-foot{display:flex;align-items:center;gap:8px;margin-top:auto}
+.n-role,.n-state{font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.1em}
+.n-role{color:var(--ink-4)}
+.n-state{margin-left:auto;color:var(--ink-4)}
+.node:hover{border-color:var(--edge-2);background:var(--panel-2)}
+.node.sel{border-color:var(--edge-3);box-shadow:0 0 0 1px var(--edge-3),0 12px 34px -16px #000}
+.node.sel .n-title{color:var(--ink)}
+
+.node[data-state=running]{background:#161d26;border-color:rgba(87,160,245,.55);
+  box-shadow:0 0 0 1px rgba(87,160,245,.28),0 14px 42px -16px rgba(87,160,245,.5)}
+.node[data-state=running] .stripe{background:var(--live)}
+.node[data-state=running] .n-title{color:#fff;font-weight:600}
+.node[data-state=running] .n-desc{color:var(--ink-2)}
+.node[data-state=running] .n-id{color:#8fbcf7}
+.node[data-state=running] .n-state{color:var(--live)}
+.node[data-state=running] .n-dot{background:var(--live);box-shadow:0 0 0 3px rgba(87,160,245,.2);animation:bp 1.4s ease-in-out infinite}
+.node[data-state=done]{opacity:.6}
+.node[data-state=done] .stripe{background:#33604b}
+.node[data-state=done] .n-dot{background:var(--pass)}
+.node[data-state=done] .n-state{color:#3f7a5c}
+.node[data-state=done]:hover{opacity:.95}
+.node[data-state=repair]{border-color:rgba(201,147,64,.5);background:#1a1710}
+.node[data-state=repair] .stripe{background:var(--repair)}
+.node[data-state=repair] .n-title{color:var(--ink)}
+.node[data-state=repair] .n-dot{background:var(--repair)}
+.node[data-state=repair] .n-state{color:var(--repair)}
+.node[data-state=halt]{border-color:rgba(212,89,76,.55);background:#1c1211}
+.node[data-state=halt] .stripe{background:var(--halt)}
+.node[data-state=halt] .n-title{color:var(--ink)}
+.node[data-state=halt] .n-dot{background:var(--halt);box-shadow:0 0 0 3px rgba(212,89,76,.18)}
+.node[data-state=halt] .n-state{color:var(--halt)}
+.node[data-state=ghost]{border-style:dashed;border-color:rgba(142,134,232,.45);background:rgba(142,134,232,.05);opacity:.82}
+.node[data-state=ghost] .stripe{background:transparent}
+.node[data-state=ghost] .n-id,.node[data-state=ghost] .n-state{color:var(--propose)}
+.node[data-state=ghost] .n-title{color:#c9c4f2}
+.node.spawn{animation:pop .44s cubic-bezier(.2,.9,.3,1)}
+@keyframes pop{from{opacity:0}}
+
+.port{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--panel-3);border:1.5px solid var(--edge-3);
+  transition:background .12s,border-color .12s,transform .12s;z-index:2}
+.port::after{content:"";position:absolute;inset:-10px}
+.port.in{left:-5px;top:39.5px}
+.port.out{right:-5px;top:39.5px}
+.node[data-role=REVIEW] .port.out{top:23.5px}
+.node[data-role=REVIEW] .port.out.rep{top:58.5px}
+body[data-mode=build] .port{cursor:crosshair}
+body[data-mode=build] .port:hover,.port.armed{background:var(--live);border-color:var(--live);transform:scale(1.3)}
+.port.rep{border-color:rgba(201,147,64,.6)}
+body[data-mode=build] .port.rep:hover{background:var(--repair);border-color:var(--repair)}
+.plabel{position:absolute;right:11px;font-family:var(--mono);font-size:8.5px;font-weight:500;letter-spacing:.09em;color:var(--ink-4);pointer-events:none}
+.plabel.pass{top:19px}
+.plabel.rep{top:54px;color:#7a6134}
+.node[data-state=repair] .plabel.rep{color:var(--repair)}
+.tempwire{stroke:var(--live);stroke-width:2;stroke-dasharray:4 4;fill:none}
+
+#world.far .n-desc,#world.far .n-foot,#world.far .plabel,#world.far .wchip,#world.far .verdict{display:none}
+#world.far .node{padding:0 13px;justify-content:center}
+#world.far .n-head{align-items:center}
+#world.far .n-title{font-size:15px}
+#world.far .n-id{font-size:12px}
+#world.veryfar .n-title{display:none}
+#world.veryfar .n-id{font-size:18px;color:var(--ink-3)}
+
+/* ── inline verdict, attached to the node that issued it ── */
+.verdict{position:absolute;left:0;top:0;width:284px;transform-origin:0 0;background:#15130d;
+  border:1px solid rgba(201,147,64,.4);border-radius:var(--r);padding:9px 11px 10px;
+  display:flex;flex-direction:column;gap:7px;box-shadow:0 20px 46px -22px #000;animation:pop .44s ease-out}
+.v-head{display:flex;align-items:center;gap:8px}
+.v-badge{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;color:#100d07;background:var(--repair);padding:2px 6px 1px;border-radius:3px}
+.v-from{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;color:#877246}
+.v-x{margin-left:auto;color:var(--ink-4);font-size:15px;line-height:1;width:16px;height:16px}
+.v-x:hover{color:var(--ink-2)}
+.v-sum{margin:0;font-size:11.5px;line-height:1.45;color:#ddd4c1}
+.v-hand{border-top:1px dashed rgba(201,147,64,.26);padding-top:7px;display:flex;flex-direction:column;gap:3px}
+.v-hand .lab{color:#877246}
+.v-hand p{margin:0;font-family:var(--mono);font-size:10.5px;line-height:1.5;color:#c0b18f;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.v-open{align-self:flex-start;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;color:var(--repair);box-shadow:0 1px 0 rgba(201,147,64,.4)}
+
+/* ── hover peek ── */
+#peek{position:absolute;z-index:30;width:338px;background:var(--panel);border:1px solid var(--edge-2);border-radius:7px;
+  padding:10px 12px 11px;display:none;flex-direction:column;gap:8px;box-shadow:0 24px 54px -24px #000,0 0 0 1px rgba(0,0,0,.45);pointer-events:none}
+#peek.on{display:flex}
+.pk-top{display:flex;align-items:center;gap:8px}
+.pk-id{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+.pk-t{font-size:12.5px;font-weight:500;color:var(--ink);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk-s{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-3)}
+.pk-row{display:flex;flex-direction:column;gap:3px}
+.pk-row p{margin:0;font-size:11.5px;line-height:1.45;color:var(--ink-2);
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.pk-row.mono p{font-family:var(--mono);font-size:10.5px;line-height:1.5;color:var(--ink-3)}
+.pk-row.hand .lab{color:#7fb0ea}
+.pk-row.hand p{color:#bcd3f0}
+.pk-div{height:1px;background:var(--edge)}
+
+/* ── inspector ── */
+#insp{position:absolute;top:10px;right:10px;bottom:10px;width:358px;z-index:35;background:var(--panel);
+  border:1px solid var(--edge-2);border-radius:8px;box-shadow:0 32px 74px -32px #000,0 0 0 1px rgba(0,0,0,.5);
+  display:none;flex-direction:column;overflow:hidden}
+#insp.on{display:flex;animation:slide .2s ease-out}
+@keyframes slide{from{opacity:0;transform:translateX(16px)}}
+.i-head{display:flex;align-items:center;gap:9px;padding:11px 12px;border-bottom:1px solid var(--edge);flex:0 0 auto}
+.i-id{font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+.i-role{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-4)}
+.i-x{margin-left:auto;width:22px;height:22px;display:flex;align-items:center;justify-content:center;color:var(--ink-3);border:1px solid transparent;border-radius:4px;font-size:15px;line-height:1}
+.i-x:hover{color:var(--ink);border-color:var(--edge-2)}
+.i-body{flex:1 1 auto;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:14px}
+.i-body::-webkit-scrollbar{width:10px}
+.i-body::-webkit-scrollbar-thumb{background:var(--edge-2);border-radius:10px;border:3px solid var(--panel)}
+.fld{display:flex;flex-direction:column;gap:5px}
+input.t,textarea.t{width:100%;background:var(--ground);border:1px solid var(--edge);border-radius:5px;padding:7px 9px;
+  color:var(--ink);font-family:var(--sans);font-size:12.5px;resize:none}
+textarea.t{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--ink-2);min-height:154px}
+input.t:focus,textarea.t:focus{outline:none;border-color:var(--live);background:#0c1114}
+.rolebar{display:flex;gap:4px;flex-wrap:wrap}
+.rolebar button{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;padding:5px 8px;border:1px solid var(--edge);border-radius:4px;color:var(--ink-3)}
+.rolebar button:hover{color:var(--ink-2);border-color:var(--edge-2)}
+.rolebar button[aria-pressed=true]{border-color:var(--edge-3);background:var(--panel-3);color:var(--ink)}
+.i-foot{border-top:1px solid var(--edge);padding:9px 12px;display:flex;flex-wrap:wrap;gap:6px;background:var(--panel-2);flex:0 0 auto}
+.i-foot .btn{height:25px;font-size:11.5px;padding:0 9px}
+.read{display:flex;flex-direction:column;gap:5px}
+.read p{margin:0;font-size:12px;line-height:1.5;color:var(--ink-2)}
+.read.box p{font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--ink-3);background:var(--ground);
+  border:1px solid var(--edge);border-radius:5px;padding:8px 9px;white-space:pre-wrap}
+.read.key p{color:#cfe1fb;border-color:rgba(87,160,245,.32);background:#0b1017}
+.read.warn p{color:#dbc8a2;border-color:rgba(201,147,64,.32);background:#13100a}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-family:var(--mono);font-size:10px;color:var(--ink-3);border:1px solid var(--edge);border-radius:4px;padding:3px 7px;background:var(--ground);word-break:break-all}
+details.more{border-top:1px solid var(--edge);padding-top:11px}
+details.more summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:7px;color:var(--ink-3);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;text-transform:uppercase}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary::before{content:"+";font-size:12px;color:var(--ink-4);width:8px}
+details.more[open] summary::before{content:"\2212"}
+details.more summary:hover{color:var(--ink-2)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:11px 0 0;font-family:var(--mono);font-size:10.5px}
+.kv dt{color:var(--ink-4);letter-spacing:.04em}
+.kv dd{margin:0;color:var(--ink-2);text-align:right;word-break:break-all;font-variant-numeric:tabular-nums}
+.verd-badge{font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;padding:2px 7px 1px;border-radius:3px}
+.verd-badge[data-v=REPAIR]{background:var(--repair);color:#100d07}
+.verd-badge[data-v=PASS]{background:var(--pass);color:#06110b}
+.verd-badge[data-v=BLOCKED]{background:var(--halt);color:#180907}
+
+/* ── planner proposal bar ── */
+#planbar{position:absolute;left:0;top:0;transform-origin:0 0;z-index:22;display:none;align-items:center;gap:9px;
+  background:#15141f;border:1px solid rgba(142,134,232,.42);border-radius:7px;padding:8px 9px 8px 12px;
+  box-shadow:0 22px 52px -24px #000}
+#planbar.on{display:flex}
+.pb-t{display:flex;flex-direction:column;gap:1px;margin-right:5px}
+.pb-t strong{font-size:12px;font-weight:500;color:#cdc8f5}
+.pb-t span{font-family:var(--mono);font-size:9.5px;letter-spacing:.03em;color:#6f68a2}
+#planbar .btn{height:25px;font-size:11.5px;padding:0 10px}
+#planbar .btn.acc{border-color:rgba(142,134,232,.55);background:rgba(142,134,232,.16);color:#ddd9ff}
+#planbar .btn.acc:hover{background:rgba(142,134,232,.26);color:#fff}
+
+/* ── docks ── */
+.dock{position:absolute;bottom:10px;z-index:25;display:flex;align-items:center;gap:4px;
+  background:rgba(20,24,26,.94);border:1px solid var(--edge);border-radius:7px;padding:5px}
+#scen{left:10px}
+#zoom{right:10px}
+.dock .lab{padding:0 7px 0 5px}
+.dock button{font-family:var(--mono);font-size:10px;letter-spacing:.07em;padding:4px 9px;border-radius:4px;color:var(--ink-3)}
+.dock button:hover{color:var(--ink);background:var(--panel-3)}
+.dock button[aria-pressed=true]{background:var(--panel-3);color:var(--ink)}
+#zval{font-family:var(--mono);font-size:10px;color:var(--ink-3);width:40px;text-align:center;font-variant-numeric:tabular-nums}
+#hint{position:absolute;left:11px;bottom:54px;z-index:24;font-size:11.5px;line-height:1.5;color:var(--ink-4);max-width:400px;pointer-events:none}
+#hint b{color:var(--ink-3);font-weight:450}
+#hint kbd{font-family:var(--mono);font-size:10px;color:var(--ink-3);border:1px solid var(--edge-2);border-radius:3px;padding:1px 4px;background:var(--panel)}
+#keys{position:absolute;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(6,8,9,.74)}
+#keys.on{display:flex}
+.kcard{width:min(580px,90vw);background:var(--panel);border:1px solid var(--edge-2);border-radius:9px;padding:18px 20px 20px;box-shadow:0 44px 96px -34px #000}
+.kcard h2{margin:0 0 3px;font-size:13px;font-weight:500}
+.kcard .lab{display:block;margin-bottom:14px}
+.kgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 26px}
+.krow{display:flex;align-items:baseline;gap:10px;font-size:12px;color:var(--ink-2);border-bottom:1px solid var(--edge);padding-bottom:7px}
+.krow kbd{font-family:var(--mono);font-size:10px;color:var(--ink);border:1px solid var(--edge-2);border-radius:3px;padding:2px 5px;background:var(--ground);margin-left:auto;white-space:nowrap}
+
+@media (max-width:860px){
+  #insp{left:8px;right:8px;top:auto;bottom:8px;width:auto;height:60%}
+  #hint,.wf,#runid{display:none}
+  .kgrid{grid-template-columns:1fr}
+}
+</style>
+
+<div id="app">
+  <header id="bar">
+    <div class="mark"><span class="glyph"></span><span class="wf"><b>IMPLEMENT_REVIEW_REPAIR</b> · v0.4</span></div>
+    <span class="sep"></span>
+    <div class="seg" role="group" aria-label="Mode">
+      <button id="mBuild" aria-pressed="true">BUILD</button>
+      <button id="mRun" aria-pressed="false">RUN</button>
+    </div>
+    <div id="status"><span id="runid"></span><span class="pulse" id="pulse"></span><span id="statusText"></span></div>
+    <button class="btn" id="btnReplay" hidden><span style="font-size:13px">&#8635;</span>Replay</button>
+    <button class="btn go" id="btnRun"><span class="tri"></span>Run<kbd>&#8984;&#9166;</kbd></button>
+  </header>
+
+  <div id="stage">
+    <div id="grid"></div>
+    <div id="world">
+      <svg id="wires"></svg>
+      <div id="layer"></div>
+    </div>
+
+    <div id="peek"></div>
+    <aside id="insp" aria-label="Node inspector"></aside>
+
+    <div id="planbar">
+      <div class="pb-t"><strong>Planner proposal</strong><span id="pbMeta"></span></div>
+      <button class="btn acc" id="pbAccept">Accept</button>
+      <button class="btn" id="pbModify">Modify</button>
+      <button class="btn" id="pbDiscard">Discard</button>
+    </div>
+
+    <p id="hint"></p>
+
+    <div class="dock" id="scen">
+      <span class="lab">Scenario</span>
+      <button data-s="run">RUN &middot; REPAIR</button>
+      <button data-s="build">BUILD</button>
+      <button data-s="plan">PLAN FROM HERE</button>
+      <span class="sep" style="height:14px;margin:0 2px"></span>
+      <button id="btnKeys" title="Keyboard shortcuts">?</button>
+    </div>
+
+    <div class="dock" id="zoom">
+      <button id="zOut">&minus;</button><span id="zval">100%</span><button id="zIn">+</button>
+      <span class="sep" style="height:14px;margin:0 2px"></span>
+      <button id="zFit">FIT</button>
+    </div>
+
+    <div id="keys">
+      <div class="kcard">
+        <h2>Canvas</h2><span class="lab">AAW &mdash; keyboard</span>
+        <div class="kgrid">
+          <div class="krow">New task on canvas <kbd>double&#8209;click</kbd></div>
+          <div class="krow">Connect / create next <kbd>drag a port</kbd></div>
+          <div class="krow">Insert between two tasks <kbd>drop node on wire</kbd></div>
+          <div class="krow">Pan <kbd>drag empty / space</kbd></div>
+          <div class="krow">Zoom to cursor <kbd>wheel</kbd></div>
+          <div class="krow">Fit graph <kbd>F</kbd></div>
+          <div class="krow">Open inspector <kbd>click node</kbd></div>
+          <div class="krow">Close / cancel <kbd>Esc</kbd></div>
+          <div class="krow">Run whole workflow <kbd>&#8984; / Ctrl + &#9166;</kbd></div>
+          <div class="krow">Run from here <kbd>R</kbd></div>
+          <div class="krow">Reset downstream <kbd>&#8679; R</kbd></div>
+          <div class="krow">Plan from here <kbd>P</kbd></div>
+          <div class="krow">Duplicate selection <kbd>&#8984; / Ctrl + D</kbd></div>
+          <div class="krow">Delete selection <kbd>Del</kbd></div>
+          <div class="krow">Toggle BUILD / RUN <kbd>M</kbd></div>
+          <div class="krow">This panel <kbd>?</kbd></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+const NW=216, NH=88, COL=296, RUN_ID="AAW_20260910_142207_7f31c4a2";
+const $=s=>document.querySelector(s);
+const stage=$("#stage"), world=$("#world"), wires=$("#wires"), layer=$("#layer"),
+      grid=$("#grid"), peek=$("#peek"), insp=$("#insp"), planbar=$("#planbar"),
+      pulse=$("#pulse"), statusText=$("#statusText"), hintEl=$("#hint");
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* ─────────────────────────  graph  ───────────────────────── */
+const BASE={
+ order:["N01","N02","N03","N04","N05","N06","N07","N08"],
+ nodes:{
+  N01:{id:"N01",role:"IMPLEMENT",title:"Scope the auth surface",x:0,y:0,
+    desc:"Inventory every path that mints, refreshes or accepts a session token",
+    brief:"Goal: harden refresh-token rotation.\n\nIn the isolated worktree, inventory every entry point that mints, refreshes or accepts a session token. Do not change behaviour yet.\n\nDeliver a scoped list as file:line with one line of intent per entry.",
+    result:"17 entry points across 6 modules. Three are undocumented: /internal/impersonate, the mobile deep-link exchange, and a legacy cookie fallback.",
+    handoff:"Treat the three undocumented paths as in scope. The legacy cookie fallback is deprecated \u2014 do not extend it.",
+    bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"1m 44s",tok:"12.4k in / 3.1k out",
+    files:["auth/session/*","docs/authmap.md"]},
+  N02:{id:"N02",role:"IMPLEMENT",title:"Rotate on every refresh",x:COL,y:0,
+    desc:"Single-use refresh tokens; issue a new one on each exchange",
+    brief:"Make refresh tokens single-use. On exchange, issue a fresh refresh token and revoke the presented one.\n\nKeep the change inside auth/session/. Add focused tests. Do not merge, push or touch the canonical checkout.",
+    result:"Rotation implemented in auth/session/refresh.py. Six focused tests added, all green.",
+    handoff:"Rotation is live but reuse of a spent token is still accepted. The next task owns replay handling.",
+    bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"3m 12s",tok:"18.9k in / 7.7k out",
+    files:["auth/session/refresh.py","tests/test_refresh.py"]},
+  N03:{id:"N03",role:"IMPLEMENT",title:"Detect reuse, revoke family",x:COL*2,y:0,
+    desc:"Replay of a spent token invalidates the whole token family",
+    brief:"Detect presentation of an already-rotated refresh token. On reuse, revoke the entire token family and force re-auth.\n\nDo not modify the deprecated cookie fallback.",
+    result:"Family revocation added. Reuse returns 401 and clears the family in a single transaction.",
+    handoff:"Reuse detection covers the web flow. The mobile deep-link exchange path was not modified.",
+    bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"4m 05s",tok:"22.1k in / 9.4k out",
+    files:["auth/session/family.py","tests/test_family.py"]},
+  N04:{id:"N04",role:"REVIEW",title:"Independent review",x:COL*3,y:0,
+    desc:"Fresh read-only context over goal, diff and machine evidence",
+    brief:"Review the implementation in a fresh, read-only context. Assess the goal, the acceptance criteria, the diff, the changed files and the machine evidence.\n\nDo not edit files. Report concrete structured findings only.\n\nReturn: verdict, summary, next_brief, carry_forward, artifacts.",
+    result:"Rotation and reuse detection are correct for the web flow. The mobile deep-link exchange re-issues a refresh token without re-binding device_id.",
+    handoff:"Verdict REPAIR. New brief handed to a child task; the PASS branch stays held.",
+    plannedVerdict:"REPAIR",
+    summary:"Rotation and reuse detection are correct for the web flow. The mobile deep-link exchange re-issues a refresh token without re-binding device_id, so a stolen token replays on another device for the full 15-minute window.",
+    next_brief:"Bind rotation to device_id on the mobile deep-link exchange path. Reject any refresh whose device_id does not match the family.\n\nStay inside auth/session/. Extend the existing family-revocation test rather than adding a parallel suite.",
+    carry:["scope: auth/session/ only","no merge to canonical","family revocation semantics are settled","legacy cookie fallback stays untouched"],
+    artifacts:["03_STATS/"+RUN_ID+"/WORKFLOW/N04_review.json","03_STATS/"+RUN_ID+"/WORKFLOW/diff_summary.txt"],
+    repairTitle:"Bind rotation to device",
+    repairDesc:"Brief authored by N04 \u2014 close the mobile replay window",
+    repairResult:"device_id now travels with the token family. The mobile exchange rejects a mismatched refresh; the replay window is closed. Four tests added.",
+    repairHandoff:"Web and mobile share one rotation path. A re-review is required before the held PASS branch resumes.",
+    bind:"SOL_HIGH",model:"gpt-5.6-sol",effort:"high",dur:"2m 58s",tok:"31.6k in / 4.2k out",
+    independence:"SAME_PROVIDER_FRESH_CONTEXT",files:[]},
+  N05:{id:"N05",role:"IMPLEMENT",title:"Shorten the replay window",x:COL*3+336,y:0,
+    desc:"Cut refresh TTL to 3 minutes and re-check the clock skew guard",
+    brief:"Reduce the refresh-token TTL from 15 minutes to 3. Verify the clock-skew guard still accepts legitimate mobile clients.",
+    result:"",handoff:"",bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"\u2014",tok:"\u2014",files:[]},
+  N06:{id:"N06",role:"IMPLEMENT",title:"Emit auth audit events",x:COL*4+336,y:0,
+    desc:"One structured event per mint, rotate, reuse and revoke",
+    brief:"Emit a structured audit event for every mint, rotate, reuse and revoke. No PII in the payload \u2014 ids only.",
+    result:"",handoff:"",bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"\u2014",tok:"\u2014",files:[]},
+  N07:{id:"N07",role:"IMPLEMENT",title:"Backfill migration",x:COL*5+336,y:0,
+    desc:"Migrate live sessions onto the family schema without forced logout",
+    brief:"Write a forward-only migration that moves live sessions onto the family schema. Nobody gets logged out. Include a dry-run mode.",
+    result:"",handoff:"",bind:"TERRA_HIGH",model:"terra-1.2",effort:"high",dur:"\u2014",tok:"\u2014",files:[]},
+  N08:{id:"N08",role:"REVIEW",title:"Release gate",x:COL*6+336,y:0,
+    desc:"Second independent pass over the full change set before handoff",
+    brief:"Second independent review over the complete change set. Confirm scope, tests and migration safety.\n\nReturn: verdict, summary, next_brief, carry_forward, artifacts.",
+    result:"",handoff:"",plannedVerdict:"PASS",
+    repairTitle:"Repair from release gate",repairDesc:"Brief authored by N08",
+    bind:"SOL_HIGH",model:"gpt-5.6-sol",effort:"high",dur:"\u2014",tok:"\u2014",
+    independence:"SAME_PROVIDER_FRESH_CONTEXT",files:[]}
+ },
+ edges:[
+  {id:"e1",from:"N01",port:"out",to:"N02",kind:"flow"},
+  {id:"e2",from:"N02",port:"out",to:"N03",kind:"flow"},
+  {id:"e3",from:"N03",port:"out",to:"N04",kind:"flow"},
+  {id:"e4",from:"N04",port:"out",to:"N05",kind:"flow",label:"PASS"},
+  {id:"e5",from:"N05",port:"out",to:"N06",kind:"flow"},
+  {id:"e6",from:"N06",port:"out",to:"N07",kind:"flow"},
+  {id:"e7",from:"N07",port:"out",to:"N08",kind:"flow"}
+ ]
+};
+const PLAN=[
+ {role:"MACHINE_GATE",title:"Focused test sweep",desc:"pytest -q over auth/ plus the session integration suite",
+  brief:"Run the pre-approved focused test command without a shell. Exit code 0 is the only acceptance criterion."},
+ {role:"IMPLEMENT",title:"Staging soak & rollback drill",desc:"24h soak, then rehearse the rollback on a copy of prod data",
+  brief:"Deploy the change set to staging, soak for 24h against replayed production traffic, then rehearse a full rollback. Record both outcomes."},
+ {role:"HUMAN_GATE",title:"Accept candidate",desc:"Human verdict; the runner never merges to canonical",
+  brief:"Human acceptance. ACCEPT CANDIDATE records READY_FOR_EXTERNAL_INTEGRATION. No merge, push or PR is performed by the runner."}
+];
+
+let G, sel=new Set(), ghosts=[], counter=9, editing=null, runToken=0, running=false;
+let view={x:120,y:150,k:1}, userCam=false, lastFrame=null;
+
+function restore(){
+  G=JSON.parse(JSON.stringify(BASE));
+  ghosts=[];counter=9;
+  G.edges.forEach(e=>{e.taken=undefined});
+}
+const N=id=>G.nodes[id];
+const outs=id=>G.edges.filter(e=>e.from===id);
+const ins=id=>G.edges.filter(e=>e.to===id);
+const edgeBetween=(a,b)=>G.edges.find(e=>e.from===a&&e.to===b);
+const allIds=()=>G.order.slice();
+
+/* ─────────────────────────  geometry  ───────────────────────── */
+function outPt(n,port){
+  const y = n.role==="REVIEW" ? (port==="repair"? n.y+63 : n.y+28) : n.y+44;
+  return [n.x+NW,y];
+}
+const inPt=n=>[n.x,n.y+44];
+function ctrl(p0,p1){
+  const dx=p1[0]-p0[0], dy=p1[1]-p0[1];
+  return clamp(Math.abs(dx)*0.5+Math.abs(dy)*0.18,48,170);
+}
+function pathD(p0,p1){
+  const c=ctrl(p0,p1);
+  return "M"+p0[0]+","+p0[1]+" C"+(p0[0]+c)+","+p0[1]+" "+(p1[0]-c)+","+p1[1]+" "+p1[0]+","+p1[1];
+}
+function bez(p0,p1,t){
+  const c=ctrl(p0,p1), u=1-t;
+  const xs=[p0[0],p0[0]+c,p1[0]-c,p1[0]], ys=[p0[1],p0[1],p1[1],p1[1]];
+  const b=a=>u*u*u*a[0]+3*u*u*t*a[1]+3*u*t*t*a[2]+t*t*t*a[3];
+  return [b(xs),b(ys)];
+}
+function edgeEnds(e){
+  const a=N(e.from), b=N(e.to);
+  if(!a||!b) return null;
+  return [outPt(a,e.port),inPt(b)];
+}
+function edgeState(e){
+  if(e.kind==="ghost") return "ghost";
+  const a=N(e.from), b=N(e.to);
+  if(!a||!b) return "idle";
+  if(e.taken===false) return "muted";
+  if(b.state==="running") return e.port==="repair"?"repair-active":"active";
+  if(e.port==="repair") return "repair";
+  if(a.state==="done"&&(b.state==="done"||b.state==="repair")) return "done";
+  if((a.state==="done"||a.state==="repair")&&b.state==="pending") return "idle";
+  return "idle";
+}
+function toWorld(cx,cy){
+  const r=stage.getBoundingClientRect();
+  return [(cx-r.left-view.x)/view.k,(cy-r.top-view.y)/view.k];
+}
+
+/* ─────────────────────────  view  ───────────────────────── */
+function applyView(){
+  world.style.transform="translate("+view.x+"px,"+view.y+"px) scale("+view.k+")";
+  const g=24*view.k;
+  grid.style.backgroundSize=g+"px "+g+"px";
+  grid.style.backgroundPosition=view.x+"px "+view.y+"px";
+  world.classList.toggle("far",view.k<0.58);
+  world.classList.toggle("veryfar",view.k<0.4);
+  $("#zval").textContent=Math.round(view.k*100)+"%";
+}
+let tw=null;
+function tween(tx,ty,tk,ms){
+  if(tw)cancelAnimationFrame(tw);
+  const s={x:view.x,y:view.y,k:view.k}, t0=performance.now(), d=ms||420;
+  const red=matchMedia("(prefers-reduced-motion:reduce)").matches;
+  if(red){view.x=tx;view.y=ty;view.k=tk;applyView();return;}
+  (function step(now){
+    const p=clamp((now-t0)/d,0,1), e=1-Math.pow(1-p,3);
+    view.x=s.x+(tx-s.x)*e; view.y=s.y+(ty-s.y)*e; view.k=s.k+(tk-s.k)*e;
+    applyView();
+    if(p<1) tw=requestAnimationFrame(step);
+  })(t0);
+}
+function bbox(ids){
+  const ns=ids.map(N).filter(Boolean);
+  if(!ns.length)return null;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ns.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+NW);y1=Math.max(y1,n.y+NH)});
+  return [x0,y0,x1,y1];
+}
+function focusOn(ids,k,pad){
+  const b=bbox(ids); if(!b)return;
+  lastFrame={ids:ids.slice(),k:k,pad:pad};
+  const r=stage.getBoundingClientRect();
+  if(r.width<40||r.height<40) return;
+  const inspOpen=insp.classList.contains("on")&&r.width>860;
+  const availW=r.width-(inspOpen?400:120), availH=r.height-(pad||150);
+  const kk=k||clamp(Math.min(availW/(b[2]-b[0]),availH/(b[3]-b[1])),0.3,1.05);
+  const cx=(b[0]+b[2])/2, cy=(b[1]+b[3])/2;
+  tween((r.width-(inspOpen?380:0))/2-cx*kk, r.height/2-cy*kk, kk);
+}
+function fit(){ userCam=false; focusOn(allIds().concat(ghosts)); }
+function ensureVisible(n){
+  const r=stage.getBoundingClientRect();
+  const sx=n.x*view.k+view.x, sy=n.y*view.k+view.y, w=NW*view.k, h=NH*view.k;
+  const m=110, rightLimit=r.width-(insp.classList.contains("on")&&r.width>860?390:m);
+  if(sx>m&&sy>m&&sx+w<rightLimit&&sy+h<r.height-140) return;
+  focusOn([n.id],view.k);
+}
+
+/* ─────────────────────────  render  ───────────────────────── */
+const els=new Map();
+function nodeMarkup(n){
+  const ports = n.role==="REVIEW"
+    ? '<b class="port in"></b><b class="port out" data-p="out"></b><b class="port out rep" data-p="repair"></b>'+
+      '<span class="plabel pass">PASS</span><span class="plabel rep">REPAIR</span>'
+    : '<b class="port in"></b><b class="port out" data-p="out"></b>';
+  return '<i class="stripe"></i>'+
+    '<div class="n-head"><span class="n-id">'+esc(n.id)+'</span>'+
+    '<h3 class="n-title">'+esc(n.title)+'</h3><span class="n-dot"></span></div>'+
+    '<p class="n-desc">'+esc(n.desc||"")+'</p>'+
+    '<div class="n-foot"><span class="n-role">'+esc(n.role)+'</span>'+
+    '<span class="n-state">'+esc(stateLabel(n))+'</span></div>'+ports;
+}
+function stateLabel(n){
+  if(n.state==="running")return "RUNNING";
+  if(n.state==="done")return n.verdict||"DONE";
+  if(n.state==="repair")return "REPAIR";
+  if(n.state==="halt")return "BLOCKED";
+  if(n.state==="ghost")return "PROPOSED";
+  return "PENDING";
+}
+function renderNodes(){
+  const live=new Set(allIds().concat(ghosts));
+  els.forEach((el,id)=>{ if(!live.has(id)){el.remove();els.delete(id);} });
+  live.forEach(id=>{
+    const n=N(id); if(!n)return;
+    let el=els.get(id);
+    if(!el){
+      el=document.createElement("article");
+      el.className="node"; el.dataset.id=id; el.tabIndex=0;
+      layer.appendChild(el); els.set(id,el);
+      if(n.fresh){ el.classList.add("spawn"); n.fresh=false; }
+    }
+    if(editing!==id) el.innerHTML=nodeMarkup(n);
+    el.dataset.role=n.role;
+    el.dataset.state=n.state||"pending";
+    el.classList.toggle("sel",sel.has(id));
+    el.style.transform="translate("+n.x+"px,"+n.y+"px)";
+  });
+}
+function renderWires(){
+  let svg="", chips="";
+  G.edges.forEach(e=>{
+    const p=edgeEnds(e); if(!p)return;
+    const d=pathD(p[0],p[1]), st=edgeState(e);
+    svg+='<path class="wire" data-e="'+e.id+'" data-s="'+st+'" d="'+d+'"></path>';
+    const m=bez(p[0],p[1],0.5);
+    let label="";
+    if(e.label) label='<span class="wlabel" data-k="'+(st==="muted"?"muted":(st==="repair"||st==="repair-active")?"repair":st==="ghost"?"ghost":"")+'">'+esc(st==="muted"?e.label+" \u00b7 HELD":e.label)+'</span>';
+    const acts='<button class="wact" data-ins="'+e.id+'" title="Insert a task here">+</button>'+
+               '<button class="wact" data-del="'+e.id+'" title="Remove this link">\u00d7</button>';
+    chips+='<div class="wchip" style="transform:translate('+(m[0])+'px,'+(m[1])+'px) translate(-50%,-50%)">'+label+acts+'</div>';
+  });
+  wires.innerHTML=svg+'<path id="temp" class="tempwire" style="display:none"></path>';
+  const old=layer.querySelectorAll(".wchip,.verdict"); old.forEach(o=>o.remove());
+  const holder=document.createElement("div");
+  holder.innerHTML=chips+verdictMarkup();
+  while(holder.firstChild) layer.appendChild(holder.firstChild);
+  positionPlanbar();
+}
+function verdictMarkup(){
+  let out="";
+  allIds().forEach(id=>{
+    const n=N(id);
+    if(!n.showVerdict||!n.verdict)return;
+    const x=n.x+NW-284, y=n.y+NH+16;
+    out+='<div class="verdict" data-for="'+id+'" style="transform:translate('+x+'px,'+y+'px)">'+
+      '<div class="v-head"><span class="v-badge">'+esc(n.verdict)+'</span>'+
+      '<span class="v-from">'+esc(n.id)+' \u00b7 '+esc(n.role)+'</span>'+
+      '<button class="v-x" data-vx="'+id+'" title="Dismiss">\u00d7</button></div>'+
+      '<p class="v-sum">'+esc(n.summary||n.result||"")+'</p>'+
+      '<div class="v-hand"><span class="lab">new brief \u2192 '+esc(id+"A")+'</span>'+
+      '<p>'+esc((n.next_brief||"").split("\n")[0])+'</p></div>'+
+      '<button class="v-open" data-vopen="'+id+'">Open review \u2192</button></div>';
+  });
+  return out;
+}
+function render(){ renderNodes(); renderWires(); }
+
+/* ─────────────────────────  status  ───────────────────────── */
+function setStatus(kind,html){ pulse.dataset.k=kind||""; statusText.innerHTML=html; }
+function hint(html){ hintEl.innerHTML=html||""; }
+
+/* ─────────────────────────  mode  ───────────────────────── */
+function setMode(m){
+  document.body.dataset.mode=m;
+  $("#mBuild").setAttribute("aria-pressed",m==="build");
+  $("#mRun").setAttribute("aria-pressed",m==="run");
+  $("#runid").textContent=m==="run"?RUN_ID:"";
+  $("#btnReplay").hidden=(m!=="run");
+  hidePeek();
+  if(m==="build"){
+    setStatus("", 'worktree <code>D:\\repo-aaw-wt</code> &middot; clean &middot; canonical HEAD pinned');
+  }
+  if(sel.size===1) openInspector([...sel][0]);
+}
+
+/* ─────────────────────────  selection & inspector ───────────────────────── */
+function select(id,add){
+  if(!add) sel.clear();
+  if(id) sel.add(id);
+  render();
+  if(sel.size===1) openInspector([...sel][0]); else closeInspector();
+}
+function closeInspector(){ insp.classList.remove("on"); insp.innerHTML=""; }
+
+function openInspector(id){
+  const n=N(id); if(!n){closeInspector();return;}
+  const build=document.body.dataset.mode==="build";
+  const ran=n.state==="done"||n.state==="repair"||n.state==="halt";
+  let body="";
+
+  if(build||!ran){
+    body+='<div class="fld"><span class="lab">Task</span>'+
+      '<input class="t" id="fTitle" value="'+esc(n.title)+'"></div>';
+    body+='<div class="fld"><span class="lab">Role</span><div class="rolebar" id="fRole">'+
+      ["IMPLEMENT","REVIEW","REPAIR","MACHINE_GATE","HUMAN_GATE"].map(r=>
+        '<button data-r="'+r+'" aria-pressed="'+(n.role===r)+'">'+r+'</button>').join("")+'</div></div>';
+    body+='<div class="fld"><span class="lab">Brief</span>'+
+      '<textarea class="t" id="fBrief" spellcheck="false">'+esc(n.brief||"")+'</textarea></div>';
+    if(n.role==="REVIEW")
+      body+='<div class="read"><span class="lab">Result contract</span><div class="chips">'+
+        ["verdict: PASS | REPAIR | BLOCKED","summary","next_brief","carry_forward","artifacts"]
+        .map(c=>'<span class="chip">'+esc(c)+'</span>').join("")+'</div></div>';
+  } else {
+    if(n.verdict)
+      body+='<div class="read"><span class="lab">Verdict</span><div class="chips">'+
+        '<span class="verd-badge" data-v="'+esc(n.verdict)+'">'+esc(n.verdict)+'</span></div></div>';
+    body+='<div class="read"><span class="lab">Brief in</span><p style="font-family:var(--mono);font-size:11px;color:var(--ink-3);white-space:pre-wrap">'+esc(n.brief||"")+'</p></div>';
+    body+='<div class="read"><span class="lab">'+(n.verdict?"Summary":"Result")+'</span><p>'+esc(n.summary||n.result||"\u2014")+'</p></div>';
+    if(n.next_brief)
+      body+='<div class="read box warn"><span class="lab">next_brief \u2192 '+esc(n.id+"A")+'</span><p>'+esc(n.next_brief)+'</p></div>';
+    else if(n.handoff)
+      body+='<div class="read box key"><span class="lab">Hands forward</span><p>'+esc(n.handoff)+'</p></div>';
+    if(n.carry&&n.carry.length)
+      body+='<div class="read"><span class="lab">carry_forward</span><div class="chips">'+
+        n.carry.map(c=>'<span class="chip">'+esc(c)+'</span>').join("")+'</div></div>';
+    if(n.artifacts&&n.artifacts.length)
+      body+='<div class="read"><span class="lab">Artifacts</span><div class="chips">'+
+        n.artifacts.map(c=>'<span class="chip">'+esc(c)+'</span>').join("")+'</div></div>';
+  }
+
+  body+='<details class="more"><summary>Binding &amp; telemetry</summary><dl class="kv">'+
+    '<dt>profile</dt><dd>'+esc(n.bind||"inherit")+'</dd>'+
+    '<dt>runtime_model_id</dt><dd>'+esc(n.model||"\u2014")+'</dd>'+
+    '<dt>effort</dt><dd>'+esc(n.effort||"\u2014")+'</dd>'+
+    (n.independence?'<dt>independence</dt><dd>'+esc(n.independence)+'</dd>':'')+
+    '<dt>duration</dt><dd>'+esc(n.dur||"\u2014")+'</dd>'+
+    '<dt>tokens</dt><dd>'+esc(n.tok||"\u2014")+'</dd>'+
+    '</dl></details>';
+
+  insp.innerHTML=
+    '<div class="i-head"><span class="i-id">'+esc(n.id)+'</span>'+
+      '<span class="i-role">'+esc(n.role)+'</span>'+
+      '<button class="i-x" id="iClose" title="Close (Esc)">\u00d7</button></div>'+
+    '<div class="i-body">'+body+'</div>'+
+    '<div class="i-foot">'+
+      '<button class="btn" data-act="runfrom"><span class="tri"></span>Run from here</button>'+
+      '<button class="btn" data-act="reset">Reset downstream</button>'+
+      '<button class="btn" data-act="plan">Plan from here</button>'+
+      '<button class="btn" data-act="dup">Duplicate</button>'+
+      '<button class="btn" data-act="del">Delete</button>'+
+    '</div>';
+  insp.classList.add("on");
+
+  const t=$("#fTitle"), b=$("#fBrief");
+  if(t) t.addEventListener("input",()=>{n.title=t.value;render()});
+  if(b) b.addEventListener("input",()=>{n.brief=b.value});
+  const rb=$("#fRole");
+  if(rb) rb.addEventListener("click",ev=>{
+    const btn=ev.target.closest("button[data-r]"); if(!btn)return;
+    n.role=btn.dataset.r;
+    openInspector(id); render();
+  });
+  $("#iClose").addEventListener("click",()=>{sel.clear();closeInspector();render()});
+  insp.querySelectorAll("[data-act]").forEach(btn=>btn.addEventListener("click",()=>action(btn.dataset.act,id)));
+}
+
+/* ─────────────────────────  hover peek  ───────────────────────── */
+let peekTimer=null, peekFor=null;
+function showPeek(id){
+  const n=N(id); if(!n)return;
+  const el=els.get(id); if(!el)return;
+  peekFor=id;
+  const done=n.state==="done"||n.state==="repair";
+  let html='<div class="pk-top"><span class="pk-id">'+esc(n.id)+'</span>'+
+    '<span class="pk-t">'+esc(n.title)+'</span>'+
+    '<span class="pk-s" style="color:'+stateColor(n)+'">'+esc(stateLabel(n))+'</span></div>';
+  html+='<div class="pk-row mono"><span class="lab">Brief in</span><p>'+esc(n.brief||"\u2014")+'</p></div>';
+  if(done){
+    html+='<div class="pk-div"></div>';
+    html+='<div class="pk-row"><span class="lab">'+(n.verdict?"Verdict \u00b7 "+esc(n.verdict):"Result")+'</span><p>'+esc(n.summary||n.result||"\u2014")+'</p></div>';
+    const fw=n.next_brief||n.handoff;
+    if(fw) html+='<div class="pk-row hand"><span class="lab">'+(n.next_brief?"new brief \u2192 "+esc(n.id+"A"):"hands forward")+'</span><p>'+esc(fw)+'</p></div>';
+  }else if(n.state==="running"){
+    html+='<div class="pk-div"></div><div class="pk-row"><span class="lab">Result</span><p style="color:var(--ink-4)">pending \u2014 task is executing</p></div>';
+  }
+  peek.innerHTML=html;
+  peek.classList.add("on");
+  const r=el.getBoundingClientRect(), s=stage.getBoundingClientRect(), pw=338;
+  let x=r.right-s.left+14, y=r.top-s.top-6;
+  if(x+pw>s.width-14) x=r.left-s.left-pw-14;
+  if(x<10) x=10;
+  y=clamp(y,10,s.height-peek.offsetHeight-10);
+  peek.style.left=x+"px"; peek.style.top=y+"px";
+}
+function stateColor(n){
+  return n.state==="running"?"var(--live)":n.state==="done"?"var(--pass)":
+         n.state==="repair"?"var(--repair)":n.state==="halt"?"var(--halt)":
+         n.state==="ghost"?"var(--propose)":"var(--ink-3)";
+}
+function hidePeek(){ clearTimeout(peekTimer); peek.classList.remove("on"); peekFor=null; }
+
+/* ─────────────────────────  graph edits  ───────────────────────── */
+function nextId(){ return "N"+String(counter++).padStart(2,"0"); }
+function makeNode(x,y,role){
+  const id=nextId();
+  const n={id,role:role||"IMPLEMENT",title:"New task",desc:"",x:Math.round(x/8)*8,y:Math.round(y/8)*8,
+    brief:"",result:"",handoff:"",state:"pending",bind:"SOL_MEDIUM",model:"gpt-5.6-sol",
+    effort:"medium",dur:"\u2014",tok:"\u2014",files:[],fresh:true};
+  G.nodes[id]=n; G.order.push(id);
+  return n;
+}
+function connect(from,to,port){
+  if(from===to)return null;
+  if(G.edges.some(e=>e.from===from&&e.to===to&&e.port===(port||"out")))return null;
+  const e={id:"e"+Math.random().toString(36).slice(2,8),from,port:port||"out",to,kind:"flow"};
+  if(port==="repair") e.label="REPAIR";
+  else if(N(from).role==="REVIEW") e.label="PASS";
+  G.edges.push(e);
+  return e;
+}
+function insertOnEdge(edgeId,node){
+  const e=G.edges.find(x=>x.id===edgeId); if(!e)return;
+  const tail=e.to;
+  e.to=node.id;
+  G.edges.push({id:"e"+Math.random().toString(36).slice(2,8),from:node.id,port:"out",to:tail,kind:"flow"});
+}
+function removeNode(id){
+  const n=N(id); if(!n)return;
+  G.edges=G.edges.filter(e=>e.from!==id&&e.to!==id);
+  delete G.nodes[id];
+  G.order=G.order.filter(x=>x!==id);
+  ghosts=ghosts.filter(x=>x!==id);
+  sel.delete(id);
+}
+function downstream(id){
+  const seen=new Set(), q=[id];
+  while(q.length){ const c=q.shift();
+    outs(c).forEach(e=>{ if(!seen.has(e.to)){seen.add(e.to);q.push(e.to);} });
+  }
+  return [...seen];
+}
+function upstream(id){
+  const seen=new Set(), q=[id];
+  while(q.length){ const c=q.shift();
+    ins(c).forEach(e=>{ if(!seen.has(e.from)){seen.add(e.from);q.push(e.from);} });
+  }
+  return [...seen];
+}
+function resetDownstream(id){
+  downstream(id).forEach(d=>{
+    const n=N(d); if(!n)return;
+    if(n.spawned){ removeNode(d); return; }
+    n.state="pending"; n.verdict=null; n.showVerdict=false;
+  });
+  G.edges.forEach(e=>{ if(e.taken===false) e.taken=undefined; });
+}
+function duplicate(){
+  const ids=[...sel]; if(!ids.length)return;
+  const map={};
+  ids.forEach(id=>{
+    const s=N(id); if(!s)return;
+    const c=JSON.parse(JSON.stringify(s));
+    c.id=nextId(); c.x=s.x+24; c.y=s.y+152; c.state="pending"; c.verdict=null;
+    c.showVerdict=false; c.spawned=false; c.fresh=true;
+    G.nodes[c.id]=c; G.order.push(c.id); map[id]=c.id;
+  });
+  G.edges.slice().forEach(e=>{
+    if(map[e.from]&&map[e.to])
+      G.edges.push({id:"e"+Math.random().toString(36).slice(2,8),from:map[e.from],port:e.port,to:map[e.to],kind:"flow",label:e.label});
+  });
+  sel=new Set(Object.values(map));
+  render();
+  hint("Duplicated <b>"+ids.length+"</b> task"+(ids.length>1?"s":"")+" with the links between them. Briefs came along \u2014 edit what changed.");
+}
+function action(kind,id){
+  if(kind==="runfrom"){ runFrom(id); }
+  if(kind==="reset"){ resetDownstream(id); render(); hint("Everything after <b>"+esc(id)+"</b> is back to <b>PENDING</b>. Spawned repair branches were removed."); }
+  if(kind==="plan"){ planFrom([id]); }
+  if(kind==="dup"){ sel=new Set([id]); duplicate(); }
+  if(kind==="del"){ removeNode(id); closeInspector(); render(); }
+}
+
+/* ─────────────────────────  planner  ───────────────────────── */
+function clearGhosts(){
+  ghosts.slice().forEach(removeNode);
+  G.edges=G.edges.filter(e=>e.kind!=="ghost");
+  ghosts=[];
+  planbar.classList.remove("on");
+}
+function planFrom(ids){
+  clearGhosts();
+  const anchorId=ids[ids.length-1]; const a=N(anchorId); if(!a)return;
+  let prev=anchorId;
+  PLAN.forEach((p,i)=>{
+    const id="G"+(i+1);
+    G.nodes[id]={id,role:p.role,title:p.title,desc:p.desc,brief:p.brief,
+      x:a.x+336+COL*i,y:a.y,state:"ghost",result:"",handoff:"",
+      bind:"inherit",model:"\u2014",effort:"\u2014",dur:"\u2014",tok:"\u2014",fresh:true,ghost:true};
+    ghosts.push(id);
+    G.edges.push({id:"g"+i,from:prev,port:"out",to:id,kind:"ghost",label:i===0?"PROPOSED":""});
+    prev=id;
+  });
+  $("#pbMeta").textContent="3 steps \u00b7 from "+anchorId+" contract \u00b7 main_merge_allowed = false \u00b7 est. 2 LLM calls";
+  planbar.classList.add("on");
+  render();
+  focusOn([anchorId].concat(ghosts),0.78);
+  hint("Planner drafted <b>3 steps</b> after "+esc(anchorId)+". Nothing is committed \u2014 the graph is unchanged until you <b>Accept</b>.");
+}
+function positionPlanbar(){
+  if(!planbar.classList.contains("on")||!ghosts.length)return;
+  const b=bbox(ghosts); if(!b)return;
+  const r=stage.getBoundingClientRect();
+  let x=(b[0]+b[2])/2*view.k+view.x, y=(b[3])*view.k+view.y+22;
+  planbar.style.transform="none";
+  planbar.style.left=clamp(x-planbar.offsetWidth/2,12,r.width-planbar.offsetWidth-12)+"px";
+  planbar.style.top=clamp(y,60,r.height-70)+"px";
+}
+function acceptPlan(open){
+  const first=ghosts[0];
+  ghosts.forEach(id=>{ const n=N(id); if(n){n.state="pending";n.ghost=false;n.bind="SOL_MEDIUM";n.model="gpt-5.6-sol";n.effort="medium";} });
+  G.edges.forEach(e=>{ if(e.kind==="ghost"){e.kind="flow"; if(e.label==="PROPOSED")e.label="";} });
+  const added=ghosts.length; ghosts=[];
+  planbar.classList.remove("on");
+  render();
+  hint("<b>"+added+" tasks</b> merged into the workflow. They run like any other task.");
+  if(open&&first) select(first);
+}
+
+/* ─────────────────────────  run engine  ───────────────────────── */
+function spawnRepair(rid){
+  const r=N(rid); const id=rid+"A";
+  if(N(id))return id;
+  const n={id,role:"REPAIR",title:r.repairTitle||"Repair from review",
+    desc:r.repairDesc||("Brief authored by "+rid),
+    x:r.x+336, y:r.y+280, brief:r.next_brief||"",
+    result:r.repairResult||"", handoff:r.repairHandoff||"",
+    state:"pending", spawned:true, parent:rid, fresh:true,
+    bind:"SOL_MEDIUM",model:"gpt-5.6-sol",effort:"medium",dur:"\u2014",tok:"\u2014",
+    files:[],carry:r.carry?r.carry.slice():[]};
+  G.nodes[id]=n; G.order.push(id);
+  G.edges.push({id:"er"+id,from:rid,port:"repair",to:id,kind:"flow",label:"REPAIR \u00b7 new brief"});
+  return id;
+}
+function stopRun(){ runToken++; running=false; syncRunBtn(); }
+function syncRunBtn(){
+  const b=$("#btnRun");
+  b.classList.toggle("go",!running);
+  b.classList.toggle("stop",running);
+  b.innerHTML = running
+    ? '<span class="sq"></span>Stop'
+    : '<span class="tri"></span>Run<kbd>\u2318\u23ce</kbd>';
+}
+async function engine(startIds){
+  const token=++runToken; running=true; syncRunBtn();
+  setMode("run"); clearGhosts();
+  const q=startIds.slice(), seen=new Set();
+  while(q.length){
+    if(token!==runToken)return;
+    const id=q.shift();
+    if(seen.has(id))continue; seen.add(id);
+    const n=N(id); if(!n||n.state==="ghost")continue;
+    n.state="running"; n.showVerdict=false;
+    setStatus("live",'<b>RUNNING</b> &middot; <code>'+esc(n.id)+'</code> &middot; '+esc(n.role)+' &mdash; '+esc(n.title));
+    render(); ensureVisible(n);
+    await sleep(n.role==="REVIEW"?1600:1050);
+    if(token!==runToken)return;
+
+    if(n.role==="REVIEW"){
+      const v=n.plannedVerdict||"PASS";
+      n.verdict=v;
+      if(v==="REPAIR"){
+        n.state="repair"; n.showVerdict=true;
+        outs(n.id).forEach(e=>{ if(e.port!=="repair") e.taken=false; });
+        const rid=spawnRepair(n.id);
+        render();
+        setStatus("repair",'<code>'+esc(n.id)+'</code> returned <b>REPAIR</b> &mdash; branch <code>'+esc(rid)+'</code> created from the reviewer&rsquo;s brief');
+        hint("The PASS branch is <b>held</b>, not deleted \u2014 it stays on the graph with its old history. Repair is a new sibling task, not a hidden retry.");
+        focusOn([n.id,rid,"N05"],0.92);
+        await sleep(900);
+        if(token!==runToken)return;
+        q.push(rid);
+      } else if(v==="BLOCKED"){
+        n.state="halt";
+        setStatus("halt",'<code>'+esc(n.id)+'</code> returned <b>BLOCKED</b> &mdash; run stopped, human required');
+        render(); running=false; syncRunBtn(); return;
+      } else {
+        n.state="done";
+        outs(n.id).forEach(e=>{ if(e.port!=="repair"&&e.taken!==false&&e.kind==="flow") q.push(e.to); });
+      }
+    } else {
+      n.state="done";
+      outs(n.id).forEach(e=>{ if(e.taken!==false&&e.kind==="flow") q.push(e.to); });
+    }
+    render();
+  }
+  if(token!==runToken)return;
+  running=false; syncRunBtn();
+  const stalled=allIds().some(i=>N(i).state==="repair");
+  if(stalled) setStatus("repair",'<b>WAITING_FOR_HUMAN</b> &middot; repair branch complete &middot; accept, re-review, or extend the branch');
+  else setStatus("pass",'Run complete &middot; every task <b>PASS</b> &middot; <code>READY_FOR_EXTERNAL_INTEGRATION</code>');
+}
+function runAll(){
+  stopRun(); restoreStates(); render();
+  engine(["N01"]);
+}
+function restoreStates(){
+  allIds().forEach(id=>{ const n=N(id);
+    if(n.spawned){removeNode(id);return;}
+    n.state="pending"; n.verdict=null; n.showVerdict=false; });
+  G.edges.forEach(e=>{ if(e.taken===false) e.taken=undefined; });
+}
+function runFrom(id){
+  stopRun();
+  upstream(id).forEach(u=>{ const n=N(u); if(n.state==="pending") n.state="done"; });
+  resetDownstream(id);
+  const n=N(id); n.state="pending"; n.verdict=null; n.showVerdict=false;
+  render();
+  engine([id]);
+}
+
+/* ─────────────────────────  pointer interaction  ───────────────────────── */
+let drag=null, link=null, pan=null, spaceDown=false, dropEdge=null;
+
+stage.addEventListener("pointerdown",ev=>{
+  if(ev.button===1||spaceDown||ev.target===stage||ev.target===grid||ev.target===world||ev.target===layer||ev.target.id==="wires"){
+    pan={x:ev.clientX,y:ev.clientY,vx:view.x,vy:view.y};
+    stage.classList.add("panning"); stage.setPointerCapture(ev.pointerId);
+    if(ev.target===stage||ev.target===grid||ev.target===layer){ sel.clear(); closeInspector(); render(); }
+    return;
+  }
+  const port=ev.target.closest(".port");
+  const nodeEl=ev.target.closest(".node");
+  if(port&&nodeEl&&document.body.dataset.mode==="build"){
+    if(port.classList.contains("in"))return;
+    ev.stopPropagation(); hidePeek();
+    link={from:nodeEl.dataset.id,port:port.dataset.p||"out",x:ev.clientX,y:ev.clientY};
+    port.classList.add("armed");
+    stage.setPointerCapture(ev.pointerId);
+    return;
+  }
+  if(nodeEl){
+    const id=nodeEl.dataset.id;
+    if(editing===id)return;
+    if(document.body.dataset.mode==="build"&&!N(id).ghost){
+      const w=toWorld(ev.clientX,ev.clientY);
+      drag={id,dx:w[0]-N(id).x,dy:w[1]-N(id).y,moved:false};
+      nodeEl.classList.add("dragging");
+      stage.setPointerCapture(ev.pointerId);
+    }
+    if(!sel.has(id)) select(id,ev.shiftKey);
+    else if(ev.shiftKey){ sel.delete(id); render(); }
+    hidePeek();
+  }
+});
+
+stage.addEventListener("pointermove",ev=>{
+  if(pan){
+    view.x=pan.vx+(ev.clientX-pan.x); view.y=pan.vy+(ev.clientY-pan.y);
+    userCam=true; applyView(); return;
+  }
+  if(link){
+    const w=toWorld(ev.clientX,ev.clientY);
+    const a=N(link.from), p0=outPt(a,link.port);
+    const t=$("#temp"); if(t){ t.style.display=""; t.setAttribute("d",pathD(p0,[w[0],w[1]])); }
+    return;
+  }
+  if(drag){
+    const w=toWorld(ev.clientX,ev.clientY), n=N(drag.id);
+    n.x=Math.round((w[0]-drag.dx)/8)*8; n.y=Math.round((w[1]-drag.dy)/8)*8;
+    drag.moved=true;
+    const el=els.get(drag.id); if(el) el.style.transform="translate("+n.x+"px,"+n.y+"px)";
+    renderWires(); markDropEdge(n);
+    return;
+  }
+});
+
+function markDropEdge(n){
+  const cx=n.x+NW/2, cy=n.y+NH/2;
+  let best=null,bd=34;
+  G.edges.forEach(e=>{
+    if(e.from===n.id||e.to===n.id||e.kind!=="flow")return;
+    const p=edgeEnds(e); if(!p)return;
+    for(let t=0.15;t<=0.85;t+=0.07){
+      const q=bez(p[0],p[1],t);
+      const d=Math.hypot(q[0]-cx,q[1]-cy);
+      if(d<bd){bd=d;best=e.id;}
+    }
+  });
+  dropEdge=best;
+  wires.querySelectorAll(".wire").forEach(w=>w.classList.toggle("drop",w.dataset.e===best));
+}
+
+stage.addEventListener("pointerup",ev=>{
+  if(pan){ pan=null; stage.classList.remove("panning"); }
+  if(link){
+    document.querySelectorAll(".port.armed").forEach(p=>p.classList.remove("armed"));
+    const t=$("#temp"); if(t) t.style.display="none";
+    const el=document.elementFromPoint(ev.clientX,ev.clientY);
+    const target=el&&el.closest(".node");
+    if(target&&target.dataset.id!==link.from){
+      connect(link.from,target.dataset.id,link.port);
+      hint("Linked. Output of <b>"+esc(link.from)+"</b> becomes the brief context of <b>"+esc(target.dataset.id)+"</b>.");
+    }else if(!target){
+      const w=toWorld(ev.clientX,ev.clientY);
+      const n=makeNode(w[0],w[1]-NH/2, link.port==="repair"?"REPAIR":"IMPLEMENT");
+      connect(link.from,n.id,link.port);
+      render(); select(n.id); startTitleEdit(n.id);
+      hint("Type the task name, then <kbd>Enter</kbd>. Drag its right port again to keep going.");
+    }
+    link=null; render(); return;
+  }
+  if(drag){
+    const el=els.get(drag.id); if(el) el.classList.remove("dragging");
+    if(dropEdge&&drag.moved){
+      insertOnEdge(dropEdge,N(drag.id));
+      hint("Inserted <b>"+esc(drag.id)+"</b> between two tasks. The wire was rerouted through it.");
+    }
+    dropEdge=null; drag=null; render();
+  }
+});
+
+stage.addEventListener("wheel",ev=>{
+  ev.preventDefault(); userCam=true;
+  const r=stage.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
+  if(ev.shiftKey&&!ev.ctrlKey){ view.x-=ev.deltaY; applyView(); return; }
+  const k2=clamp(view.k*Math.exp(-ev.deltaY*0.0016),0.28,2);
+  view.x=mx-(mx-view.x)*(k2/view.k);
+  view.y=my-(my-view.y)*(k2/view.k);
+  view.k=k2; applyView();
+},{passive:false});
+
+stage.addEventListener("dblclick",ev=>{
+  if(document.body.dataset.mode!=="build")return;
+  if(ev.target.closest(".node")||ev.target.closest(".wchip")||ev.target.closest("#planbar"))return;
+  const w=toWorld(ev.clientX,ev.clientY);
+  const n=makeNode(w[0]-NW/2,w[1]-NH/2);
+  render(); select(n.id); startTitleEdit(n.id);
+  hint("Type the name, <kbd>Enter</kbd> to commit. Then drag the right-hand port to create the next task.");
+});
+
+/* hover peek */
+layer.addEventListener("pointerover",ev=>{
+  const el=ev.target.closest(".node"); if(!el)return;
+  if(drag||link||pan)return;
+  const id=el.dataset.id;
+  if(peekFor===id)return;
+  clearTimeout(peekTimer);
+  peekTimer=setTimeout(()=>showPeek(id),300);
+});
+layer.addEventListener("pointerout",ev=>{
+  const el=ev.target.closest(".node");
+  const to=ev.relatedTarget&&ev.relatedTarget.closest&&ev.relatedTarget.closest(".node");
+  if(el&&to===el)return;
+  hidePeek();
+});
+
+/* wire + verdict actions */
+layer.addEventListener("click",ev=>{
+  const ins_=ev.target.closest("[data-ins]");
+  if(ins_){
+    const e=G.edges.find(x=>x.id===ins_.dataset.ins); if(!e)return;
+    const p=edgeEnds(e), m=bez(p[0],p[1],0.5);
+    const n=makeNode(m[0]-NW/2,m[1]-NH/2);
+    insertOnEdge(e.id,n); render(); select(n.id); startTitleEdit(n.id);
+    hint("New task inserted between the two neighbours. Give it a name, then a brief.");
+    return;
+  }
+  const del=ev.target.closest("[data-del]");
+  if(del){ G.edges=G.edges.filter(x=>x.id!==del.dataset.del); render(); return; }
+  const vx=ev.target.closest("[data-vx]");
+  if(vx){ N(vx.dataset.vx).showVerdict=false; render(); return; }
+  const vo=ev.target.closest("[data-vopen]");
+  if(vo){ select(vo.dataset.vopen); return; }
+});
+
+/* inline title edit */
+function startTitleEdit(id){
+  const el=els.get(id); if(!el)return;
+  const h=el.querySelector(".n-title"); if(!h)return;
+  editing=id;
+  h.setAttribute("contenteditable","true"); h.focus();
+  const r=document.createRange(); r.selectNodeContents(h);
+  const s=getSelection(); s.removeAllRanges(); s.addRange(r);
+  const commit=ok=>{
+    if(editing!==id)return;
+    editing=null;
+    h.removeAttribute("contenteditable");
+    if(ok) N(id).title=(h.textContent||"").trim()||"New task";
+    render();
+    if(sel.has(id)) openInspector(id);
+  };
+  h.addEventListener("keydown",e=>{
+    e.stopPropagation();
+    if(e.key==="Enter"){e.preventDefault();commit(true);}
+    if(e.key==="Escape"){e.preventDefault();commit(false);}
+  });
+  h.addEventListener("blur",()=>commit(true),{once:true});
+}
+
+/* ─────────────────────────  keyboard  ───────────────────────── */
+addEventListener("keydown",ev=>{
+  const tag=(ev.target.tagName||"").toLowerCase();
+  const typing=tag==="input"||tag==="textarea"||ev.target.isContentEditable;
+  if(ev.code==="Space"&&!typing){ spaceDown=true; stage.classList.add("spacing"); ev.preventDefault(); }
+  if((ev.metaKey||ev.ctrlKey)&&ev.key==="Enter"){ ev.preventDefault(); runAll(); return; }
+  if((ev.metaKey||ev.ctrlKey)&&ev.key.toLowerCase()==="d"&&!typing){ ev.preventDefault(); duplicate(); return; }
+  if(ev.key==="Escape"){
+    if($("#keys").classList.contains("on")){$("#keys").classList.remove("on");return;}
+    if(link){link=null;render();return;}
+    if(ghosts.length){clearGhosts();render();return;}
+    sel.clear(); closeInspector(); hidePeek(); render(); return;
+  }
+  if(typing)return;
+  const one=sel.size===1?[...sel][0]:null;
+  if(ev.key==="f"||ev.key==="F"){ fit(); }
+  if(ev.key==="m"||ev.key==="M"){ setMode(document.body.dataset.mode==="build"?"run":"build"); render(); }
+  if(ev.key==="?"){ $("#keys").classList.toggle("on"); }
+  if(ev.key==="r"&&one){ runFrom(one); }
+  if(ev.key==="R"&&one){ resetDownstream(one); render(); hint("Everything after <b>"+esc(one)+"</b> is back to <b>PENDING</b>."); }
+  if((ev.key==="p"||ev.key==="P")&&sel.size){ planFrom([...sel]); }
+  if((ev.key==="Delete"||ev.key==="Backspace")&&sel.size){ [...sel].forEach(removeNode); closeInspector(); render(); }
+});
+addEventListener("keyup",ev=>{ if(ev.code==="Space"){spaceDown=false;stage.classList.remove("spacing");} });
+
+/* ─────────────────────────  chrome wiring  ───────────────────────── */
+$("#mBuild").onclick=()=>{ stopRun(); setMode("build"); render(); };
+$("#mRun").onclick=()=>{ setMode("run"); if(!statusText.textContent.trim()) setStatus("",'Idle &middot; press <b>Run</b> to execute the workflow'); render(); };
+$("#btnRun").onclick=()=>{ running?stopRun():runAll(); };
+$("#btnReplay").onclick=()=>runAll();
+$("#zIn").onclick=()=>{const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.2)};
+$("#zOut").onclick=()=>{const r=stage.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1/1.2)};
+$("#zFit").onclick=fit;
+function zoomAt(mx,my,f){
+  userCam=true;
+  const k2=clamp(view.k*f,0.28,2);
+  view.x=mx-(mx-view.x)*(k2/view.k); view.y=my-(my-view.y)*(k2/view.k); view.k=k2; applyView();
+}
+$("#btnKeys").onclick=()=>$("#keys").classList.toggle("on");
+$("#keys").onclick=ev=>{ if(ev.target.id==="keys") $("#keys").classList.remove("on"); };
+$("#pbAccept").onclick=()=>acceptPlan(false);
+$("#pbModify").onclick=()=>acceptPlan(true);
+$("#pbDiscard").onclick=()=>{ clearGhosts(); render(); hint("Proposal discarded. The workflow is exactly as it was."); };
+$("#scen").addEventListener("click",ev=>{
+  const b=ev.target.closest("button[data-s]"); if(!b)return;
+  scenario(b.dataset.s);
+  $("#scen").querySelectorAll("button[data-s]").forEach(x=>x.setAttribute("aria-pressed",x===b));
+});
+
+/* ─────────────────────────  scenarios  ───────────────────────── */
+function scenario(name){
+  stopRun(); clearGhosts(); closeInspector(); sel.clear(); hidePeek();
+  restore(); userCam=false;
+  if(name==="run"){
+    setMode("run");
+    ["N01","N02","N03"].forEach(id=>{N(id).state="done"});
+    const r=N("N04");
+    r.state="repair"; r.verdict="REPAIR"; r.showVerdict=true;
+    const pass=edgeBetween("N04","N05"); if(pass) pass.taken=false;
+    const rid=spawnRepair("N04");
+    N(rid).state="running";
+    setStatus("repair",'<code>N04</code> returned <b>REPAIR</b> &mdash; branch <code>N04A</code> created from the reviewer&rsquo;s brief &middot; now running');
+    hint("Review <b>N04</b> rejected the mobile path. Its new brief became <b>N04A</b> \u2014 a visible sibling branch, not a hidden retry. The PASS branch is <b>held</b> with its history intact.");
+    render(); focusOn(["N04","N04A","N05"],0.92);
+  }
+  if(name==="build"){
+    setMode("build");
+    render(); select("N03");
+    hint("Drag to move &middot; drag a port to link &middot; drop a task on a wire to insert it &middot; <kbd>double-click</kbd> empty canvas for a new task.");
+    setTimeout(()=>focusOn(["N02","N03","N04"],0.95),0);
+  }
+  if(name==="plan"){
+    setMode("build");
+    render(); sel=new Set(["N08"]); render();
+    planFrom(["N08"]);
+  }
+}
+
+/* ─────────────────────────  boot  ───────────────────────── */
+restore();
+setMode("build");
+syncRunBtn();
+applyView();
+render();
+scenario("run");
+$("#scen").querySelector('button[data-s="run"]').setAttribute("aria-pressed","true");
+
+/* The opening frame has to survive a late layout: fonts, the preview pane sizing
+   itself, or the window being resized before anyone touches the canvas. */
+function reframe(){ if(!userCam&&lastFrame) focusOn(lastFrame.ids,lastFrame.k,lastFrame.pad); positionPlanbar(); }
+requestAnimationFrame(reframe);
+setTimeout(reframe,120);
+if(document.fonts&&document.fonts.ready) document.fonts.ready.then(reframe);
+if(window.ResizeObserver) new ResizeObserver(()=>{applyView();reframe()}).observe(stage);
+addEventListener("resize",()=>{applyView();reframe()});
+})();
+</script>
