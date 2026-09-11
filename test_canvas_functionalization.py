@@ -783,11 +783,19 @@ def test_the_bridge_cannot_serve_the_archived_simulation():
         assert "plannedVerdict" not in path.read_text(encoding="utf-8")
 
 
-def test_the_contract_records_the_branch_merge_prerequisite():
-    """§5: recorded on the wire, so a canvas cannot offer merge without seeing why not."""
+def test_the_contract_records_the_resolved_branch_merge_prerequisite():
+    """AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1: the prerequisite this
+    test used to pin (§5 of AAW CANVAS FUNCTIONALIZATION V0.1) is resolved —
+    context is path-scoped and MERGE is a first-class node type, so the wire
+    contract must say so instead of still declaring merge/rejoin deferred.
+    """
     contract = aaw_bridge.public_contract()
-    assert "path-scoped carry_forward is a prerequisite" in contract["merge_prerequisite"]
-    assert "repair branch merge/rejoin" in contract["deferred"]
+    assert "repair branch merge/rejoin" not in contract["deferred"]
+    assert "merge_prerequisite" not in contract
+    assert contract["merge_policies"] == list(rc.MERGE_POLICIES)
+    assert contract["arrival_statuses"] == list(rc.ARRIVAL_STATUSES)
+    assert {rc.BRANCH_ARRIVED, rc.MERGE_WAITING, rc.MERGE_READY, rc.MERGE_BLOCKED,
+            rc.MERGE_STARTED, rc.MERGE_COMPLETED}.issubset(contract["event_types"])
     assert rc.RUN_RESUMED in contract["event_types"]
     assert contract["work_states"] == [aaw_bridge.WORK_CLEAN, aaw_bridge.WORK_PARTIAL,
                                        aaw_bridge.WORK_UNKNOWN]

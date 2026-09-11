@@ -1296,12 +1296,13 @@ def public_contract() -> dict[str, Any]:
         "routing_modes": list(routing_contract.ROUTING_MODES),
         "terminals": list(routing_contract.TERMINALS),
         "lifecycles": [RUN_PENDING, RUN_ACTIVE, RUN_SETTLED],
-        "deferred": ["planner graph mutation", "repair branch merge/rejoin", "routing DSL",
+        # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Context is now
+        # path-scoped (`routing_contract.ancestry_of`) and MERGE is a first-
+        # class node type — "repair branch merge/rejoin" is no longer deferred.
+        "deferred": ["planner graph mutation", "N-of-M quorum merge", "routing DSL",
+                     "optional/non-closed merge inputs", "cyclic graph execution",
                      "advanced loops", "multi-user", "remote deployment", "telemetry UI",
                      "workflow delete"],
-        # Recorded per AAW CANVAS FUNCTIONALIZATION V0.1 §5, on the wire so a
-        # canvas cannot offer merge without seeing why it is absent.
-        "merge_prerequisite": (
-            "path-scoped carry_forward is a prerequisite for future branch merge/rejoin; "
-            "accumulate_carry_forward is currently run-global, not per-lineage"),
+        "merge_policies": list(routing_contract.MERGE_POLICIES),
+        "arrival_statuses": list(routing_contract.ARRIVAL_STATUSES),
     }

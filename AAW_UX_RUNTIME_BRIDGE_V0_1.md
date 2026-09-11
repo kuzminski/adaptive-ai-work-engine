@@ -406,12 +406,12 @@ Still open, and deliberately so:
 | # | Gap | Note |
 |---|---|---|
 | U5 | Planner ghost subgraph | no `PROPOSED` node/edge state exists. Deferred by the objective. |
-| U6 | Explicit merge/rejoin of a repair branch | `N03A` still ends at the human gate. The canvas must not imply rejoin exists. Deferred. |
+| U6 | ~~Explicit merge/rejoin of a repair branch~~ | **Resolved** by AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 — a declared `MERGE` node, source-attributed and event-projected. |
 | U7 | Sub-node progress | `NODE_STARTED` → `NODE_COMPLETED` is still coarse. Would come from joining the ledger's `EXECUTION_STARTED` on `execution_id`. A join, not new events. |
 | B1 | **Adapter substitution is process-wide while held.** `start_run(adapter=)` swaps a module attribute, so two concurrent adapter-backed runs in one process would interfere. Real (non-adapter) runs are unaffected. Fix: pass the adapter through a `ContextVar` like the cancellation token. |
 | B2 | **No BUILD topology editing in the live canvas.** It edits instructions, drags nodes and proves the refusal path; creating nodes, drawing edges and editing predicates are not wired. The bridge write path already supports them. |
 | B3 | **No undo/redo**, in either layout or workflow editing. The prototype's design note already flags this as the most-touched part of the product. |
-| B4 | **`accumulate_carry_forward` is global, not per-lineage.** It unions across every result in the run, not the path that reached the node. Correct while there is no join; wrong the moment fan-out branches carry conflicting constraints. |
+| B4 | ~~**`accumulate_carry_forward` is global, not per-lineage.**~~ **Resolved** by AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 — context is now filtered to `routing_contract.ancestry_of()`, the node's real executed DAG ancestry. |
 | B5 | **A killed run's worktree is not reconciled.** Cancellation leaves edits in place by design, but nothing surfaces "this branch holds partial work from a cancelled node" to the UX. |
 | B6 | **SSE polls the journal at 4 Hz.** Adequate for one local user; a file-change watch would be the next step, not a new transport. |
 | B7 | **No authentication, single user, loopback only.** By design for V0.1; a prerequisite for anything remote. |

@@ -47,6 +47,29 @@ SEVERITY_LADDER = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 TERMINALS = ("STOP", "HUMAN_REQUIRED")
 NO_ROUTE = "NO_ROUTE"
 
+# AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. A MERGE node explicitly
+# declares which edges must/may arrive; it never infers this from graph
+# geometry. ALL_REQUIRED waits for every declared slot, ANY_COMPLETED resolves
+# on the first one. Deliberately NOT here: N-of-M quorum, weighted voting,
+# an expression DSL — see the frozen contract doc for the full deferred list.
+MERGE_POLICIES = ("ALL_REQUIRED", "ANY_COMPLETED")
+
+# One more arrival at a slot (an ordinary node, or one expected_incoming edge
+# of a MERGE) is classified against the slot's existing history. ACCEPTED is
+# the (at most one, per slot) causal parent `ancestry_of` walks. DUPLICATE is
+# the same concrete source repeating (a replay). STALE_LINEAGE is a
+# *different* source re-using the same logical slot after it was already
+# resolved — the case a later repair descendant reusing a template's edge_id
+# must not silently overwrite.
+ARRIVAL_ACCEPTED = "ACCEPTED"
+ARRIVAL_DUPLICATE = "DUPLICATE"
+ARRIVAL_STALE_LINEAGE = "STALE_LINEAGE"
+# A slot that would otherwise be ACCEPTED (genuinely new), but the merge it
+# belongs to already settled under ANY_COMPLETED. Recorded honestly for
+# evidence; never a causal parent, never mutates the settled result.
+ARRIVAL_LATE = "LATE"
+ARRIVAL_STATUSES = (ARRIVAL_ACCEPTED, ARRIVAL_DUPLICATE, ARRIVAL_STALE_LINEAGE, ARRIVAL_LATE)
+
 # An INVALID execution never yields a verdict: it is fail-closed upstream of
 # the gate. FAIL maps to REPAIR because in AAW a failed-but-valid result is a
 # repairable one; a reviewer that means "stop" says so with an explicit verdict.
@@ -84,11 +107,28 @@ RUN_CANCELLED = "RUN_CANCELLED"
 # without reading another run's journal.
 RUN_RESUMED = "RUN_RESUMED"
 
+# AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. BRANCH_ARRIVED fires for
+# every arrival at a MERGE slot (accepted, duplicate, or stale-lineage alike —
+# the canvas must be able to show a rejected arrival, not just accepted ones).
+# MERGE_WAITING/MERGE_READY track the policy's readiness after each arrival;
+# MERGE_BLOCKED is the fail-closed terminal (fast-path or drain-time).
+# MERGE_STARTED/MERGE_COMPLETED bracket the merge's own (adapter-free)
+# execution, the same relationship HUMAN_DECISION_REQUIRED/RESOLVED already
+# has to the generic NODE_STARTED/NODE_COMPLETED pair.
+BRANCH_ARRIVED = "BRANCH_ARRIVED"
+MERGE_WAITING = "MERGE_WAITING"
+MERGE_READY = "MERGE_READY"
+MERGE_BLOCKED = "MERGE_BLOCKED"
+MERGE_STARTED = "MERGE_STARTED"
+MERGE_COMPLETED = "MERGE_COMPLETED"
+
 EVENT_TYPES = (
     NODE_STARTED, NODE_COMPLETED, NODE_FAILED,
     GATE_EVALUATED, EDGE_SELECTED, EDGE_HELD,
     BRANCH_CREATED, HUMAN_DECISION_REQUIRED, HUMAN_DECISION_RESOLVED,
     ROUTE_UNRESOLVED, RUN_CANCELLED, RUN_RESUMED,
+    BRANCH_ARRIVED, MERGE_WAITING, MERGE_READY, MERGE_BLOCKED,
+    MERGE_STARTED, MERGE_COMPLETED,
 )
 
 # Why an edge was not selected. Closed set: the canvas renders these directly.
@@ -528,6 +568,172 @@ def collect_artifacts(results: Sequence[Mapping[str, Any]]) -> list[str]:
     return seen
 
 
+# ───────────────────── path-scoped ancestry (DAG, not a chain) ─────────────────────
+#
+# AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1.
+#
+# Previous failure mode. `node_package` (workflow_runner.py) built
+# CARRY_FORWARD/UPSTREAM_ARTIFACTS/PREVIOUS_NODE_RESULTS/OPEN_ISSUES from
+# `state["node_results"]` — the *entire run's* result list, flattened in FIFO
+# completion order. Two sibling branches of a fan-out therefore contaminated
+# each other: whichever branch's node happened to execute later (a scheduling
+# accident, not a causal fact) saw the other branch's carry_forward/artifacts.
+# This module's own `aaw_bridge.py` documented the gap verbatim as the
+# prerequisite for merge/rejoin before this file existed.
+#
+# The fix is `arrivals`: a record, per node, of *how it was actually entered*
+# at runtime (which edge, from which concrete source node). An ordinary node
+# has at most one ACCEPTED arrival — one causal parent, so `ancestry_of`
+# degenerates to today's single-parent chain. A MERGE node can have one
+# ACCEPTED arrival per resolved slot — genuinely multiple causal parents, so
+# `ancestry_of` is a real DAG union at that point, not an opaque boundary.
+# Nothing downstream of a MERGE ever sees more than the MERGE's own declared,
+# order-preserving union — never an uncontrolled flatten of both branches'
+# entire histories.
+
+def classify_ordinary_arrival(existing: Sequence[Mapping[str, Any]]) -> str:
+    """First arrival at an ordinary (non-MERGE) node wins; every later one is a
+    duplicate. This is today's ALREADY_QUEUED/ALREADY_COMPLETED frontier dedup,
+    now additionally identity-tracked so `ancestry_of` has exactly one parent.
+    """
+    if any(row.get("status") == ARRIVAL_ACCEPTED for row in existing):
+        return ARRIVAL_DUPLICATE
+    return ARRIVAL_ACCEPTED
+
+
+def classify_merge_slot_arrival(existing_for_edge: Sequence[Mapping[str, Any]], *, source_node_id: str) -> str:
+    """One more arrival at one MERGE slot (`existing_for_edge` already filtered
+    to that `edge_id`). The same concrete source repeating is a DUPLICATE
+    (a replay). A *different* source filling an already-resolved slot — a
+    later repair descendant reusing the template's edge_id after an earlier
+    sibling already settled it — is STALE_LINEAGE, not a duplicate: it is
+    real, distinct evidence that must never silently overwrite the slot.
+    """
+    accepted = [row for row in existing_for_edge if row.get("status") == ARRIVAL_ACCEPTED]
+    if not accepted:
+        return ARRIVAL_ACCEPTED
+    if any(row.get("source_node_id") == source_node_id for row in accepted):
+        return ARRIVAL_DUPLICATE
+    return ARRIVAL_STALE_LINEAGE
+
+
+def ancestry_of(node_id: str, arrivals: Mapping[str, Sequence[Mapping[str, Any]]],
+                *, _cache: dict[str, set[str]] | None = None) -> set[str]:
+    """The causal DAG ancestry of one node: itself, plus every ACCEPTED
+    parent's ancestry, transitively. Pure and memoized.
+
+    `arrivals` maps node_id -> the arrival records recorded at that node
+    (`classify_ordinary_arrival`/`classify_merge_slot_arrival`). A node with no
+    arrival record (the run's start node, or a resume's seed — see
+    `workflow_runner._seed_from_resume`) is its own ancestry. Only ACCEPTED
+    records are parents; DUPLICATE/STALE_LINEAGE arrivals contributed nothing
+    causally and are excluded on purpose.
+    """
+    cache = {} if _cache is None else _cache
+    node_id = str(node_id)
+    if node_id in cache:
+        return cache[node_id]
+    cache[node_id] = {node_id}  # defensive cycle guard; contract graphs are acyclic by schema
+    result = {node_id}
+    for record in arrivals.get(node_id, []):
+        if record.get("status") != ARRIVAL_ACCEPTED:
+            continue
+        parent = str(record.get("source_node_id") or "")
+        if parent and parent != node_id:
+            result |= ancestry_of(parent, arrivals, _cache=cache)
+    cache[node_id] = result
+    return result
+
+
+def path_scoped_results(results: Sequence[Mapping[str, Any]], ancestry: Iterable[str]) -> list[dict[str, Any]]:
+    """`results` (run-global, in execution order) filtered to one node's causal
+    ancestry. Order is preserved, which is what keeps `accumulate_carry_forward`
+    deterministic and declaration-order-independent of arrival timing.
+    """
+    allowed = {str(item) for item in ancestry}
+    return [dict(row) for row in results if str(row.get("node_id")) in allowed]
+
+
+# ───────────────────────────── merge / rejoin ─────────────────────────────
+
+def merge_readiness(policy: str, expected_incoming: Sequence[str],
+                    accepted_by_edge: Mapping[str, Any]) -> str:
+    """WAITING or READY for one merge, given which expected slots are filled.
+
+    Pure function of the policy and the accepted set — never of arrival order
+    or timing, which is what makes ALL_REQUIRED's result order-independent
+    (AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 §6/§12).
+    """
+    _require(policy in MERGE_POLICIES, f"unsupported merge policy {policy!r}")
+    if policy == "ALL_REQUIRED":
+        return "READY" if set(expected_incoming) <= set(accepted_by_edge) else "WAITING"
+    return "READY" if accepted_by_edge else "WAITING"  # ANY_COMPLETED
+
+
+def merge_selected_edges(policy: str, expected_incoming: Sequence[str],
+                         accepted_by_edge: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """Which accepted slots actually feed the merge result, in declared order.
+
+    ALL_REQUIRED includes every accepted slot. ANY_COMPLETED includes exactly
+    the winner — the accepted arrival with the lowest run-wide `sequence`,
+    i.e. whichever was accepted first; deterministic because this runner has
+    one FIFO frontier and no real concurrency (AAW PATH-SCOPED BRANCH CONTEXT
+    + MERGE/REJOIN V0.1 §6).
+    """
+    _require(policy in MERGE_POLICIES, f"unsupported merge policy {policy!r}")
+    if policy == "ALL_REQUIRED":
+        return [edge_id for edge_id in expected_incoming if edge_id in accepted_by_edge]
+    if not accepted_by_edge:
+        return []
+    winner = min(accepted_by_edge.values(), key=lambda row: row.get("sequence", 0))
+    return [str(winner["edge_id"])]
+
+
+# Narrow, timestamp-free projection of one node result: exactly what a merge
+# resolution's identity depends on. Deliberately excludes execution_id,
+# provider_session_id, every timestamp/duration, and telemetry — none of that
+# is semantic, and including it would make the resolution hash depend on
+# wall-clock/scheduling accidents instead of content.
+MERGE_IDENTITY_FIELDS = ("carry_forward", "artifacts", "changed_files", "findings")
+
+
+def merge_input_identity(result: Mapping[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {"outcome": result.get("outcome"), "verdict": derive_verdict(result)}
+    for key in MERGE_IDENTITY_FIELDS:
+        projected[key] = list(result.get(key) or [])
+    return projected
+
+
+def merge_resolution_hash(*, policy: str, expected_incoming: Sequence[str],
+                          slots: Mapping[str, Mapping[str, Any]],
+                          results_by_node: Mapping[str, Mapping[str, Any]]) -> str:
+    """Deterministic identity of one merge resolution.
+
+    Built only from semantic inputs: the policy, the *declared* slot order
+    (never arrival order), and — for each resolved slot, iterated in that
+    declared order — the concrete source's lineage identity plus a
+    timestamp-free content projection of its result. Two runs whose branches
+    complete in reversed order but produce the same semantic results resolve
+    to the same hash; this is the mechanism behind acceptance criterion #6
+    (AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 §12).
+    """
+    rows = []
+    for edge_id in expected_incoming:
+        slot = slots.get(edge_id)
+        if slot is None:
+            continue
+        source_node_id = str(slot["source_node_id"])
+        rows.append({
+            "edge_id": edge_id,
+            "source_node_id": source_node_id,
+            "lineage_template_id": slot.get("lineage_template_id"),
+            "lineage_branch_index": slot.get("lineage_branch_index"),
+            "content": merge_input_identity(results_by_node.get(source_node_id, {})),
+        })
+    return canonical_hash({"contract": CONTRACT_VERSION, "policy": policy,
+                           "expected_incoming": list(expected_incoming), "slots": rows})
+
+
 # ───────────────────────────── routing journal ─────────────────────────────
 
 class RoutingJournal:
@@ -627,6 +833,11 @@ SEMANTIC_NODE_FIELDS = (
     "id", "type", "depends_on", "run_if", "role", "capability", "model", "effort",
     "instructions", "acceptance", "on_pass", "on_fail", "routing", "edges",
     "command", "timeout_seconds", "preprocess",
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 §12: merge
+    # configuration is semantic (it changes what the graph does) and must
+    # affect `semantic_hash`; runtime arrival order is never part of a
+    # workflow *definition* and so cannot reach this hash by construction.
+    "merge_policy", "expected_incoming",
 )
 SEMANTIC_EDGE_FIELDS = ("edge_id", "to", "when", "kind", "label", "legacy")
 
@@ -711,6 +922,11 @@ def workflow_projection(workflow: Mapping[str, Any]) -> dict[str, Any]:
             # fields. A terminal gate that declares neither is not "legacy".
             "legacy_transitions": bool(not declares_edges(node)
                                        and (node.get("on_pass") or node.get("on_fail"))),
+            # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Declared so a
+            # canvas can draw a MERGE distinctly *before* any run exists.
+            "is_merge": str(node.get("type")) == "MERGE",
+            "merge_policy": node.get("merge_policy"),
+            "expected_incoming": list(node.get("expected_incoming") or []) if node.get("type") == "MERGE" else None,
         })
         for position, edge in enumerate(edges):
             projected_edges.append({
@@ -748,6 +964,22 @@ def graph_projection(state: Mapping[str, Any], journal: RoutingJournal) -> dict[
     """
     events = journal.read()
     routing = dict(state.get("routing") or {})
+    arrivals = dict(routing.get("arrivals") or {})
+    projected_merges = []
+    for node_id, entry in dict(routing.get("merges") or {}).items():
+        expected = list(entry.get("expected") or [])
+        records = arrivals.get(node_id, [])
+        accepted_by_edge = {str(r["edge_id"]): r for r in records if r.get("status") == ARRIVAL_ACCEPTED}
+        projected_merges.append({
+            "node_id": node_id, "policy": entry.get("policy"),
+            "expected_incoming": expected,
+            "arrived": [dict(row) for row in records],
+            "arrived_count": len(accepted_by_edge),
+            "required_count": len(expected) if entry.get("policy") == "ALL_REQUIRED" else 1,
+            "status": entry.get("status"),
+            "resolved_edge_id": entry.get("resolved_edge_id"),
+            "merge_resolution_hash": entry.get("merge_resolution_hash"),
+        })
     return {
         "contract_version": CONTRACT_VERSION,
         "run_id": state.get("AAW_RUN_ID"),
@@ -768,6 +1000,12 @@ def graph_projection(state: Mapping[str, Any], journal: RoutingJournal) -> dict[
         # so a repair branch is drawable the moment it is minted rather than
         # only once it completes.
         "minted_nodes": list((routing.get("minted_nodes") or {}).values()),
+        # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Every declared
+        # MERGE is present from the run's first frame — including "0/N
+        # arrived" — because the runner initializes this eagerly rather than
+        # on first arrival; a canvas can render merge progress without
+        # parsing the journal.
+        "merges": projected_merges,
         "routing": routing,
         "events": events,
         "last_sequence": max((int(row.get("sequence") or 0) for row in events), default=0),

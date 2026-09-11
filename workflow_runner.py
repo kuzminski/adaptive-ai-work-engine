@@ -366,7 +366,17 @@ def harness_executable(harness: str) -> str | None:
 
 
 def node_package(workflow: Mapping[str, Any], state: Mapping[str, Any], node: Mapping[str, Any], worktree: Path) -> dict[str, Any]:
-    results = list(state.get("node_results", []))
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Previously this was
+    # `list(state.get("node_results", []))` — the *entire run's* results,
+    # flattened in FIFO completion order. A node on branch A could therefore
+    # see branch B's carry_forward/artifacts/findings merely because B
+    # happened to execute first. `ancestry_of` walks the recorded arrivals
+    # (how this node was actually entered, and transitively its ancestors) to
+    # get the real causal set; `path_scoped_results` filters to exactly that.
+    # In a linear workflow with no fan-out this is every prior result, same as
+    # before — the fix only changes behavior once branches genuinely diverge.
+    ancestry = routing_contract.ancestry_of(str(node["id"]), state.get("routing", {}).get("arrivals", {}))
+    results = routing_contract.path_scoped_results(state.get("node_results", []), ancestry)
     package: dict[str, Any] = {
         "WORKFLOW_ID": workflow["workflow_id"], "AAW_RUN_ID": state["AAW_RUN_ID"],
         "GOAL": state["goal"], "WORKTREE_PATH": str(worktree),
@@ -617,6 +627,83 @@ def execute_machine_gate(state: Mapping[str, Any], node: Mapping[str, Any], work
     }
 
 
+def execute_merge(state: dict[str, Any], node: Mapping[str, Any], journal: RoutingJournal) -> dict[str, Any]:
+    """Assemble one source-attributed merge result. No adapter call, no
+    execution-ledger descriptor — structurally the same non-invocation shape
+    as HUMAN_GATE/FINAL_GATE. By the time this runs, `_record_merge_arrival`
+    has already pushed this node onto the frontier exactly once, precisely
+    because its policy was satisfied; this function only assembles the result.
+    """
+    node_id = str(node["id"])
+    entry = state["routing"]["merges"][node_id]
+    arrivals = state["routing"]["arrivals"].get(node_id, [])
+    accepted_by_edge = {str(row["edge_id"]): row for row in arrivals if row.get("status") == routing_contract.ARRIVAL_ACCEPTED}
+    expected = list(entry["expected"])
+    selected_edges = routing_contract.merge_selected_edges(entry["policy"], expected, accepted_by_edge)
+    journal.append(routing_contract.MERGE_STARTED, node_id=node_id, payload={
+        "policy": entry["policy"], "expected_incoming": expected, "selected_edges": selected_edges,
+    })
+    results_by_node = {str(row.get("node_id")): row for row in state["node_results"]}
+    incoming: dict[str, Any] = {}
+    carry_forward: list[str] = []
+    artifacts: list[str] = []
+    for edge_id in expected:
+        if edge_id not in selected_edges:
+            continue
+        record = accepted_by_edge[edge_id]
+        source_node_id = str(record["source_node_id"])
+        source_result = results_by_node.get(source_node_id, {})
+        # Each slot's own carry_forward/artifacts are scoped to *that
+        # branch's* real ancestry — never a flatten of everything ever run —
+        # so the merge's downstream union stays source-attributed at its root.
+        ancestry = routing_contract.ancestry_of(source_node_id, state["routing"]["arrivals"])
+        scoped = routing_contract.path_scoped_results(state["node_results"], ancestry)
+        source_carry = routing_contract.accumulate_carry_forward(scoped)
+        source_artifacts = routing_contract.collect_artifacts(scoped)
+        # Lineage lives on the arrival record (captured at the moment the edge
+        # fired), not on the result — a node result carries no lineage field
+        # of its own. This is what lets the merge name the concrete minted
+        # descendant's template/branch/origin without special-casing REPAIR.
+        lineage = None
+        if record.get("lineage_template_id"):
+            lineage = {"template_id": record.get("lineage_template_id"),
+                      "branch_index": record.get("lineage_branch_index"),
+                      "origin_node_id": record.get("lineage_origin_node_id")}
+        incoming[edge_id] = {
+            "source_node": source_node_id, "source_execution_id": source_result.get("execution_id"),
+            "lineage": lineage, "carry_forward": source_carry, "artifacts": source_artifacts,
+            "result": source_result,
+        }
+        for item in source_carry:
+            if item not in carry_forward:
+                carry_forward.append(item)
+        for item in source_artifacts:
+            if item not in artifacts:
+                artifacts.append(item)
+    resolution_hash = routing_contract.merge_resolution_hash(
+        policy=entry["policy"], expected_incoming=expected,
+        slots=accepted_by_edge, results_by_node=results_by_node)
+    entry["status"] = "MERGED"
+    entry["merge_resolution_hash"] = resolution_hash
+    if entry["policy"] == "ANY_COMPLETED" and selected_edges:
+        entry["resolved_edge_id"] = selected_edges[0]
+    result = {
+        "node_id": node_id, "node_type": "MERGE", "outcome": "PASS", "verdict": "PASS",
+        "summary": f"merge {entry['policy']} resolved: {', '.join(selected_edges)}",
+        "changed_files": [], "tests": [], "findings": [], "remaining_uncertainty": [],
+        "recommended_next_action": "follow the merge's declared edges",
+        "incoming": incoming, "carry_forward": carry_forward, "artifacts": artifacts,
+        "merge_policy": entry["policy"], "merge_resolution_hash": resolution_hash,
+        "selected_edges": selected_edges, "expected_incoming": expected,
+    }
+    journal.append(routing_contract.MERGE_COMPLETED, node_id=node_id, payload={
+        "policy": entry["policy"], "selected_edges": selected_edges,
+        "merge_resolution_hash": resolution_hash,
+        "incoming_sources": {edge_id: row["source_node"] for edge_id, row in incoming.items()},
+    })
+    return result
+
+
 def load_implementer_profiles() -> dict[str, dict[str, Any]]:
     try:
         data = json.loads(IMPLEMENTER_PROFILES.read_text(encoding="utf-8"))
@@ -829,6 +916,91 @@ def dry_run(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
     }
 
 
+def _new_arrival(state: dict[str, Any], *, edge_id: str, source_node_id: str,
+                 source_execution_id: str | None, status: str,
+                 lineage_template_id: str | None = None, lineage_branch_index: int | None = None,
+                 lineage_origin_node_id: str | None = None) -> dict[str, Any]:
+    """One concrete arrival record — the unit `ancestry_of` walks and the unit
+    duplicate/stale-lineage/late evidence is attached to. `arrival_id` is the
+    concrete-event identity (AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN
+    V0.1 §3): distinct from `edge_id` (the logical slot) and `source_node_id`
+    (the concrete producer), so a replay, a different lineage reusing the same
+    slot, and a genuinely new arrival are never conflated.
+    """
+    state["routing"]["arrival_sequence"] = int(state["routing"].get("arrival_sequence", 0)) + 1
+    return {
+        "arrival_id": "ARR_" + secrets.token_hex(8), "edge_id": edge_id,
+        "source_node_id": source_node_id, "source_execution_id": source_execution_id,
+        "lineage_template_id": lineage_template_id, "lineage_branch_index": lineage_branch_index,
+        "lineage_origin_node_id": lineage_origin_node_id,
+        "sequence": state["routing"]["arrival_sequence"], "arrived_at": now(),
+        "status": status, "late": False,
+    }
+
+
+def _fail_closed_merge(state: dict[str, Any], journal: RoutingJournal, merge_id: str, *, reason: str) -> None:
+    """A declared MERGE slot that can provably never fill (again). Fail-closed,
+    the same philosophy NO_ROUTE already uses: never a silent stop.
+    """
+    entry = state["routing"]["merges"][merge_id]
+    entry["status"] = "BLOCKED"
+    arrivals = state["routing"]["arrivals"].get(merge_id, [])
+    accepted = {str(row["edge_id"]) for row in arrivals if row.get("status") == routing_contract.ARRIVAL_ACCEPTED}
+    missing = sorted(set(entry["expected"]) - accepted)
+    journal.append(routing_contract.MERGE_BLOCKED, node_id=merge_id, payload={
+        "policy": entry["policy"], "reason": reason, "missing": missing, "arrived_count": len(accepted),
+    })
+    raise WorkflowStop("BLOCKED", f"MERGE {merge_id} ({entry['policy']}) can never become ready: {reason}; missing {missing}")
+
+
+def _record_merge_arrival(state: dict[str, Any], journal: RoutingJournal, merge_id: str, *,
+                          edge_id: str, source_node: Mapping[str, Any], result: Mapping[str, Any]) -> None:
+    """One edge selection targeting a MERGE node: classify it, log it, and —
+    unless it is `late` — push the merge onto the frontier the moment its
+    policy is satisfied. Never a second scheduler: this only decides *when*
+    the existing frontier gets one more entry.
+    """
+    entry = state["routing"]["merges"][merge_id]
+    arrivals = state["routing"]["arrivals"].setdefault(merge_id, [])
+    existing_for_edge = [row for row in arrivals if row.get("edge_id") == edge_id]
+    source_node_id = str(source_node["id"])
+    status = routing_contract.classify_merge_slot_arrival(existing_for_edge, source_node_id=source_node_id)
+    late = entry["status"] in ("READY", "MERGED")
+    if late and status == routing_contract.ARRIVAL_ACCEPTED:
+        # A genuinely new slot, but the merge already settled (ANY_COMPLETED
+        # resolved on an earlier winner). Recorded honestly; must never become
+        # a causal parent of the merge's ancestry or mutate its result.
+        status = routing_contract.ARRIVAL_LATE
+    lineage = source_node.get("lineage") or {}
+    record = _new_arrival(state, edge_id=edge_id, source_node_id=source_node_id,
+                          source_execution_id=result.get("execution_id"),
+                          lineage_template_id=lineage.get("template_id"),
+                          lineage_branch_index=lineage.get("branch_index"),
+                          lineage_origin_node_id=lineage.get("origin_node_id"), status=status)
+    record["late"] = late
+    arrivals.append(record)
+    journal.append(routing_contract.BRANCH_ARRIVED, node_id=merge_id, payload={
+        "edge_id": edge_id, "source_node_id": source_node_id, "arrival_id": record["arrival_id"],
+        "status": status, "late": late, "policy": entry["policy"],
+    })
+    if late:
+        return
+    accepted_by_edge = {str(row["edge_id"]): row for row in arrivals if row.get("status") == routing_contract.ARRIVAL_ACCEPTED}
+    readiness = routing_contract.merge_readiness(entry["policy"], entry["expected"], accepted_by_edge)
+    required = len(entry["expected"]) if entry["policy"] == "ALL_REQUIRED" else 1
+    if readiness == "READY" and entry["status"] == "WAITING":
+        entry["status"] = "READY"
+        journal.append(routing_contract.MERGE_READY, node_id=merge_id, payload={
+            "policy": entry["policy"], "arrived_count": len(accepted_by_edge), "required_count": required,
+        })
+        state["frontier"].append(merge_id)
+    elif readiness == "WAITING":
+        journal.append(routing_contract.MERGE_WAITING, node_id=merge_id, payload={
+            "policy": entry["policy"], "arrived_count": len(accepted_by_edge), "required_count": required,
+            "missing": sorted(set(entry["expected"]) - set(accepted_by_edge)),
+        })
+
+
 def apply_gate_decision(state: dict[str, Any], by_id: dict[str, Any], frozen: dict[str, Any],
                         journal: RoutingJournal, node: Mapping[str, Any], result: Mapping[str, Any],
                         decision: Mapping[str, Any]) -> None:
@@ -840,6 +1012,25 @@ def apply_gate_decision(state: dict[str, Any], by_id: dict[str, Any], frozen: di
     """
     limits = state["limits"]
     completed = {row["node_id"] for row in state["completed_nodes"]}
+
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 fast-closed fail path.
+    # A single-shot node (never REPAIR — a minted branch might still recur
+    # from its template on a later repair cycle) that just held an edge which
+    # some MERGE requires can never select that edge again: that slot is
+    # provably dead. Detected here instead of waiting for the frontier to
+    # drain, so the run fails closed immediately rather than limping to a
+    # false COMPLETED.
+    if node.get("type") != "REPAIR":
+        held_edge_ids = {row["edge_id"] for row in decision.get("held", [])}
+        if held_edge_ids:
+            for merge_id, entry in list(state["routing"].get("merges", {}).items()):
+                if entry["status"] in ("MERGED", "BLOCKED"):
+                    continue
+                stuck = held_edge_ids & set(entry["expected"])
+                if stuck:
+                    _fail_closed_merge(state, journal, merge_id,
+                                       reason=f"{node['id']} held {sorted(stuck)} without selecting it and cannot re-execute")
+
     for row in decision["selected"]:
         edge_id, target, kind = row["edge_id"], row["to"], row["kind"]
         if target == "STOP":
@@ -880,14 +1071,32 @@ def apply_gate_decision(state: dict[str, Any], by_id: dict[str, Any], frozen: di
                 "carry_forward": branch["lineage"].get("carry_forward"),
                 "node": projection, "binding": frozen.get(branch_id),
             })
+            # The branch id is freshly minted this instant — it cannot already
+            # have an arrival, so this is unconditionally its one causal
+            # parent (AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 §1).
+            state["routing"]["arrivals"].setdefault(branch_id, []).append(_new_arrival(
+                state, edge_id=edge_id, source_node_id=str(node["id"]),
+                source_execution_id=result.get("execution_id"),
+                lineage_template_id=branch["lineage"].get("template_id"),
+                lineage_branch_index=branch["lineage"].get("branch_index"),
+                status=routing_contract.ARRIVAL_ACCEPTED))
             state["frontier"].append(branch_id)
             continue
         if target not in by_id:
             raise WorkflowStop("INVALID", f"edge {edge_id} of {node['id']} targets unknown node {target!r}")
+        if str(by_id[target].get("type")) == "MERGE":
+            _record_merge_arrival(state, journal, target, edge_id=edge_id, source_node=node, result=result)
+            continue
+        existing = state["routing"]["arrivals"].get(target, [])
+        status = routing_contract.classify_ordinary_arrival(existing)
+        state["routing"]["arrivals"].setdefault(target, []).append(_new_arrival(
+            state, edge_id=edge_id, source_node_id=str(node["id"]),
+            source_execution_id=result.get("execution_id"), status=status))
         if target in completed or target in state["frontier"]:
-            # V0.1 enters every node at most once. This is frontier dedup, not
-            # a join: nothing is merged, the second edge simply does not
-            # enqueue a duplicate. Rejoin semantics stay out of scope.
+            # V0.1 enters every ordinary (non-MERGE) node at most once. This is
+            # frontier dedup, not a join: nothing is merged, the second edge
+            # simply does not enqueue a duplicate. A node that must wait for
+            # multiple branches declares MERGE instead.
             state["routing"]["dedup"].append({
                 "edge_id": edge_id, "target": target, "from": str(node["id"]),
                 "reason": "ALREADY_COMPLETED" if target in completed else "ALREADY_QUEUED",
@@ -1050,6 +1259,21 @@ def _seed_from_resume(state: dict[str, Any], by_id: dict[str, Any],
     state["repair_cycle"] = int(plan["repair_cycle"])
     state["routing"]["minted_nodes"] = dict(plan.get("inherited_minted") or {})
     state["routing"]["lineage"] = dict(plan.get("inherited_lineage") or {})
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. A resumed run's
+    # frontier starts at exactly one node, but that node's real ancestry is
+    # the whole inherited set — it did not run in *this* run, so it has no
+    # recorded arrivals of its own. Seeding one synthetic ACCEPTED arrival per
+    # inherited node, attached to `from_node`, reuses the same multi-parent
+    # `ancestry_of` mechanism a MERGE uses: `from_node` is, in effect, an
+    # implicit merge of everything the source run already settled. Without
+    # this, path-scoped context would see nothing upstream of a resume.
+    state["routing"]["arrivals"] = {
+        str(plan["from_node"]): [
+            _new_arrival(state, edge_id="RESUME_SEED", source_node_id=str(inherited_id),
+                        source_execution_id=None, status=routing_contract.ARRIVAL_ACCEPTED)
+            for inherited_id in plan["inherited_nodes"]
+        ]
+    }
     state["resumed_from"] = {
         "source_run_id": plan["source_run_id"], "source_status": plan["source_status"],
         "from_node": plan["from_node"], "reset_nodes": list(plan["reset_nodes"]),
@@ -1127,6 +1351,20 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
         # decides where the frontier starts.
         start_node = str(resume["from_node"])
     journal = RoutingJournal.for_run(identifier, STATS_ROOT, workflow_id=str(workflow["workflow_id"]))
+    # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 §2. Every declared
+    # MERGE gets runtime state from the run's first frame — "0/N arrived" is
+    # observable immediately — rather than being created lazily on first
+    # arrival, which would let a MERGE nothing ever reaches vanish from the
+    # drain-time scan and let the run reach COMPLETED having silently skipped
+    # it. MERGE nodes are always statically declared, never minted, so this
+    # scan is total.
+    merge_states = {
+        str(n["id"]): {
+            "policy": str(n["merge_policy"]), "expected": list(n["expected_incoming"]),
+            "status": "WAITING", "resolved_edge_id": None, "merge_resolution_hash": None,
+        }
+        for n in nodes if str(n.get("type")) == "MERGE"
+    }
     state: dict[str, Any] = {
         "workflow_id": workflow["workflow_id"], "AAW_RUN_ID": identifier, "goal": goal,
         # Recorded so a later `Run from here` can prove this run executed the
@@ -1152,6 +1390,8 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
             "journal_schema_version": routing_contract.JOURNAL_SCHEMA_VERSION,
             "journal_path": str(journal.path),
             "decisions": [], "lineage": {}, "minted_nodes": {}, "dedup": [], "terminals": [],
+            # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1.
+            "arrivals": {}, "arrival_sequence": 0, "merges": merge_states,
         },
     }
     if resume is not None:
@@ -1234,6 +1474,11 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
                 result = execute_machine_gate(state, node, canonical(worktree), str(execution["execution_id"]), recorder)
                 _record_lifecycle_status(state, state_path, recorder)
                 update_execution(execution_path, str(execution["execution_id"]), status="COMPLETED" if result["outcome"] in {"PASS", "FAIL"} else "BLOCKED")
+            elif node["type"] == "MERGE":
+                # A deterministic runtime primitive, not an invocation: no
+                # execution descriptor, no adapter — the same non-invocation
+                # shape as HUMAN_GATE/FINAL_GATE below.
+                result = execute_merge(state, node, journal)
             elif node["type"] in {"HUMAN_GATE", "FINAL_GATE"}:
                 review_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "REVIEW" and item.get("execution_id")]
                 check_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "MACHINE_GATE" and item.get("execution_id")]
@@ -1315,6 +1560,17 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
             apply_gate_decision(state, by_id, frozen, journal, node, result, decision)
             save_state(state_path, state)
         if state["status"] == "RUNNING":
+            # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 drain-time
+            # fail path. Catches what the fast path (in `apply_gate_decision`)
+            # cannot: a MERGE whose expected slot is owned by a REPAIR
+            # template (a future cycle might still fill it) or that received
+            # zero arrivals because its upstream was never reached this run.
+            # A declared MERGE not yet MERGED must never let the run reach
+            # COMPLETED having silently skipped it.
+            for merge_id, entry in state["routing"].get("merges", {}).items():
+                if entry["status"] != "MERGED":
+                    _fail_closed_merge(state, journal, merge_id,
+                                       reason="frontier drained with the run otherwise settled")
             state["status"] = "COMPLETED"
             state["final_outcome"] = "COMPLETED"
             save_state(state_path, state)
