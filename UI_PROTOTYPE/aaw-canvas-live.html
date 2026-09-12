@@ -1799,7 +1799,11 @@ $("#btnReconnect").addEventListener("click", () => {
   openStream(S.lastSequence);
   syncRunButton();
 });
-Array.from(document.querySelectorAll("#palette button")).forEach((button) => {
+// Scoped to `[data-t]`: `#btnUndo`/`#btnRedo`/`#btnDiscardDraft` also live inside
+// `#palette` and a bare `#palette button` selector used to catch them too,
+// minting a spurious untyped node (and a corrupting second `touch("create
+// node")`) on every history click.
+Array.from(document.querySelectorAll("#palette button[data-t]")).forEach((button) => {
   button.addEventListener("click", () => {
     const center = centerOfView();
     const spot = freeSpot(center.x, center.y);
