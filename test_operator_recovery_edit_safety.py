@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -197,6 +198,115 @@ def test_canvas_exposes_history_recovery_and_contextual_repairs():
     assert "/api/run/worktree/keep" in canvas
     assert "/api/run/worktree/adopt" in canvas
     assert "/api/run/worktree/discard" in canvas
+
+
+def test_undo_button_click_does_not_also_mint_a_node(tmp_path):
+    """Regression for the create -> Undo -> Redo defect: `#btnUndo`, `#btnRedo`
+    and `#btnDiscardDraft` live inside `<div id="palette">` alongside the
+    node-type buttons (`data-t="IMPLEMENT"` etc). The create-node wiring used
+    to bind to the bare `#palette button` selector, which also matched those
+    three history buttons. Since they carry no `data-t`, every Undo/Redo/
+    Discard click additionally ran `addNode(undefined, ...)`: a second,
+    untyped node was minted and a second `touch("create node")` recorded on
+    top of the real undo, corrupting the just-restored node and clearing the
+    redo stack. The fix scopes the selector to `#palette button[data-t]`."""
+    canvas = Path(__file__).with_name("UI_PROTOTYPE").joinpath("aaw-canvas-live.html").read_text(encoding="utf-8")
+    assert "#palette button[data-t]" in canvas
+    assert re.search(r'querySelectorAll\(\s*"#palette button"\s*\)', canvas) is None
+    for button_id in ("btnUndo", "btnRedo", "btnDiscardDraft"):
+        tag = re.search(rf'<button[^>]*\bid="{button_id}"[^>]*>', canvas)
+        assert tag is not None, f"expected a <button id=\"{button_id}\"> in the palette"
+        assert "data-t" not in tag.group(0), (
+            f"#{button_id} must stay outside `[data-t]` or the palette's create-node "
+            "wiring will mint a node whenever it is clicked"
+        )
+
+
+def test_bounded_draft_history_covers_create_undo_redo_move_edit_and_save(tmp_path):
+    """Full-sequence regression matching the reported defect exactly: create a
+    node from the palette, Undo, Redo, then repeat for move/edit/create-edge,
+    and confirm Save (`reset`) establishes a clean baseline with nothing left
+    to undo. Runs the same real `draft_history.js` the canvas loads, driven
+    through the app's own `touch()`-shaped call pattern (record on every
+    mutation, no record on validation-only activity) rather than reaching
+    into its internals."""
+    history_js = Path(__file__).with_name("UI_PROTOTYPE") / "draft_history.js"
+    program = r"""
+const { DraftHistory } = require(process.argv[1]);
+const assert = require('node:assert/strict');
+const h = new DraftHistory(100);
+
+let state = { draft: { start_node: 'N01', nodes: [
+  { id: 'N01', type: 'IMPLEMENT', edges: [] },
+] }, layout: { nodes: { N01: { x: 0, y: 0 } } } };
+function touch(label) { h.record(structuredClone(state), label); }
+h.reset(state);
+
+// create node -> Undo -> Redo
+state = structuredClone(state);
+state.draft.nodes.push({ id: 'N02', type: 'IMPLEMENT', edges: [] });
+touch('create node');
+assert.equal(h.undoStack.length, 1);
+let undone = h.undo();
+assert.deepEqual(undone.state.draft.nodes.map(n => n.id), ['N01']);
+assert.equal(h.canRedo(), true);
+let redone = h.redo();
+assert.deepEqual(redone.state.draft.nodes.map(n => n.id), ['N01', 'N02']);
+assert.deepEqual(redone.state.draft.nodes[1], { id: 'N02', type: 'IMPLEMENT', edges: [] });
+assert.equal(h.canRedo(), false);
+state = redone.state;
+
+// A validation-only touch that changes nothing must not record or clear redo.
+h.undo();
+assert.equal(h.canRedo(), true);
+const before = structuredClone(h.current);
+h.record(structuredClone(before), 'validate (no-op)');
+assert.equal(h.canRedo(), true, 'a no-op record must not clear the redo stack');
+h.redo();
+state = structuredClone(h.current);
+
+// move node -> Undo -> Redo
+state.layout.nodes.N02 = { x: 40, y: 10 };
+touch('move node');
+undone = h.undo();
+assert.equal(undone.state.layout.nodes.N02, undefined);
+redone = h.redo();
+assert.deepEqual(redone.state.layout.nodes.N02, { x: 40, y: 10 });
+state = redone.state;
+
+// edit node -> Undo -> Redo
+state = structuredClone(state);
+state.draft.nodes[1].instructions = 'edited';
+touch('edit node property');
+undone = h.undo();
+assert.equal(undone.state.draft.nodes[1].instructions, undefined);
+redone = h.redo();
+assert.equal(redone.state.draft.nodes[1].instructions, 'edited');
+state = redone.state;
+
+// create edge -> Undo -> Redo
+state = structuredClone(state);
+state.draft.nodes[0].edges.push({ edge_id: 'E1', to: 'N02' });
+touch('create edge');
+undone = h.undo();
+assert.deepEqual(undone.state.draft.nodes[0].edges, []);
+redone = h.redo();
+assert.deepEqual(redone.state.draft.nodes[0].edges, [{ edge_id: 'E1', to: 'N02' }]);
+state = redone.state;
+
+// Save establishes the expected clean history baseline.
+h.reset(state);
+assert.equal(h.canUndo(), false);
+assert.equal(h.canRedo(), false);
+
+console.log('CREATE_UNDO_REDO_MOVE_EDIT_EDGE_SAVE_OK');
+"""
+    completed = subprocess.run(
+        ["node", "-e", program, str(history_js)], shell=False,
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "CREATE_UNDO_REDO_MOVE_EDIT_EDGE_SAVE_OK"
 
 
 def test_adopted_baseline_supports_cancel_discard_and_third_run(tmp_path, monkeypatch):
