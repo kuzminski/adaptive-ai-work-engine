@@ -1,0 +1,294 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "generated_at": "2026-09-12T13:51:52+0200",
+  "results": [
+    {
+      "case_id": "B_parallel_merge",
+      "class": "9B",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Investigate this problem independently from two different perspectives in parallel, then merge both sets of findings into one before the review proceeds.",
+      "expected": "fan-out into two branches, MERGE ALL_REQUIRED, then into the existing review; a legal closed-incoming MERGE.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 40.063,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09574-abe9-7251-a2e1-f7982fc3f921",
+        "wall_time_s": 40.0,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-41e3887861712020",
+      "proposal_hash": "41e38878617120206d79ce82d007f516b4a9445f58fff6dbe5180b7d77202382",
+      "intent": "Add two independent parallel investigations, synchronize them, consolidate their findings, and then continue to the existing review.",
+      "node_count": 4,
+      "edge_count": 6,
+      "detach_count": 1,
+      "anchor_routing": "ALL_MATCHES",
+      "assumptions": [
+        "The runtime preserves each investigation result across the merge and exposes both results to the consolidation node.",
+        "The existing review can consume the consolidated findings package together with the implemented candidate."
+      ],
+      "warnings": [
+        "Before accepting, verify that unconditional ALL_MATCHES routing at the anchor starts both investigation branches independently.",
+        "Verify that merged branch outputs remain separately attributable so the consolidation step can preserve provenance and disagreements."
+      ],
+      "added_node_ids": [
+        "N03",
+        "N04",
+        "N05",
+        "N06"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N01_N04",
+        "E_N03_N05",
+        "E_N04_N05",
+        "E_N05_N06",
+        "E_N06_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 6981,
+      "input_hash": "f26b5428466c7eee8843009e977423203b143c38d6832b903b4ba22b427b4485",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Add two independent parallel investigations, synchronize them, consolidate their findings, and then continue to the existing review.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "REVIEW",
+            "role": "ARCHITECT_STRONG",
+            "capability": "ARCHITECT_STRONG",
+            "effort": "high",
+            "instructions": "Investigate the implemented candidate from an architecture and design-integrity perspective in a fresh, read-only context. Assess scope boundaries, invariants, integration risks, failure modes, and consistency with the stated acceptance criteria. Do not edit the candidate. Record evidence, findings, severity, and uncertainty for later synthesis.",
+            "acceptance": [
+              "An architecture-focused, evidence-backed assessment is produced without modifying the candidate."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N04",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "high",
+            "instructions": "Independently investigate the implemented candidate from a behavioral and verification perspective in a fresh, read-only context. Assess observable behavior, focused test coverage, boundary cases, regressions, and whether the available evidence supports the stated acceptance criteria. Do not edit the candidate or rely on the other investigation. Record evidence, findings, severity, and uncertainty for later synthesis.",
+            "acceptance": [
+              "A behavior-focused, evidence-backed assessment is produced independently and without modifying the candidate."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N05",
+            "type": "MERGE",
+            "role": null,
+            "capability": null,
+            "effort": null,
+            "instructions": "Wait until both independent investigations have completed and make both result sets available to the consolidation step.",
+            "acceptance": [
+              "Both declared investigation results are present before consolidation proceeds."
+            ],
+            "depends_on": [
+              "N03",
+              "N04"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": "ALL_REQUIRED",
+            "expected_incoming": [
+              "E_N03_N05",
+              "E_N04_N05"
+            ]
+          },
+          {
+            "id": "N06",
+            "type": "REVIEW",
+            "role": "RESEARCH_SYNTHESIZER",
+            "capability": "RESEARCH_SYNTHESIZER",
+            "effort": "high",
+            "instructions": "Consolidate both independent investigation results into one read-only findings package for the existing review. Preserve evidence provenance, agreements, conflicts, severities, and uncertainty. Do not suppress unresolved differences, invent missing evidence, edit the candidate, or make the final acceptance decision.",
+            "acceptance": [
+              "One consolidated findings package represents both investigations and explicitly identifies unresolved conflicts or uncertainty."
+            ],
+            "depends_on": [
+              "N05"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "architecture investigation"
+          },
+          {
+            "edge_id": "E_N01_N04",
+            "from": "N01",
+            "to": "N04",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "behavior investigation"
+          },
+          {
+            "edge_id": "E_N03_N05",
+            "from": "N03",
+            "to": "N05",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "architecture findings complete"
+          },
+          {
+            "edge_id": "E_N04_N05",
+            "from": "N04",
+            "to": "N05",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "behavior findings complete"
+          },
+          {
+            "edge_id": "E_N05_N06",
+            "from": "N05",
+            "to": "N06",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "both investigations available"
+          },
+          {
+            "edge_id": "E_N06_N02",
+            "from": "N06",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "consolidated findings ready"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "ALL_MATCHES",
+        "replacements": [],
+        "assumptions": [
+          "The runtime preserves each investigation result across the merge and exposes both results to the consolidation node.",
+          "The existing review can consume the consolidated findings package together with the implemented candidate."
+        ],
+        "warnings": [
+          "Before accepting, verify that unconditional ALL_MATCHES routing at the anchor starts both investigation branches independently.",
+          "Verify that merged branch outputs remain separately attributable so the consolidation step can preserve provenance and disagreements."
+        ],
+        "proposal_id": "PROP-41e3887861712020"
+      }
+    },
+    {
+      "case_id": "G_human_gate",
+      "class": "9G",
+      "workflow_id": "MULTIROUTING_SLICE_V1",
+      "anchor_node_id": "N09",
+      "operator_instruction": "After the existing human acceptance, add one more implementation step for a follow-on task. That step touches deployment configuration, so it must not run until a second, separate human approval explicitly authorizes it.",
+      "expected": "a HUMAN_GATE node gating a new IMPLEMENT node, correctly ordered.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 26.179,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09575-47a8-7480-a598-8193285fdfaa",
+        "wall_time_s": 26.13,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_INVALID",
+      "errors": [
+        "a proposal must add at least one node or one edge"
+      ],
+      "diagnostics": [
+        {
+          "code": "PROPOSAL_SHAPE",
+          "message": "a proposal must add at least one node or one edge",
+          "node_id": null,
+          "edge_id": null,
+          "source": "PLANNER_PROPOSAL"
+        }
+      ],
+      "proposal_id": "PROP-72fc062d2609586c",
+      "proposal_hash": "72fc062d2609586cb9b0e5178f343ae5c57b28f60ac1bf9183147171c7671be9",
+      "intent": "Defer the deployment-configuration follow-on to a separately started run because the required second human approval cannot be represented after the existing halting human gate in this graph.",
+      "node_count": 0,
+      "edge_count": 0,
+      "detach_count": 0,
+      "anchor_routing": null,
+      "assumptions": [
+        "The existing human acceptance at N09 remains the terminal action of this run.",
+        "The follow-on implementation must be authorized and started through a separate later run."
+      ],
+      "warnings": [
+        "Do not accept this as an executable extension: no valid reachable subgraph can continue from N09 because a HUMAN_GATE halts unconditionally and its outgoing edges are never evaluated.",
+        "Before creating the later run, the operator must define a separate second human approval that occurs before any deployment-configuration implementation."
+      ],
+      "added_node_ids": [],
+      "added_edge_ids": [],
+      "detached_edge_ids": [],
+      "package_bytes": 9375,
+      "input_hash": "b11e9376d4af3c33d48a2c7ea61d60ce2e5f10a933e38f480c92e4a13be1e197",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "d2898967d52fd4b879e0fb06f44f904f88544d831d5420005ead41aea7c435e5",
+      "base_semantic_hash_after": "d2898967d52fd4b879e0fb06f44f904f88544d831d5420005ead41aea7c435e5",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "MULTIROUTING_SLICE_V1",
+        "anchor_node_id": "N09",
+        "base_semantic_hash": "d2898967d52fd4b879e0fb06f44f904f88544d831d5420005ead41aea7c435e5",
+        "intent": "Defer the deployment-configuration follow-on to a separately started run because the required second human approval cannot be represented after the existing halting human gate in this graph.",
+        "nodes": [],
+        "edges": [],
+        "detach_edges": [],
+        "anchor_routing": null,
+        "replacements": [],
+        "assumptions": [
+          "The existing human acceptance at N09 remains the terminal action of this run.",
+          "The follow-on implementation must be authorized and started through a separate later run."
+        ],
+        "warnings": [
+          "Do not accept this as an executable extension: no valid reachable subgraph can continue from N09 because a HUMAN_GATE halts unconditionally and its outgoing edges are never evaluated.",
+          "Before creating the later run, the operator must define a separate second human approval that occurs before any deployment-configuration implementation."
+        ],
+        "proposal_id": "PROP-72fc062d2609586c"
+      }
+    }
+  ]
+}

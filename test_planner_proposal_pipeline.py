@@ -1198,3 +1198,71 @@ def test_the_canvas_still_calls_only_routes_the_transport_serves():
     called = {match.group(1) for match in re.finditer(r'api\("(/api/[a-z/\-]+)', canvas)}
     assert {"/api/planner/plan", "/api/planner/accept"} <= called
     assert called <= served, sorted(called - served)
+
+
+# AAW PLANNER LIVE PROVIDER VALIDATION V0.2. Every codex-harness live call
+# failed dispatch (`invalid_json_schema`) until `proposal_output_schema`'s
+# `required` matched the property set of every one of its objects, because
+# OpenAI's structured-output strict mode -- not this contract -- requires
+# that. This walks the schema recursively so the class of defect cannot come
+# back silently; it is not a claim about this contract's own optionality
+# rules, which stay enforced, unweakened, in `_validate_nodes`/`_validate_edges`.
+def _schema_types(node):
+    kind = node.get("type")
+    return {kind} if isinstance(kind, str) else set(kind or ())
+
+
+def _assert_strict_schema(node, *, path=""):
+    if not isinstance(node, dict):
+        return
+    if "object" in _schema_types(node) or "properties" in node:
+        properties = node.get("properties", {})
+        assert node.get("additionalProperties") is False, \
+            f"{path or '<root>'}: object schema needs additionalProperties: false"
+        assert set(node.get("required") or ()) == set(properties), \
+            (f"{path or '<root>'}: required {sorted(node.get('required') or ())} must "
+             f"equal properties {sorted(properties)}")
+        for key, sub in properties.items():
+            _assert_strict_schema(sub, path=f"{path}.{key}")
+    if "array" in _schema_types(node) and "items" in node:
+        assert "type" in node["items"], f"{path}[]: every schema node needs a type"
+        _assert_strict_schema(node["items"], path=f"{path}[]")
+
+
+def test_the_planner_output_schema_satisfies_openai_strict_mode():
+    _assert_strict_schema(aaw_planner.proposal_output_schema())
+
+
+def test_a_null_valued_predicate_key_is_the_same_as_an_absent_one(planner):
+    """A provider whose structured-output mode requires every declared object
+    property to be present (§ aaw_planner.proposal_output_schema) cannot emit
+    a `when` with only the one predicate key it means -- it must supply all
+    of PREDICATE_KEYS and null the rest. Without normalization the real
+    validator reads a present-but-null key as an asserted (and invalid)
+    predicate, refusing an otherwise-legal proposal for a representation
+    artifact. This is AAW_PLANNER_LIVE_PROVIDER_VALIDATION_V0.2 evidence:
+    every live case with a conditional edge failed this way before the fix."""
+    bridge, _ = planner
+    script = _slice_a_with(lambda e: e["edges"][0].__setitem__(
+        "when", {"verdict": "PASS", "outcome": None, "has_findings": None,
+                 "min_severity": None}))
+    frame = plan(bridge, script)
+    assert frame["status"] == pp.PROPOSAL_READY, frame.get("diagnostics")
+    # The stored *proposal* is the planner's content verbatim -- normalize_proposal
+    # alters nothing the planner said, so the nulls are still there.
+    raw_edge = next(e for e in frame["proposal"]["edges"] if e["edge_id"] == "E_N01_P01")
+    assert raw_edge["when"] == {"verdict": "PASS", "outcome": None,
+                                "has_findings": None, "min_severity": None}
+    report = bridge.accept_proposal(frame["proposal"]["proposal_id"])
+    stored_edge = next(e for n in report["candidate"]["nodes"] if n["id"] == "N01"
+                       for e in n["edges"] if e["edge_id"] == "E_N01_P01")
+    assert stored_edge["when"] == {"verdict": "PASS"}
+
+
+def test_edge_kind_stays_a_plain_enum_not_a_nullable_one():
+    """`kind` must never offer null: the real validator only defaults a
+    *missing* kind to CONTINUE (`edge.get("kind", "CONTINUE")`), so a schema
+    that let a provider return an explicit null would earn every such edge a
+    spurious refusal instead of the CONTINUE the provider expected."""
+    edge_schema = aaw_planner.proposal_output_schema()["properties"]["edges"]["items"]
+    assert edge_schema["properties"]["kind"] == {"enum": list(rc.EDGE_KINDS)}
