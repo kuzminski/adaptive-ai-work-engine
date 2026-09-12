@@ -1,0 +1,74 @@
+{
+  "results": [
+    {
+      "label": "simple_A",
+      "case_id": "A_simple_linear",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-e759ad1c2021d4e6",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "semantic_hash_after": "bf3162b3eba568af4f972014d9111ed83ac59c380be29916542ab75133600b1c",
+      "added_node_ids": [
+        "N03"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N03_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "run_id": "AAW_20260912_135525_ad4ab1fd",
+      "run_lifecycle": "SETTLED",
+      "run_status": "WAITING_FOR_HUMAN",
+      "run_final_outcome": "HUMAN_REQUIRED",
+      "run_completed_nodes": [
+        "N01",
+        "N03",
+        "N02",
+        "N09"
+      ]
+    },
+    {
+      "label": "branch_merge_B",
+      "case_id": "B_parallel_merge",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-41e3887861712020",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "semantic_hash_after": "2aa878c20154715f2ed608af6e07ca0c05e82190e9da7a99da3450c6b6baedb1",
+      "added_node_ids": [
+        "N03",
+        "N04",
+        "N05",
+        "N06"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N01_N04",
+        "E_N03_N05",
+        "E_N04_N05",
+        "E_N05_N06",
+        "E_N06_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "run_id": "AAW_20260912_135528_a67bf7fc",
+      "run_lifecycle": "SETTLED",
+      "run_status": "WAITING_FOR_HUMAN",
+      "run_final_outcome": "HUMAN_REQUIRED",
+      "run_completed_nodes": [
+        "N01",
+        "N03",
+        "N04",
+        "N05",
+        "N06",
+        "N02",
+        "N09"
+      ]
+    }
+  ]
+}

@@ -460,6 +460,15 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "To splice a subgraph into an existing route, list the anchor's own outgoing "
             "edge id in detach_edges and re-declare the route through the new nodes.",
             "Existing nodes are immutable; only the anchor's outgoing edges may change.",
+            "A HUMAN_GATE or FINAL_GATE halts the run unconditionally the moment it is "
+            "reached; the runtime never evaluates edges declared on one, even if legal. "
+            "Model a step that must wait for a human decision as a HUMAN_GATE with no "
+            "outgoing edges — the run resumes, if at all, as a separate later run started "
+            "from a chosen node, not by continuing through this graph's edges.",
+            "role, capability and effort are meaningful only on IMPLEMENT, REVIEW or REPAIR "
+            "nodes, and are required there; a MERGE, HUMAN_GATE or FINAL_GATE node must "
+            "leave all three null. merge_policy and expected_incoming are the reverse: "
+            "required on a MERGE, and must be null everywhere else.",
         ],
         "limits": bounds.as_dict(),
         "operator_instruction": text,
@@ -601,6 +610,27 @@ def materialize_node(spec: Mapping[str, Any], *, model: str | None) -> dict[str,
 
 # ───────────────────────────── apply ─────────────────────────────
 
+def _materialize_when(when: Any) -> dict[str, Any] | None:
+    """A proposed edge's `when`, with an explicit-null predicate key dropped.
+
+    AAW_PLANNER_LIVE_PROVIDER_VALIDATION_V0.2 evidence: a provider whose
+    structured-output mode requires every declared object property to be
+    present (OpenAI's strict JSON Schema — see `aaw_planner.proposal_output_schema`)
+    cannot emit a `when` with only the one predicate key it means; it must
+    supply all of `routing_contract.PREDICATE_KEYS` and set the rest to
+    `null`. `workflow_schema._validate_when` treats a *present* key as an
+    asserted predicate regardless of its value, so an unstripped null reads as
+    "outcome must equal null" and is refused — a representation artifact, not
+    a predicate the planner meant to assert. A null value and an absent key
+    are the same predicate; this is the one place that equivalence is made,
+    for a proposed edge only, before the real validator ever sees it.
+    """
+    if not isinstance(when, Mapping):
+        return None
+    cleaned = {key: value for key, value in when.items() if value is not None}
+    return cleaned or None
+
+
 def apply_proposal(workflow: Mapping[str, Any], proposal: Mapping[str, Any]) -> dict[str, Any]:
     """`workflow` + `proposal` → a NEW workflow document. Pure.
 
@@ -633,7 +663,7 @@ def apply_proposal(workflow: Mapping[str, Any], proposal: Mapping[str, Any]) -> 
                                   f"edge {edge.get('edge_id')!r} leaves unknown node "
                                   f"{edge.get('from')!r}", edge_id=str(edge.get("edge_id")))
         row = {"edge_id": str(edge.get("edge_id")), "to": edge.get("to"),
-               "when": edge.get("when") if edge.get("when") else None,
+               "when": _materialize_when(edge.get("when")),
                "kind": str(edge.get("kind") or "CONTINUE")}
         if edge.get("label"):
             row["label"] = str(edge["label"])

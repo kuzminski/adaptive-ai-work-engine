@@ -40,7 +40,9 @@ from typing import Any, Callable, Iterator, Mapping
 
 import model_catalog
 import planner_proposal
+import routing_contract
 import workflow_runner
+import workflow_schema
 
 
 PLANNER_CONTRACT = planner_proposal.PROPOSAL_CONTRACT
@@ -165,10 +167,20 @@ def proposal_output_schema() -> dict[str, Any]:
     Advisory only: the provider's schema support reduces malformed output, it
     does not make the output trusted. `planner_proposal.validate_proposal` is
     still the authority and still assumes the answer is hostile.
+
+    Every object below lists *every* one of its own properties in `required`,
+    with genuinely optional fields made nullable instead of omitted. This is
+    not this contract's own notion of "required" (that stays enforced, unweakened,
+    in `planner_proposal._validate_nodes`/`_validate_edges`) — it is OpenAI's
+    structured-output strict mode, which rejects a schema where `required` is
+    not exactly the property set (AAW_V0.2 evidence: every codex-harness call
+    failed dispatch with `invalid_json_schema` until this matched; the
+    claude-harness provider accepts either shape).
     """
     return {
         "type": "object", "additionalProperties": False,
-        "required": ["intent", "nodes", "edges"],
+        "required": ["intent", "nodes", "edges", "detach_edges", "anchor_routing",
+                    "replacements", "assumptions", "warnings"],
         "properties": {
             "intent": {"type": "string"},
             "nodes": {
@@ -176,19 +188,22 @@ def proposal_output_schema() -> dict[str, Any]:
                 "maxItems": planner_proposal.DEFAULT_LIMITS.max_nodes,
                 "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["id", "type", "instructions", "acceptance"],
+                    "required": ["id", "type", "role", "capability", "effort",
+                                "instructions", "acceptance", "depends_on", "run_if",
+                                "merge_policy", "expected_incoming"],
                     "properties": {
                         "id": {"type": "string"},
                         "type": {"enum": list(planner_proposal.PROPOSAL_NODE_TYPES)},
-                        "role": {"enum": list(planner_proposal.PROPOSAL_ROLES)},
-                        "capability": {"enum": list(planner_proposal.PROPOSAL_CAPABILITIES)},
-                        "effort": {"enum": list(planner_proposal.PROPOSAL_EFFORTS)},
+                        "role": {"enum": [*planner_proposal.PROPOSAL_ROLES, None]},
+                        "capability": {"enum": [*planner_proposal.PROPOSAL_CAPABILITIES, None]},
+                        "effort": {"enum": [*planner_proposal.PROPOSAL_EFFORTS, None]},
                         "instructions": {"type": "string"},
                         "acceptance": {"type": "array", "items": {"type": "string"}},
-                        "depends_on": {"type": "array", "items": {"type": "string"}},
-                        "run_if": {"enum": ["ALWAYS", "ON_TRANSITION"]},
-                        "merge_policy": {"type": "string"},
-                        "expected_incoming": {"type": "array", "items": {"type": "string"}},
+                        "depends_on": {"type": ["array", "null"], "items": {"type": "string"}},
+                        "run_if": {"enum": ["ALWAYS", "ON_TRANSITION", None]},
+                        "merge_policy": {"type": ["string", "null"]},
+                        "expected_incoming": {"type": ["array", "null"],
+                                              "items": {"type": "string"}},
                     },
                 },
             },
@@ -197,22 +212,44 @@ def proposal_output_schema() -> dict[str, Any]:
                 "maxItems": planner_proposal.DEFAULT_LIMITS.max_edges,
                 "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["edge_id", "from", "to"],
+                    "required": ["edge_id", "from", "to", "when", "kind", "label"],
                     "properties": {
                         "edge_id": {"type": "string"},
                         "from": {"type": "string"},
                         "to": {"type": "string"},
-                        "when": {"type": ["object", "null"]},
+                        "when": {
+                            "type": ["object", "null"], "additionalProperties": False,
+                            "required": ["verdict", "outcome", "has_findings", "min_severity"],
+                            "properties": {
+                                "verdict": {"enum": [*routing_contract.VERDICTS, None]},
+                                "outcome": {"enum": [*sorted(workflow_schema.OUTCOMES), None]},
+                                "has_findings": {"type": ["boolean", "null"]},
+                                "min_severity": {"enum": [*routing_contract.SEVERITY_LADDER, None]},
+                            },
+                        },
+                        # Unlike role/merge_policy/etc., an edge's kind is never
+                        # conditionally inapplicable, so it stays a plain
+                        # (non-nullable) enum: `planner_proposal._validate_edges`
+                        # only defaults a *missing* kind to CONTINUE
+                        # (`edge.get("kind", "CONTINUE")`), not an explicit
+                        # null, and offering null here would let a model
+                        # produce one and be refused for it.
                         "kind": {"enum": ["CONTINUE", "REPAIR", "FALLBACK"]},
-                        "label": {"type": "string"},
+                        "label": {"type": ["string", "null"]},
                     },
                 },
             },
-            "detach_edges": {"type": "array", "items": {"type": "string"}},
+            "detach_edges": {"type": ["array", "null"], "items": {"type": "string"}},
             "anchor_routing": {"type": ["string", "null"]},
-            "replacements": {"type": "array", "items": {"type": "object"}},
-            "assumptions": {"type": "array", "items": {"type": "string"}},
-            "warnings": {"type": "array", "items": {"type": "string"}},
+            # `replacements` is reserved and must be empty in V0.1 (see
+            # planner_proposal._validate_envelope) — `items` is a placeholder
+            # primitive type, not the shape of a replacement, since nothing may
+            # ever populate this array and OpenAI strict mode requires every
+            # schema node to declare a "type".
+            "replacements": {"type": ["array", "null"], "items": {"type": "string"},
+                             "maxItems": 0},
+            "assumptions": {"type": ["array", "null"], "items": {"type": "string"}},
+            "warnings": {"type": ["array", "null"], "items": {"type": "string"}},
         },
     }
 
