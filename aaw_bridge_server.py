@@ -139,6 +139,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     self._require("workflow_id"), self._require("source_run_id"),
                     self._require("from_node"),
                     worktree=(self.server.workspace[1] if self.server.workspace else None)))  # type: ignore[attr-defined]
+            if route == "/api/planner/status":
+                return self._send(HTTPStatus.OK, self.bridge.planner_status(
+                    self._one("profile_id") or None))
+            if route == "/api/planner/proposals":
+                return self._send(HTTPStatus.OK, self.bridge.list_proposals(
+                    self._one("workflow_id") or None))
+            if route == "/api/planner/proposal":
+                return self._send(HTTPStatus.OK, self.bridge.proposal(
+                    self._require("proposal_id")))
+            if route == "/api/planner/events":
+                return self._send(HTTPStatus.OK, self.bridge.planner_events(
+                    since=int(self._one("since") or 0)))
             if route == "/api/runs":
                 return self._send(HTTPStatus.OK, self.bridge.list_runs())
             if route == "/api/run":
@@ -179,6 +191,17 @@ class BridgeHandler(BaseHTTPRequestHandler):
             if route == "/api/workflow/create":
                 return self._send(HTTPStatus.OK, self.bridge.create_workflow(
                     str(body.get("workflow_id") or ""), body.get("candidate") or {}))
+            if route == "/api/planner/plan":
+                return self._send(HTTPStatus.OK, self._plan(body))
+            if route == "/api/planner/accept":
+                return self._send(HTTPStatus.OK, self.bridge.accept_proposal(
+                    str(body.get("proposal_id") or ""),
+                    candidate=body.get("candidate") or None,
+                    persist=bool(body.get("persist"))))
+            if route == "/api/planner/reject":
+                return self._send(HTTPStatus.OK, self.bridge.reject_proposal(
+                    str(body.get("proposal_id") or ""),
+                    reason=str(body.get("reason") or "")))
             if route == "/api/run/start":
                 return self._send(HTTPStatus.OK, self._start_run(body))
             if route == "/api/run/reset-downstream":
@@ -203,8 +226,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     str(body.get("run_id") or ""), str(body.get("verdict") or "")))
             return self._fail(HTTPStatus.NOT_FOUND, "NO_ROUTE", f"no POST route {route}")
         except BridgeError as exc:
+            # A refusal that means "the world moved under this request" is a
+            # conflict, not a malformed request: a stale proposal and a stale
+            # save are the same class of answer and get the same status.
             status = (HTTPStatus.CONFLICT if exc.code in (aaw_bridge.WRITE_STALE,
-                                                          aaw_bridge.WRITE_ALREADY_EXISTS)
+                                                          aaw_bridge.WRITE_ALREADY_EXISTS,
+                                                          aaw_bridge.PROPOSAL_STALE,
+                                                          aaw_bridge.PROPOSAL_ALREADY_RESOLVED,
+                                                          aaw_bridge.PROPOSAL_RUN_ACTIVE)
                       else HTTPStatus.BAD_REQUEST)
             return self._fail(status, exc.code, str(exc), exc.diagnostics)
         except WorkflowValidationError as exc:
@@ -219,6 +248,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if not value:
             raise BridgeError("MISSING_PARAMETER", f"{key} is required")
         return value
+
+    def _plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Ask the planner for a proposal.
+
+        The planner adapter comes from the server, never from the client: a
+        browser chooses the anchor and the instruction, it does not choose
+        what runs — exactly as it chooses a workflow but never a worktree.
+        """
+        return self.bridge.plan_from_node(
+            str(body.get("workflow_id") or ""), str(body.get("anchor_node_id") or ""),
+            instruction=str(body.get("instruction") or ""),
+            candidate=body.get("candidate") or None,
+            adapter=self.server.planner_adapter,  # type: ignore[attr-defined]
+        )
 
     def _start_run(self, body: Mapping[str, Any]) -> dict[str, Any]:
         """Start a run. The workspace comes from the server, never the client.
@@ -343,23 +386,25 @@ class BridgeServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], *, bridge: AawBridge,
                  workspace: tuple[Path, Path] | None = None, adapter: Any = None,
-                 verbose: bool = False) -> None:
+                 planner_adapter: Any = None, verbose: bool = False) -> None:
         handler = type("BoundBridgeHandler", (BridgeHandler,), {"bridge": bridge})
         super().__init__(address, handler)
         self.bridge = bridge
         self.workspace = workspace
         self.adapter = adapter
+        self.planner_adapter = planner_adapter
         self.verbose = verbose
 
 
 def serve(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, bridge: AawBridge | None = None,
           workspace: tuple[Path, Path] | None = None, adapter: Any = None,
-          verbose: bool = False) -> BridgeServer:
+          planner_adapter: Any = None, verbose: bool = False) -> BridgeServer:
     """Create and start a bridge server on a background thread."""
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError("the bridge binds loopback only; remote deployment is out of scope")
     server = BridgeServer((host, port), bridge=bridge or aaw_bridge.default_bridge(),
-                          workspace=workspace, adapter=adapter, verbose=verbose)
+                          workspace=workspace, adapter=adapter,
+                          planner_adapter=planner_adapter, verbose=verbose)
     threading.Thread(target=server.serve_forever, name="aaw-bridge-http", daemon=True).start()
     return server
 
@@ -372,6 +417,9 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--worktree", type=Path, help="isolated worktree a run may write")
     ap.add_argument("--scripted-adapter", type=Path,
                     help="JSON script replacing paid provider calls; routing/runtime stay real")
+    ap.add_argument("--scripted-planner", type=Path,
+                    help="JSON script replacing the planner provider; the whole proposal "
+                         "pipeline (validation, identity, staleness, accept/reject) stays real")
     ap.add_argument("--verbose", action="store_true")
     return ap
 
@@ -383,9 +431,14 @@ def main(argv: list[str] | None = None) -> int:
         import aaw_llm_test_adapter
         adapter = aaw_llm_test_adapter.scripted_adapter(
             aaw_llm_test_adapter.load_script(args.scripted_adapter))
+    planner_adapter = None
+    if args.scripted_planner:
+        import aaw_planner_test_adapter
+        planner_adapter = aaw_planner_test_adapter.scripted_planner(
+            aaw_planner_test_adapter.load_script(args.scripted_planner))
     workspace = (args.repo, args.worktree) if args.repo and args.worktree else None
-    server = serve(host=args.host, port=args.port, workspace=workspace,
-                   adapter=adapter, verbose=args.verbose)
+    server = serve(host=args.host, port=args.port, workspace=workspace, adapter=adapter,
+                   planner_adapter=planner_adapter, verbose=args.verbose)
     url = f"http://{args.host}:{server.server_address[1]}/"
     print(f"AAW UX runtime bridge on {url}")
     print(f"  contract   {url}api/contract")
@@ -396,6 +449,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  workspace  repo={args.repo}  worktree={args.worktree}")
     if adapter is not None:
         print(f"  adapter    SCRIPTED ({args.scripted_adapter}) - no paid provider calls")
+    if planner_adapter is not None:
+        print(f"  planner    SCRIPTED ({args.scripted_planner}) - no paid planner calls")
+    else:
+        probe = server.bridge.planner_status()
+        binding = (probe.get("binding") or {}).get("planner_profile")
+        print("  planner    " + ("available " + str(binding) if probe["available"]
+                                 else "UNAVAILABLE " + str((probe.get("reason") or {}).get("error"))))
     try:
         while True:
             time.sleep(1.0)

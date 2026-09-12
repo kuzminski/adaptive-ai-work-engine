@@ -948,6 +948,16 @@ def test_the_bridge_exposes_no_way_to_mutate_runner_state():
             # V0.3 adoption writes only content-addressed tree refs plus the
             # per-worktree authorization manifest; no runner state or branch.
             "adopt_run_changes_as_baseline",
+            # AAW PLANNER PROPOSAL PIPELINE V0.1. Six of these seven are reads:
+            # `planner_status` probes a binding without calling it,
+            # `plan_from_node` returns an inert artifact, and `proposal`,
+            # `list_proposals` and `planner_events` read that artifact and its
+            # journal. `reject_proposal` discards one. Only `accept_proposal`
+            # can change anything, it changes only a workflow *definition*, and
+            # it does so through `save_workflow` — the same validated write
+            # already on this list. None of them can reach runner state.
+            "planner_status", "plan_from_node", "list_proposals", "proposal",
+            "accept_proposal", "reject_proposal", "planner_events",
         }
 
 
