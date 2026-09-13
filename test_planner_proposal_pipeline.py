@@ -73,7 +73,7 @@ def _workspace(root: Path):
     return repo, worktree
 
 
-def _base_workflow(bridge) -> dict:
+def _base_workflow(bridge, *, max_nodes: int | None = None) -> dict:
     """The graph every slice extends, authored entirely through the bridge.
 
         N01 IMPLEMENT ──E_N01_CONTINUE──▶ N02 REVIEW ──verdict PASS──▶ N09 HUMAN_GATE
@@ -81,10 +81,16 @@ def _base_workflow(bridge) -> dict:
     N01's single outgoing edge is unconditional on purpose: that is the case a
     planner must splice into rather than append to, and it is the case the
     FIRST_MATCH ordering rule makes non-trivial.
+
+    `max_nodes`, when given, overrides the workflow's own `limits.max_nodes` —
+    used to build a workflow that is already at its own node cap (V0.2's
+    RP1_impl_review_repair finding, §K.3 of the V0.2 report).
     """
     draft = bridge.blank_workflow(WORKFLOW_ID)              # one HUMAN_GATE, N01
     draft["nodes"][0]["id"] = "N09"
     draft["start_node"] = "N01"
+    if max_nodes is not None:
+        draft["limits"]["max_nodes"] = max_nodes
     draft["nodes"] = [
         {"id": "N01", "type": "IMPLEMENT", "depends_on": [], "run_if": "ALWAYS",
          "role": "CODE_IMPLEMENTER", "capability": "CODE_IMPLEMENTER",
@@ -120,6 +126,21 @@ def planner(tmp_path, monkeypatch):
     workflows.mkdir()
     bridge = aaw_bridge.AawBridge(workflows_root=workflows, stats_root=stats)
     _base_workflow(bridge)
+    return bridge, workflows / f"{WORKFLOW_ID}.json"
+
+
+@pytest.fixture
+def planner_at_node_cap(tmp_path, monkeypatch):
+    """The same base graph, but its own `limits.max_nodes` already equals its
+    current node count (3) — V0.3 hardening §4's `node_budget` should report
+    zero headroom, and the real validator must still be the one that refuses
+    any proposal that adds a node anyway."""
+    stats = tmp_path / "03_STATS"
+    monkeypatch.setattr(runner, "STATS_ROOT", stats)
+    workflows = tmp_path / "WORKFLOWS"
+    workflows.mkdir()
+    bridge = aaw_bridge.AawBridge(workflows_root=workflows, stats_root=stats)
+    _base_workflow(bridge, max_nodes=3)
     return bridge, workflows / f"{WORKFLOW_ID}.json"
 
 
@@ -305,10 +326,10 @@ def test_the_planning_package_is_bounded_and_inspectable(planner):
     # The package is a closed set of keys, not "whatever we had lying around":
     # no repository, no run, no journal, no telemetry, no filesystem path.
     assert set(package) == {
-        "package_version", "proposal_version", "workflow", "base_semantic_hash",
-        "anchor", "neighborhood", "existing_node_ids", "existing_edge_ids",
-        "constraints", "rules", "limits", "operator_instruction", "response_schema",
-        "package_bytes"}
+        "package_version", "proposal_version", "workflow", "node_budget",
+        "base_semantic_hash", "anchor", "neighborhood", "existing_node_ids",
+        "existing_edge_ids", "constraints", "rules", "limits", "operator_instruction",
+        "response_schema", "package_bytes"}
     assert set(package["workflow"]) == {"workflow_id", "version", "description",
                                         "start_node", "limits", "node_count"}
     for key in ("run_id", "execution_id", "worktree", "repo", "routing_events",
@@ -324,6 +345,84 @@ def test_the_planning_package_is_bounded_and_inspectable(planner):
             [walk(item) for item in value]
     walk(package)
     assert frame["input_hash"] == pp.package_hash(package)
+
+
+# ══════════════════ 2b. V0.3 hardening: node budget, field compatibility ══════════════════
+#
+# AAW_PLANNER_QUALITY_HARDENING_V0.3, driven by V0.2 evidence (see
+# AAW_PLANNER_LIVE_PROVIDER_VALIDATION_V0_2.md §J.10, §K.3): the planning
+# package did not tell a planner how much of the *workflow's own*
+# limits.max_nodes headroom remained, and role/capability/effort-on-MERGE
+# (§F defect 3, 3 independent occurrences) was stated only as prose.
+
+def test_node_budget_reflects_workflow_capacity_headroom(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A)
+    budget = frame["package"]["node_budget"]
+    # base workflow: 3 existing nodes (N01, N02, N09), blank_workflow's default
+    # limits.max_nodes is 24 — plenty of headroom, bounded by ProposalLimits.
+    assert budget["current_nodes"] == 3
+    assert budget["workflow_max_nodes"] == 24
+    assert budget["remaining_workflow_capacity"] == 21
+    assert budget["proposal_max_nodes"] == pp.DEFAULT_LIMITS.max_nodes
+    assert budget["proposal_node_budget"] == pp.DEFAULT_LIMITS.max_nodes
+
+
+def test_node_budget_is_zero_at_the_workflow_s_own_node_cap(planner_at_node_cap):
+    """RP1_impl_review_repair (V0.2 §K.3): a workflow already at its own
+    limits.max_nodes was structurally doomed regardless of proposal quality,
+    and nothing in the package said so. The package must now say so, in
+    numbers, before a single planner call is spent on it."""
+    bridge, _ = planner_at_node_cap
+    frame = plan(bridge, SLICE_A)
+    budget = frame["package"]["node_budget"]
+    assert budget["current_nodes"] == 3
+    assert budget["workflow_max_nodes"] == 3
+    assert budget["remaining_workflow_capacity"] == 0
+    assert budget["proposal_node_budget"] == 0
+    # the deterministic validator, not the package, remains the authority: a
+    # proposal that adds a node anyway is still refused by the real schema.
+    assert frame["status"] == pp.PROPOSAL_INVALID
+    assert any("max_nodes" in str(row.get("message")) for row in frame["diagnostics"])
+
+
+def test_node_type_field_compatibility_matches_the_real_schema_authority():
+    """Generated from workflow_schema.LLM_NODE_TYPES and the MERGE-only pair —
+    not a second, independently-maintained notion of node-type legality."""
+    compat = pp.node_type_field_compatibility()
+    assert set(compat) == set(pp.PROPOSAL_NODE_TYPES)
+    for node_type, row in compat.items():
+        assert set(row) == {"role", "capability", "effort",
+                            "merge_policy", "expected_incoming"}
+        if node_type in workflow_schema.LLM_NODE_TYPES:
+            assert row["role"] and row["capability"] and row["effort"]
+            assert not row["merge_policy"] and not row["expected_incoming"]
+        elif node_type == "MERGE":
+            assert not row["role"] and not row["capability"] and not row["effort"]
+            assert row["merge_policy"] and row["expected_incoming"]
+        else:
+            assert not any(row.values()), f"{node_type} should permit none of the five"
+
+
+def test_planning_package_exposes_the_compatibility_map(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A)
+    exposed = frame["package"]["constraints"]["node_type_field_compatibility"]
+    assert exposed == pp.node_type_field_compatibility()
+
+
+def test_anchor_reports_its_own_unconditional_edge(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A)
+    # N01's sole outgoing edge (E_N01_CONTINUE) has when=None: unconditional.
+    assert frame["package"]["anchor"]["unconditional_edge_id"] == "E_N01_CONTINUE"
+
+
+def test_anchor_unconditional_edge_id_is_null_when_every_edge_is_conditional(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A, anchor="N02")
+    # N02's sole outgoing edge (E_N02_PASS) is keyed on verdict=PASS: conditional.
+    assert frame["package"]["anchor"]["unconditional_edge_id"] is None
 
 
 # ══════════════════ 3. deterministic validation, fail-closed ══════════════════
