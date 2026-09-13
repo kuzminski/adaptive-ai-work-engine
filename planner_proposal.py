@@ -459,6 +459,29 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "proposal_max_nodes": bounds.max_nodes,
             "proposal_node_budget": proposal_node_budget,
         },
+        "complexity_budget": {
+            "hard_max_new_nodes": "identical to node_budget.proposal_node_budget above; "
+            "restated here only as a pointer, not a second number, so there is one "
+            "authority for how many nodes may be added at all",
+            "preferred_new_nodes_guidance": [
+                "A minimal single-step insertion (one thing added on one path) needs 1 "
+                "node.",
+                "An explicit request for two or more independent perspectives that must "
+                "rejoin needs one node per distinct perspective plus one MERGE plus "
+                "whatever continues -- typically 3-5 nodes, and never more branches than "
+                "perspectives explicitly requested.",
+                "An explicit review-with-bounded-repair path needs at most REVIEW + REPAIR "
+                "(2 nodes): route REPAIR's successful continuation to an existing or "
+                "already-proposed node that can legally receive it, per the REVIEW/REPAIR "
+                "rule below, instead of adding a dedicated re-check node.",
+            ],
+            "note": "These are illustrative, not exhaustive or binding on their own -- the "
+            "rules below on required-vs-optional structure, responsibility uniqueness, "
+            "and branch/review/MERGE/HUMAN_GATE discipline are the actual contract. Never "
+            "exceed node_budget.proposal_node_budget (the hard limit); exceeding a "
+            "preferred figure above, while staying within that hard limit, is fine when "
+            "the instruction genuinely requires it.",
+        },
         "base_semantic_hash": routing_contract.semantic_hash(workflow),
         "anchor": {
             "node_id": anchor_id, "type": anchor.get("type"), "role": anchor.get("role"),
@@ -524,10 +547,48 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "it hoping the workflow limit does not apply, it does). If the budget is 0, "
             "propose only new edges/detach among existing nodes, or explain in warnings "
             "why no legal extension is possible.",
-            "Prefer the smallest graph that satisfies the operator's stated instruction. "
-            "Do not add a redundant review stage, an unnecessary branch, a decorative "
-            "HUMAN_GATE, an extra MERGE, or an extra research/synthesis stage unless the "
-            "instruction or the existing graph's semantics actually call for it.",
+            "First construct the smallest valid graph that directly satisfies the operator "
+            "instruction. Add another node or branch only when you can name a distinct "
+            "responsibility the existing proposed nodes cannot carry -- not because a "
+            "topic could support more structure. Structure is REQUIRED when it is "
+            "directly necessary to satisfy the instruction or a graph rule (an explicit "
+            "REVIEW when review was requested, a MERGE only when two or more real "
+            "branches must actually rejoin, a HUMAN_GATE only when the instruction asks "
+            "for a real separate human authorization, a detach_edges entry when splicing "
+            "requires it). Everything else is OPTIONAL, and OPTIONAL structure must not "
+            "be added unless omitting it would materially reduce the correctness of what "
+            "was actually asked for.",
+            "Every proposed node must have a distinct responsibility. If two nodes you are "
+            "about to propose would do substantially overlapping work (e.g. a synthesis "
+            "step and an analysis step that both just summarize the same input), propose "
+            "one node instead of two, unless a graph rule -- such as the acyclic "
+            "requirement below -- forces them apart.",
+            "REPAIR capability does not by itself justify a second REVIEW node. Because "
+            "the resulting graph must be acyclic, a REPAIR's successful continuation "
+            "cannot loop back into the REVIEW that routed to it -- but it can, and should, "
+            "route forward to an existing node or another node you are already proposing "
+            "that can legally receive it (the anchor's own existing continuation, for "
+            "instance), rather than to a freshly invented node whose only job is to "
+            "re-check the repair. Only add a dedicated post-repair node when no existing "
+            "or already-proposed node can legally receive that continuation.",
+            "Create a parallel branch only when the instruction explicitly asks for two or "
+            "more independent perspectives, or the existing graph's semantics require "
+            "isolation before a rejoin. A request with multiple sub-questions does not by "
+            "itself justify a branch: one node may address several sub-questions in its "
+            "own instructions/acceptance when isolating them has no semantic value.",
+            "One REVIEW normally suffices. Add a second, independent REVIEW only when the "
+            "instruction asks for independent verification, a different review authority, "
+            "or staged acceptance -- never merely because a REPAIR path exists (see above) "
+            "or because the topic feels like it deserves another look.",
+            "Add a HUMAN_GATE only when the instruction asks for a real, separate human "
+            "authorization the existing graph does not already provide. A step being "
+            "consequential is not by itself a reason: Accept/Reject on the proposal itself "
+            "and the workflow's existing execution safety boundaries already give the "
+            "operator control.",
+            "Use MERGE only when actual fan-out requires a rejoin -- two or more branches "
+            "this proposal creates that must converge before the next step. Never use "
+            "MERGE as a generic aggregation or synthesis node for a single upstream path; "
+            "a normal IMPLEMENT/REVIEW node does that.",
         ],
         "limits": bounds.as_dict(),
         "operator_instruction": text,
