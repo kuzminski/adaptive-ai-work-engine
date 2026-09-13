@@ -334,6 +334,33 @@ def _outgoing(node: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def node_type_field_compatibility() -> dict[str, dict[str, bool]]:
+    """Which of the type-conditional fields a planner may set, per node type.
+
+    AAW_PLANNER_QUALITY_HARDENING_V0.3 evidence: `role`/`capability`/`effort`
+    misapplied to a non-LLM node (chiefly MERGE) was the single most frequent
+    V0.2 failure class (3 independent occurrences across two models). The
+    English rule already stated this; this map states it again as a small,
+    closed lookup table so a planner does not have to parse a paragraph to
+    get a yes/no answer for one field on one node type. It is *generated*
+    from the same authorities `_validate_nodes` and `workflow_schema` already
+    enforce (`workflow_schema.LLM_NODE_TYPES`, the MERGE-only pair) — there is
+    no second, parallel definition of node-type legality here.
+    """
+    llm = {"role": True, "capability": True, "effort": True,
+           "merge_policy": False, "expected_incoming": False}
+    merge = {"role": False, "capability": False, "effort": False,
+             "merge_policy": True, "expected_incoming": True}
+    neither = {"role": False, "capability": False, "effort": False,
+               "merge_policy": False, "expected_incoming": False}
+    return {
+        node_type: dict(llm) if node_type in workflow_schema.LLM_NODE_TYPES
+        else dict(merge) if node_type == "MERGE"
+        else dict(neither)
+        for node_type in PROPOSAL_NODE_TYPES
+    }
+
+
 def _neighborhood(workflow: Mapping[str, Any], anchor_id: str, *,
                   limits: ProposalLimits) -> dict[str, Any]:
     """Anchor + its direct predecessors + two hops downstream, bounded.
@@ -403,6 +430,17 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
     existing_edge_ids = sorted({str(edge.get("edge_id"))
                                 for node in by_id.values()
                                 for edge in _outgoing(node) if edge.get("edge_id")})
+    anchor_edges = _outgoing(anchor)
+    unconditional = next((edge for edge in anchor_edges if not edge.get("when")), None)
+
+    workflow_limits = workflow.get("limits") or {}
+    node_count = len(by_id)
+    workflow_max_nodes = workflow_limits.get("max_nodes")
+    remaining_workflow_capacity = (max(0, int(workflow_max_nodes) - node_count)
+                                   if isinstance(workflow_max_nodes, int) else None)
+    proposal_node_budget = (bounds.max_nodes if remaining_workflow_capacity is None
+                            else min(bounds.max_nodes, remaining_workflow_capacity))
+
     package = {
         "package_version": PROPOSAL_CONTRACT,
         "proposal_version": PROPOSAL_VERSION,
@@ -412,7 +450,14 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "description": workflow.get("description"),
             "start_node": workflow.get("start_node"),
             "limits": workflow.get("limits"),
-            "node_count": len(by_id),
+            "node_count": node_count,
+        },
+        "node_budget": {
+            "current_nodes": node_count,
+            "workflow_max_nodes": workflow_max_nodes,
+            "remaining_workflow_capacity": remaining_workflow_capacity,
+            "proposal_max_nodes": bounds.max_nodes,
+            "proposal_node_budget": proposal_node_budget,
         },
         "base_semantic_hash": routing_contract.semantic_hash(workflow),
         "anchor": {
@@ -421,7 +466,8 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "routing": anchor.get("routing", "FIRST_MATCH"),
             "instructions": str(anchor.get("instructions") or "")[:1200],
             "acceptance": [str(item)[:240] for item in (anchor.get("acceptance") or [])][:8],
-            "edges": _outgoing(anchor),
+            "edges": anchor_edges,
+            "unconditional_edge_id": unconditional.get("edge_id") if unconditional else None,
         },
         "neighborhood": _neighborhood(workflow, anchor_id, limits=bounds),
         "existing_node_ids": sorted(by_id),
@@ -441,14 +487,16 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "terminals": list(routing_contract.TERMINALS),
             "node_fields": list(PROPOSAL_NODE_FIELDS),
             "edge_fields": list(PROPOSAL_EDGE_FIELDS),
+            "node_type_field_compatibility": node_type_field_compatibility(),
         },
         "rules": [
             "Every proposed node id must be new; it may not collide with an existing id.",
             "An edge may leave only the anchor node or a node this proposal creates.",
             "An edge may arrive at a proposed node, an existing node, or a terminal "
             f"({', '.join(routing_contract.TERMINALS)}).",
-            "Under FIRST_MATCH a node may declare at most one unconditional edge, and it "
-            "must be declared last, because it shadows every edge after it.",
+            "Under FIRST_MATCH a node may declare at most one unconditional edge (when "
+            "null/absent), and it must be declared last, because it shadows every edge "
+            "after it. anchor.unconditional_edge_id names the anchor's own one, if any.",
             "A MERGE node must declare merge_policy and expected_incoming, and "
             "expected_incoming must exactly equal the edges that arrive at it in the "
             "resulting graph — no undeclared incoming edge, no empty declared slot.",
@@ -465,10 +513,21 @@ def planning_package(workflow: Mapping[str, Any], anchor_node_id: str, *,
             "Model a step that must wait for a human decision as a HUMAN_GATE with no "
             "outgoing edges — the run resumes, if at all, as a separate later run started "
             "from a chosen node, not by continuing through this graph's edges.",
-            "role, capability and effort are meaningful only on IMPLEMENT, REVIEW or REPAIR "
-            "nodes, and are required there; a MERGE, HUMAN_GATE or FINAL_GATE node must "
-            "leave all three null. merge_policy and expected_incoming are the reverse: "
-            "required on a MERGE, and must be null everywhere else.",
+            "role, capability, effort, merge_policy and expected_incoming are legal only "
+            "on the node types constraints.node_type_field_compatibility marks true; "
+            "leave a field null wherever it is false there. In short: role/capability/"
+            "effort on IMPLEMENT/REVIEW/REPAIR only, merge_policy/expected_incoming on "
+            "MERGE only, nothing of the five on HUMAN_GATE or FINAL_GATE.",
+            "This proposal may add at most node_budget.proposal_node_budget new nodes — "
+            "the smaller of the per-proposal cap and the workflow's own remaining "
+            "limits.max_nodes headroom (already computed for you; do not add nodes past "
+            "it hoping the workflow limit does not apply, it does). If the budget is 0, "
+            "propose only new edges/detach among existing nodes, or explain in warnings "
+            "why no legal extension is possible.",
+            "Prefer the smallest graph that satisfies the operator's stated instruction. "
+            "Do not add a redundant review stage, an unnecessary branch, a decorative "
+            "HUMAN_GATE, an extra MERGE, or an extra research/synthesis stage unless the "
+            "instruction or the existing graph's semantics actually call for it.",
         ],
         "limits": bounds.as_dict(),
         "operator_instruction": text,
