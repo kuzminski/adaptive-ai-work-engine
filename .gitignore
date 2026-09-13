@@ -41,6 +41,9 @@ CONTROL_CENTER/ANALYTICS/*.sqlite-*
 CONTROL_CENTER/ANALYTICS/*.bak
 JOBS/
 
+# Canonical launcher runtime metadata and logs (machine-local)
+.runtime/
+
 # Databases, backups, and generated exports
 *.sqlite
 *.sqlite-*

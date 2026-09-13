@@ -39,6 +39,22 @@ its analytics index is disposable and never becomes execution authority.
 Every route that needs approval ends at a Human Gate. A Human Gate can record
 an acceptance candidate but cannot merge, push, or open a pull request.
 
+## Starting AAW
+
+Double-click `START_AAW.cmd`. It starts the bridge server if it is not
+already running, waits for it to become healthy, and opens the current live
+canvas in your default browser. If AAW is already running, it reuses that
+instance instead of starting a duplicate.
+
+- Log: `.runtime\launcher\launcher.log` (bridge output: `.runtime\launcher\bridge.log`)
+- If startup fails, the console window explains why and stays open so you can
+  read the message.
+- To stop a launcher-started instance, double-click `STOP_AAW.cmd`.
+
+Manual bridge startup (`python aaw_bridge_server.py ...`, see below) remains
+available for development, debugging, and scripted use — `START_AAW.cmd` is
+the normal entry point, not the only one.
+
 ## Installation
 
 AAW currently targets Python 3.12+ and uses the standard library. Clone the
@@ -77,7 +93,11 @@ python workflow_runner.py --workflow WORKFLOWS\IMPLEMENT_REVIEW_REPAIR_V1.json `
   --repo C:\path\to\repo --worktree C:\path\to\repo-worktree --dry-run
 ```
 
-The Control Center can be started locally with:
+The Control Center is a separate desktop tool for the older, queue-based
+Single Task / Workflow / Custom Job primitives (recipes, presets, run
+history, disposable analytics). It is not the current live-canvas UI and is
+not started by `START_AAW.cmd`. It remains available for operators who want
+that interface:
 
 ```powershell
 python CONTROL_CENTER\aaw_control_center.py
