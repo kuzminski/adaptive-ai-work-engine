@@ -45,6 +45,7 @@ from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
 import aaw_bridge
+import production_use_evidence
 from aaw_bridge import AawBridge, BridgeError
 from workflow_schema import WorkflowValidationError
 
@@ -161,6 +162,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     self._require("run_id"), since=int(self._one("since") or 0)))
             if route == "/api/run/stream":
                 return self._stream(self._require("run_id"))
+            if route == "/api/evidence/sessions":
+                return self._send(HTTPStatus.OK, self._evidence_call("all_sessions"))
+            if route == "/api/evidence/session":
+                return self._send(HTTPStatus.OK, self._evidence_call(
+                    "session_summary", self._require("session_id")))
+            if route == "/api/evidence/report":
+                return self._send(HTTPStatus.OK, self._evidence_call("evidence_report"))
             if route.startswith("/ui/"):
                 return self._serve_static(route[len("/ui/"):])
             return self._fail(HTTPStatus.NOT_FOUND, "NO_ROUTE", f"no GET route {route}")
@@ -224,6 +232,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
             if route == "/api/run/human":
                 return self._send(HTTPStatus.OK, self.bridge.resolve_human_decision(
                     str(body.get("run_id") or ""), str(body.get("verdict") or "")))
+            if route == "/api/evidence/feedback":
+                return self._send(HTTPStatus.OK, self._evidence_call(
+                    "record_operator_feedback",
+                    str(body.get("session_id") or ""), str(body.get("usefulness") or ""),
+                    reuse_intent=body.get("reuse_intent") or None,
+                    comment=body.get("comment") or None))
             return self._fail(HTTPStatus.NOT_FOUND, "NO_ROUTE", f"no POST route {route}")
         except BridgeError as exc:
             # A refusal that means "the world moved under this request" is a
@@ -239,6 +253,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         except WorkflowValidationError as exc:
             return self._fail(HTTPStatus.BAD_REQUEST, "SCHEMA_INVALID", str(exc),
                               [exc.as_diagnostic()])
+        except ValueError as exc:
+            return self._fail(HTTPStatus.BAD_REQUEST, "INVALID_FEEDBACK", str(exc))
         except Exception as exc:
             return self._fail(HTTPStatus.INTERNAL_SERVER_ERROR, "BRIDGE_FAILURE",
                               f"{type(exc).__name__}: {exc}")
@@ -248,6 +264,20 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if not value:
             raise BridgeError("MISSING_PARAMETER", f"{key} is required")
         return value
+
+    def _evidence_call(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Call a `production_use_evidence.EvidenceBridge`-only method.
+
+        `self.bridge` may be a plain `AawBridge` (e.g. a server started with
+        an explicit `bridge=` for a test/scripted run) that was never wrapped
+        with evidence capture. That is a normal, supported configuration, not
+        a bug, so it gets a clean refusal rather than an AttributeError/500.
+        """
+        method = getattr(self.bridge, method_name, None)
+        if method is None:
+            raise BridgeError("EVIDENCE_UNAVAILABLE",
+                              "this bridge instance was not constructed with evidence capture")
+        return method(*args, **kwargs)
 
     def _plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
         """Ask the planner for a proposal.
@@ -438,7 +468,8 @@ def main(argv: list[str] | None = None) -> int:
             aaw_planner_test_adapter.load_script(args.scripted_planner))
     workspace = (args.repo, args.worktree) if args.repo and args.worktree else None
     server = serve(host=args.host, port=args.port, workspace=workspace, adapter=adapter,
-                   planner_adapter=planner_adapter, verbose=args.verbose)
+                   planner_adapter=planner_adapter, verbose=args.verbose,
+                   bridge=production_use_evidence.EvidenceBridge())
     url = f"http://{args.host}:{server.server_address[1]}/"
     print(f"AAW UX runtime bridge on {url}")
     print(f"  contract   {url}api/contract")

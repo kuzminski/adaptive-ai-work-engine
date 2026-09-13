@@ -23,6 +23,14 @@ EXTERNAL_ROOT = _path_from_env("AAW_EXTERNAL_ROOT", AAW_ROOT / "external")
 STATS_ROOT = _path_from_env("AAW_STATS_ROOT", AAW_ROOT / "output" / "03_STATS")
 ROUTING_ROOT = _path_from_env("AAW_ROUTING_ROOT", AAW_ROOT / "output" / "routing")
 
+# Durable planner-decision / operator-session evidence (production_use_evidence.py).
+# Sibling to STATS_ROOT rather than inside it: a planner proposal is BUILD-time
+# authoring state, not per-run execution evidence, so it does not belong inside
+# any one run's 03_STATS/<run_id> tree.
+PLANNER_EVIDENCE_ROOT = _path_from_env(
+    "AAW_PLANNER_EVIDENCE_ROOT", AAW_ROOT / "output" / "PLANNER_EVIDENCE"
+)
+
 # The original private playbook is optional.  Set AAW_PLAYBOOK_ROOT, or set
 # the individual file overrides, when a deployment supplies those contracts.
 PLAYBOOK_ROOT = _path_from_env("AAW_PLAYBOOK_ROOT", EXTERNAL_ROOT / "playbook")
