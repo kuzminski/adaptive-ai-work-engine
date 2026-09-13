@@ -1,5 +1,12 @@
 # AAW Control Center V0.4
 
+> This is a distinct, separately-maintained tool for the older queue-based
+> Single Task / Workflow / Custom Job primitives. It is **not** the current
+> live-canvas UI (BUILD/RUN, planner proposals, MERGE/rejoin). For the
+> current product, use `..\START_AAW.cmd` instead. Control Center keeps
+> working exactly as before — it just isn't the canonical entry point
+> anymore.
+
 Lokalne, dependency-free centrum prowadzenia pracy AI dla Windows (Python stdlib: `tkinter` / `ttk` / `sqlite3`). Zachowuje istniejące launchery, workflow, Custom Job, kolejki, telemetrię i artefakty. Bez merge / push / API fallback / automatycznej eskalacji modelu.
 
 V0.4 to **uproszczenie produktu** + **minimalna warstwa analityki**:
