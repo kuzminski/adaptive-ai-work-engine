@@ -327,9 +327,9 @@ def test_the_planning_package_is_bounded_and_inspectable(planner):
     # no repository, no run, no journal, no telemetry, no filesystem path.
     assert set(package) == {
         "package_version", "proposal_version", "workflow", "node_budget",
-        "base_semantic_hash", "anchor", "neighborhood", "existing_node_ids",
-        "existing_edge_ids", "constraints", "rules", "limits", "operator_instruction",
-        "response_schema", "package_bytes"}
+        "complexity_budget", "base_semantic_hash", "anchor", "neighborhood",
+        "existing_node_ids", "existing_edge_ids", "constraints", "rules", "limits",
+        "operator_instruction", "response_schema", "package_bytes"}
     assert set(package["workflow"]) == {"workflow_id", "version", "description",
                                         "start_node", "limits", "node_count"}
     for key in ("run_id", "execution_id", "worktree", "repo", "routing_events",
@@ -423,6 +423,64 @@ def test_anchor_unconditional_edge_id_is_null_when_every_edge_is_conditional(pla
     frame = plan(bridge, SLICE_A, anchor="N02")
     # N02's sole outgoing edge (E_N02_PASS) is keyed on verdict=PASS: conditional.
     assert frame["package"]["anchor"]["unconditional_edge_id"] is None
+
+
+# ══════════════════ 2c. V0.4 hardening: complexity discipline ══════════════════
+#
+# AAW_PLANNER_PACKAGE_REPAIR_V0.4, driven by V0.2/V0.3 evidence
+# (E_first_match_hazard, H_ambiguous, C_review_repair, RP1_impl_review_repair):
+# every over-built V0.2/V0.3 proposal that added REPAIR also added a second,
+# redundant REVIEW node to "recheck" it, and C_review_repair separately used
+# MERGE as a generic aggregation node with no real fan-out. Neither pattern had
+# a concrete rule against it -- only the vague "prefer the smallest graph"
+# sentence, which V0.3 evidence (E_first_match_hazard got MORE elaborate, not
+# less) showed is not sufficient on its own.
+
+def test_complexity_budget_points_at_node_budget_not_a_second_number(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A)
+    budget = frame["package"]["complexity_budget"]
+    assert set(budget) == {"hard_max_new_nodes", "preferred_new_nodes_guidance", "note"}
+    # a string pointer, not a duplicated integer: exactly one authority for the
+    # hard node cap (node_budget.proposal_node_budget), never a second number
+    # that could drift from it.
+    assert isinstance(budget["hard_max_new_nodes"], str)
+    assert "node_budget.proposal_node_budget" in budget["hard_max_new_nodes"]
+    assert budget["preferred_new_nodes_guidance"]
+    for item in budget["preferred_new_nodes_guidance"]:
+        assert isinstance(item, str) and item
+
+
+def test_rules_state_the_repair_recheck_reuse_principle(planner):
+    """V0.2/V0.3's single most repeated over-complexity pattern (H_ambiguous,
+    RP1, C_review_repair all added a needless second REVIEW after REPAIR)
+    now has a named, concrete rule, not just 'keep it simple'."""
+    bridge, _ = planner
+    rules = " ".join(plan(bridge, SLICE_A)["package"]["rules"])
+    assert "does not by itself justify a second REVIEW node" in rules
+    assert "route forward to an existing node" in rules
+
+
+def test_rules_state_required_vs_optional_structure(planner):
+    bridge, _ = planner
+    rules = " ".join(plan(bridge, SLICE_A)["package"]["rules"])
+    assert "REQUIRED when it is directly necessary" in rules
+    assert "OPTIONAL structure must not" in rules
+
+
+def test_rules_state_branch_review_merge_human_gate_discipline(planner):
+    bridge, _ = planner
+    rules = " ".join(plan(bridge, SLICE_A)["package"]["rules"])
+    assert "Create a parallel branch only when" in rules
+    assert "One REVIEW normally suffices" in rules
+    assert "Add a HUMAN_GATE only when" in rules
+    assert "Use MERGE only when actual fan-out requires a rejoin" in rules
+
+
+def test_complexity_budget_and_new_rules_stay_within_the_package_byte_limit(planner):
+    bridge, _ = planner
+    frame = plan(bridge, SLICE_A)
+    assert frame["package"]["package_bytes"] <= pp.DEFAULT_LIMITS.max_package_bytes
 
 
 # ══════════════════ 3. deterministic validation, fail-closed ══════════════════
