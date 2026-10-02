@@ -1135,7 +1135,8 @@ class AutonomyController:
         sequence = len(it["reviews"]) + len(it["final_reviews"]) + 1
         diff_path = self.dir / "PACKETS" / f"{it['iteration_id']}_{kind}_{sequence}.diff"
         diff_path.parent.mkdir(parents=True, exist_ok=True)
-        diff_path.write_text(diff, encoding="utf-8")
+        diff_path.write_bytes(diff.encode("utf-8"))
+        diff_file_sha256 = hashlib.sha256(diff_path.read_bytes()).hexdigest()
         manifest: list[dict[str, Any]] = []
 
         def add_source(source_ref: str, source_kind: str, path: Path) -> None:
@@ -1176,6 +1177,12 @@ class AutonomyController:
                 "directional_charter": self.state.get("directional_charter"),
                 "directional_charter_hash": self.state.get("directional_charter_hash"),
                 "raw": {"diff_sha256": diff_digest(diff), "diff_path": str(diff_path),
+                        "diff_file_sha256": diff_file_sha256,
+                        "diff_digest_note": ("diff_sha256 is the controller's canonical digest of the diff text "
+                                             "(sha256:<hex> over canonical JSON). diff_file_sha256 and the "
+                                             "RAW_DIFF manifest sha256 are the plain SHA-256 of the raw diff file "
+                                             "bytes. Different algorithms over the same content; they are "
+                                             "expected to differ and diff_file_sha256 must equal the manifest value."),
                         "changed_files": self.env.changed_files(), "head": self.env.head(),
                         "base_head": self.env.describe().get("base_head"), "commits": self.env.commits(),
                         "evidence": list(it["checks"]), "self_verify": list(it["self_verify"]),

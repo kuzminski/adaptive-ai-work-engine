@@ -78,6 +78,8 @@ def main() -> None:
     wt, repo = fixture["wt"], fixture["repo"]
     (wt / "src").mkdir()
     (wt / "tests").mkdir()
+    (wt / "src" / "__init__.py").write_text("", encoding="utf-8")
+    (wt / "tests" / "__init__.py").write_text("", encoding="utf-8")
     (wt / "src" / "greeting.py").write_text('def greeting():\n    return "hello"\n', encoding="utf-8")
     (wt / "tests" / "test_greeting.py").write_text(
         "import unittest\nfrom src.greeting import greeting\n\n"
@@ -169,7 +171,7 @@ def main() -> None:
         "total_cost_usd": (sum(record["cost_usd"] for record in records if record["cost_usd"] is not None)
                            if any(record["cost_usd"] is not None for record in records) else None),
         "cost_visibility": "not provided by the Codex CLI artifacts"}
-    out = AAW_ROOT / "EVIDENCE" / "AAW_AUTONOMOUS_POLICY_V0_3_LIVE.json"
+    out = AAW_ROOT / "EVIDENCE" / (sys.argv[1] if len(sys.argv) > 1 else "AAW_AUTONOMOUS_POLICY_V0_3_LIVE.json")
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps({"evidence_path": str(out), "status": result["status"], "controller_error": error,
                       "live_provider_call_count": result["live_provider_call_count"],

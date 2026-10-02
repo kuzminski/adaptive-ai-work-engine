@@ -367,3 +367,38 @@ def test_31_role_prompts_leave_git_boundary_checks_to_the_controller():
     assert "Do not run Git commands" in aa.ROLE_INSTRUCTIONS["execute"]
     assert "controller verifies Git boundaries" in aa.ROLE_INSTRUCTIONS["self_verify"]
     assert "Do not run Git commands" in aa.ROLE_INSTRUCTIONS["review"]
+
+
+def test_32_diff_digests_are_consistent_and_labelled_for_the_reviewer(tmp_path):
+    import hashlib
+    m = mandate_fixture()
+    m["roadmap_mandate"]["items"] = [{"item_id": "A", "title": "only"}]
+    h = prepared(policy_harness(tmp_path, mandate=m)).script("plan", initial_plan(["A"]))
+    h.controller(with_prep=True).run()
+    ctx = h.ctxs["review"][0]
+    raw = ctx["raw"]
+    file_bytes = Path(raw["diff_path"]).read_bytes()
+    assert file_bytes == h.env.diff_text.encode("utf-8")
+    assert ctl.diff_digest(file_bytes.decode("utf-8")) == raw["diff_sha256"]
+    manifest_sha = next(r["sha256"] for r in raw["manifest"] if r["source_ref"] == "RAW_DIFF")
+    assert manifest_sha == raw["diff_file_sha256"] == hashlib.sha256(file_bytes).hexdigest()
+    metadata = aa.build_handoff("review", ctx)["RAW_METADATA"]
+    assert metadata["diff_file_sha256"] == manifest_sha
+    assert "different algorithms" in metadata["diff_digest_note"].lower()
+
+
+def test_34_implementer_is_told_to_name_checks_after_required_evidence_and_matching_stays_strict():
+    assert "exact wording of the REQUIRED_EVIDENCE item" in aa.ROLE_INSTRUCTIONS["execute"]
+    assert "exact command, its exit code" in aa.ROLE_INSTRUCTIONS["execute"]
+
+
+def test_33_genuinely_ambiguous_review_still_escalates_fail_closed(tmp_path):
+    m = mandate_fixture()
+    m["roadmap_mandate"]["items"] = [{"item_id": "A", "title": "only"}]
+    h = prepared(policy_harness(tmp_path, mandate=m)).script("plan", initial_plan(["A"]))
+    ask = {"verdict": "ESCALATE", "summary": "still unclear", "findings": [],
+           "raw_evidence_requests": [{"source_ref": "RAW_DIFF", "reason": "unclear"}]}
+    h.scripts["review"] = [ask, ask]
+    state = h.controller(with_prep=True).run()
+    assert state["status"] == ac.AWAITING_HUMAN
+    assert state["escalation"]["code"] == ac.E_REVIEW and not state["hold"]["promotable"]

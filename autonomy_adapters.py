@@ -170,7 +170,12 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
                 "your changes uncommitted. Do not run Git commands: the controller owns and verifies Git boundaries. "
                 "Run the acceptance checks you can and report each honestly (FAIL is a valid "
-                "status). Report deviations from the plan and known limitations (uncertainties)."),
+                "status). Name each check in English using the exact wording of the REQUIRED_EVIDENCE item it "
+                "substantiates (for example a check named 'unit tests'); the controller matches evidence by that "
+                "name. For every test or command check, the summary must state the exact command, its exit code and "
+                "the reported result counts, so a reviewer can verify it from this record alone. "
+                "Do not delete files such as __pycache__. "
+                "Report deviations from the plan and known limitations (uncertainties)."),
     "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
                     "REQUIRED_EVIDENCE only where semantic verification is needed; run no mechanical checks that are "
                     "already recorded. Do not run Git commands; the controller verifies Git boundaries. "
@@ -283,7 +288,8 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
             "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
             "PLAN": ctx["iteration"]["plan"], "PACKET": ctx["packet"],
             "RAW_METADATA": {key: raw.get(key) for key in
-                             ("diff_sha256", "diff_path", "changed_files", "head", "base_head", "commits")},
+                             ("diff_sha256", "diff_file_sha256", "diff_digest_note", "diff_path",
+                              "changed_files", "head", "base_head", "commits")},
             "RAW_EVIDENCE_MANIFEST": raw.get("manifest", []),
             "PREVIOUS_UNRESOLVED_FINDINGS": raw.get("previous_findings", []),
             "RAW_EVIDENCE": ctx.get("raw_evidence_results", [])}
