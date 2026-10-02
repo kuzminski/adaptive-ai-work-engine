@@ -55,7 +55,7 @@ def _extend_windows_path() -> None:
         os.environ["PATH"] = os.pathsep.join([current, *extra])
 
 
-def self_test() -> int:
+def self_test(report_file: Path | None = None) -> int:
     import autonomy_adapters  # noqa: F401  (engine importable)
     import autonomy_controller  # noqa: F401
     import product_recommendations as pr
@@ -69,6 +69,8 @@ def self_test() -> int:
               "ui": str(ui), "frozen": bool(getattr(sys, "frozen", False)),
               "data_home": os.environ.get("AAW_STATS_ROOT")}
     print(json.dumps(report, indent=2))
+    if report_file:
+        report_file.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return 0 if report["status"] == "PASS" else 1
 
 
@@ -79,6 +81,13 @@ def _ensure_streams() -> None:
         log = open(product_home.home() / "aaw.log", "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stdout or log
         sys.stderr = sys.stderr or log
+    # Windows consoles/pipes default to a legacy code page; AAW prints Polish text and JSON.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -92,19 +101,43 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--report-file", type=Path,
+                        help="also write the --detect / --self-test JSON here (a windowed build has no console)")
     args = parser.parse_args(argv)
     if args.run_worker:
         import product_runs
         return product_runs.worker_main(args.run_worker, args.mode, reconcile_lock=args.reconcile_lock)
     if args.detect:
         import product_providers
-        print(json.dumps(product_providers.detect_all(), indent=2, ensure_ascii=False))
+        text = json.dumps(product_providers.detect_all(), indent=2, ensure_ascii=False)
+        print(text)
+        if args.report_file:
+            args.report_file.write_text(text + "\n", encoding="utf-8")
         return 0
     if args.self_test:
-        return self_test()
+        return self_test(args.report_file)
     import product_server
     return product_server.serve(port=args.port, open_browser=not args.no_browser)
 
 
+def run() -> int:
+    """Never let an exception reach the windowed bootloader (it would block on a modal dialog)."""
+    try:
+        return main()
+    except SystemExit as exc:
+        return int(exc.code or 0) if not isinstance(exc.code, str) else 2
+    except BaseException:
+        import traceback
+        try:
+            import product_home
+            with open(product_home.home() / "aaw.log", "a", encoding="utf-8") as log:
+                log.write(traceback.format_exc())
+        except Exception:
+            pass
+        if sys.stderr:
+            traceback.print_exc()
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

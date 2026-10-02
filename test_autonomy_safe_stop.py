@@ -131,3 +131,22 @@ def test_initial_architect_handoff_names_the_mandatory_gate_codes_and_a_valid_te
     assert "REQUIRED_HUMAN_GATE_CONDITIONS" in aa.ROLE_INSTRUCTIONS["plan"]
     later = aa.build_handoff("plan", {**ctx, "planning_stage": "NEXT_ITERATION_PLAN", "iteration_index": 2})
     assert "DIRECTIONAL_CHARTER_TEMPLATE" not in later
+
+
+def test_planner_handoff_carries_the_decision_vocabulary_and_skip_semantics():
+    """Second live finding: the planner invented decision kinds ('scope_selection') and
+    'skipped' a direction item that was only waiting for its dependency."""
+    import autonomy_adapters as aa
+    mandate = ac.validate_mandate(mandate_fixture())
+
+    class Env:
+        def describe(self):
+            return {"worktree": "."}
+    ctx = {"mandate": mandate, "role": "planner", "iteration_index": 2, "planning_stage": "NEXT_ITERATION_PLAN",
+           "roadmap": {}, "history": [], "env": Env(),
+           "execution": {"run_id": "R", "iteration_id": "I", "execution_id": "E", "descriptor_path": "d"}}
+    kinds = aa.build_handoff("plan", ctx)["DECISION_KINDS"]
+    assert kinds == ac.LEVEL_BY_KIND and kinds["LOCAL_TECHNICAL"] == ac.AUTO
+    assert ac.classify_decision("scope_selection") == ac.ESCALATE      # unknown kinds still escalate
+    assert "DECISION_KINDS" in aa.ROLE_INSTRUCTIONS["plan"]
+    assert "PERMANENTLY" in aa.ROLE_INSTRUCTIONS["plan"]

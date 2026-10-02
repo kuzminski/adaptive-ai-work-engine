@@ -30,9 +30,12 @@ def main() -> int:
     shutil.copy2(ROOT / "packaging" / "README_PORTABLE.txt", app / "README.txt")
     exe = app / ("AAW.exe" if OS_NAME == "Windows" else "AAW")
     env = dict(os.environ, AAW_PRODUCT_HOME=str(ROOT / "build" / "selftest_home"))
-    result = subprocess.run([str(exe), "--self-test"], capture_output=True, text=True, env=env, timeout=120)
-    print(result.stdout, result.stderr)
-    if result.returncode != 0:
+    report = ROOT / "build" / "selftest_report.json"
+    report.unlink(missing_ok=True)
+    result = subprocess.run([str(exe), "--self-test", "--report-file", str(report)], capture_output=True, text=True,
+                            env=env, timeout=120)
+    print(result.stdout, result.stderr, report.read_text(encoding="utf-8") if report.is_file() else "(no report)")
+    if result.returncode != 0 or not report.is_file():
         print("self-test of the built app FAILED", file=sys.stderr)
         return 1
     archive = DIST / f"AAW-{OS_NAME}-x64.zip"

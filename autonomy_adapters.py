@@ -38,7 +38,7 @@ from typing import Any, Mapping, Sequence
 import workflow_runner as wr
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
-from autonomy_contract import REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
+from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
@@ -168,6 +168,11 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "MANDATE.mandate_hash exactly. Iteration 1 carries all human acceptance criteria verbatim. roadmap_refs "
              "must be pending items with dependencies met. Set implementation_complexity to NORMAL, HARDER, or "
              "SIGNIFICANTLY_DIFFICULT and cite concrete complexity_evidence. Never use that label alone to request Sonnet. "
+             "Every decisions[].kind must be a key of DECISION_KINDS (its value is the autonomy level); a kind whose "
+             "level is ESCALATE, or any kind not listed, stops autonomy for a human, so record ordinary technical "
+             "choices with AUTO / AUTO_WITHIN_SCOPE kinds. skipped_items PERMANENTLY removes a roadmap item from this "
+             "run: list an item there only with a reason why it should never be done autonomously; never list an item "
+             "merely because it is waiting for its dependencies (it stays pending for a later iteration). "
              "Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
@@ -262,7 +267,8 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
         initial = ctx.get("planning_stage") == "INITIAL_ARCHITECT"
         architect = {"DIRECTIONAL_CHARTER_TEMPLATE": directional_charter_template(mandate),
                      "REQUIRED_HUMAN_GATE_CONDITIONS": list(REQUIRED_CHARTER_GATE_CONDITIONS)} if initial else {}
-        return {**common, **architect, "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
+        return {**common, **architect, "DECISION_KINDS": dict(LEVEL_BY_KIND),
+                "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
                 "PLANNING_STAGE": ctx.get("planning_stage"),
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
