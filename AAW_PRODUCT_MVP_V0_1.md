@@ -41,7 +41,9 @@ timeline, status and the Human Gate page are computed on read from engine
 artifacts and link to the raw evidence (descriptor, ledger lifecycle, result
 artifact, journal events).
 
-## Engine touch point (the only one)
+## Engine touch points (additive, policy unchanged)
+
+### 1. Cooperative safe stop
 
 `AutonomyController.run` honours the existing `run_cancellation` token
 (already used by `workflow_runner`), additively:
@@ -54,6 +56,46 @@ artifact, journal events).
   is journaled and `in_flight` is kept, so V0.3 resume rules decide.
 
 Without a token in scope nothing changes (full regression unchanged).
+
+### 2. Planner handoff contract (found by the live walkthrough)
+
+The V0.3 freeze never ran the initial architect live (it was scripted). The
+first real product runs exposed two contract-communication gaps in
+`autonomy_adapters` — the validators were right, the prompt never told the
+model the vocabulary they enforce:
+
+* attempt 1 — the architect paraphrased the mandatory Human Gate conditions →
+  `MANDATE_EXTENSION_ATTEMPT`. Now the INITIAL_ARCHITECT handoff carries
+  `REQUIRED_HUMAN_GATE_CONDITIONS` and a `DIRECTIONAL_CHARTER_TEMPLATE` (the
+  verbatim copy fields; `autonomy_contract.directional_charter_template`);
+* attempt 2 — the planner invented decision kinds (`scope_selection`) →
+  `DECISION_REQUIRES_HUMAN`, and listed a direction item that was only waiting
+  for its dependency in `skipped_items` (permanent). Now every planner handoff
+  carries `DECISION_KINDS` (the existing `LEVEL_BY_KIND`) and the instruction
+  states that skipping is permanent.
+
+Validation strictness is unchanged: a paraphrased gate list and unknown
+decision kinds still escalate (tests assert both).
+
+## Live walkthrough (this environment: Claude CLI only, logged in)
+
+Portable Linux build → Chromium UI (Playwright) → provider detection → New
+Task → START → autonomous run → Human Gate. Evidence:
+`EVIDENCE/AAW_PRODUCT_MVP_V0_1_LIVE_E2E.json` and
+`EVIDENCE/AAW_PRODUCT_MVP_V0_1_SCREENSHOTS/`.
+
+| | |
+|---|---|
+| bindings | Claude-only alternatives, shown before START: architect/review/final review `OPUS_HIGH` (claude-opus-5), implementation/pretreatment/verification `SONNET_HIGH` (claude-sonnet-5) |
+| iterations | 2 × PASS (Hello greeting; farewell direction item) |
+| real executions | 13, all `CLOSED/COMPLETED`, 13 distinct provider sessions |
+| stop | `ROADMAP_EXHAUSTED` → `AWAITING_HUMAN`, promotable candidate (left for the human) |
+| Git | canonical `main` and remote unchanged, canonical checkout clean, `main_merge_allowed=false` |
+| cost | ≈ 3.80 USD (provider-reported) |
+
+Attempts 1–2 (`..._LIVE_ATTEMPT_01_CHARTER_REJECTED.json`,
+`..._LIVE_ATTEMPT_02_DECISION_KIND.json`) are kept as evidence and were closed
+through the product's Reject action.
 
 ## Models
 
