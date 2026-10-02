@@ -440,7 +440,7 @@ def test_restart_after_worker_crash_resumes_through_lock_reconciliation(env):
     result = prun.resume_task(run_id, expected_lock_token=view["controls"]["lock_token"])
     assert result["reconciled_lock"]
     view = wait_for(run_id, settled)
-    assert view["status"] == pv.S_GATE
+    assert view["status"] == pv.S_GATE, (view.get("gate") or {}).get("warnings")
     retired = list(prun.autonomy_dir(run_id).glob("controller.lock.retired.*.json"))
     assert retired and "AAW Product RESUME" in json.loads(retired[0].read_text())["operator"]
 
