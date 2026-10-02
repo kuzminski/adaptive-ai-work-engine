@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""AAW PRODUCT MVP V0.1 — model recommendations and simple-choice resolution.
+
+Three layers, none of which scrapes benchmarks:
+
+  A. local detection — `product_providers` says which profiles are runnable;
+  B. a built-in, versioned catalog — `MODEL_RECOMMENDATIONS.json`;
+  C. an optional catalog update fetched from the AAW GitHub repository. It is
+     validated, stored next to the user's data and used only when it is newer.
+     No network ⇒ the built-in catalog is used; nothing blocks.
+
+The user picks three simple levels (planning / implementation / review). This
+module turns them into the V0.3 `AUTONOMY_ROLES` shape (`roles` +
+`policy_profiles`) for ONE new run. The engine freezes those bindings in the
+run state; a catalog update never changes a run that already started.
+
+Resolution is visible, never silent: per policy slot the first runnable
+candidate is chosen and labelled RECOMMENDED (the catalog's first choice —
+for the RECOMMENDED options that is exactly the frozen V0.3 profile) or
+ALTERNATIVE. A required slot with no runnable candidate blocks START; an
+optional (escalation-only) slot keeps its first candidate and the engine stops
+with ROLE_PROFILE_UNAVAILABLE if that escalation is ever needed.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import ssl
+import urllib.request
+from pathlib import Path
+from typing import Any, Mapping
+
+import autonomy_contract as ac
+import autonomy_policy as ap
+import product_home
+import workflow_runner as wr
+
+ROOT = Path(__file__).resolve().parent
+BUILTIN_PATH = ROOT / "MODEL_RECOMMENDATIONS.json"
+DOWNLOADED_NAME = "MODEL_RECOMMENDATIONS.downloaded.json"
+SCHEMA_VERSION = "AAW_MODEL_RECOMMENDATIONS_V1"
+CHOICE_GROUPS = ("planning", "implementation", "review")
+PROFILE_FIELDS = ("provider", "profile", "recommended_roles", "strength_class", "speed_class", "cost_class",
+                  "minimum_cli_version", "status", "last_updated")
+
+# Which policy slot each engine role is bound to (roles must exist for
+# `autonomy_contract.validate_roles`; the V0.3 policy then selects per call).
+ROLE_SLOTS = {"planner": "initial_planner", "implementer": "implementer_default",
+              "self_verifier": "implementer_default", "review_prep": "review_pretreatment",
+              "reviewer": "primary_reviewer", "repairer": "repair_default",
+              "final_reviewer": "final_review_default"}
+
+SLOT_LABELS = {
+    "initial_planner": "Planowanie początkowe (architekt)",
+    "implementer_default": "Implementacja",
+    "implementer_harder": "Implementacja — trudniejsza",
+    "implementer_hard": "Implementacja — bardzo trudna",
+    "implementer_capability_escalation": "Implementacja — eskalacja możliwości",
+    "review_pretreatment": "Przygotowanie review",
+    "primary_reviewer": "Review",
+    "repair_default": "Naprawa",
+    "repair_hard": "Naprawa — trudna",
+    "final_review_default": "Final review / planowanie kolejnych iteracji",
+    "final_review_hard": "Final review — wysokie ryzyko",
+    "final_review_critical": "Final review — krytyczne",
+}
+
+
+class CatalogInvalid(ValueError):
+    pass
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", str(value)))
+
+
+def validate_catalog(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        raise CatalogInvalid("unsupported recommendations schema")
+    if not isinstance(data.get("catalog_version"), str) or not _version_key(data["catalog_version"]):
+        raise CatalogInvalid("catalog_version is required")
+    profiles = data.get("profiles")
+    if not isinstance(profiles, list):
+        raise CatalogInvalid("profiles must be an array")
+    for row in profiles:
+        missing = [k for k in PROFILE_FIELDS if not isinstance(row, dict) or k not in row]
+        if missing:
+            raise CatalogInvalid(f"profile row missing {missing}")
+    choices = data.get("choices")
+    if not isinstance(choices, dict) or set(CHOICE_GROUPS) - set(choices):
+        raise CatalogInvalid("choices must define planning, implementation and review")
+    for group in CHOICE_GROUPS:
+        options = choices[group].get("options")
+        if not isinstance(options, dict) or not options or choices[group].get("default") not in options:
+            raise CatalogInvalid(f"choices.{group} needs options and a valid default")
+        for name, option in options.items():
+            slots = option.get("slots") if isinstance(option, dict) else None
+            if not isinstance(slots, dict) or not slots:
+                raise CatalogInvalid(f"choices.{group}.{name} needs slots")
+            for slot, candidates in slots.items():
+                if slot not in ap.PROFILE_KEYS:
+                    raise CatalogInvalid(f"unknown policy slot {slot!r}")
+                if not (isinstance(candidates, list) and candidates and all(isinstance(c, str) for c in candidates)):
+                    raise CatalogInvalid(f"choices.{group}.{name}.{slot} needs candidate profile IDs")
+    covered = set()
+    for group in CHOICE_GROUPS:
+        for option in choices[group]["options"].values():
+            covered |= set(option["slots"])
+    missing_slots = set(ap.PROFILE_KEYS) - covered
+    if missing_slots:
+        raise CatalogInvalid(f"catalog does not cover policy slots {sorted(missing_slots)}")
+    return data
+
+
+def builtin_catalog() -> dict[str, Any]:
+    return validate_catalog(json.loads(BUILTIN_PATH.read_text(encoding="utf-8")))
+
+
+def downloaded_catalog() -> dict[str, Any] | None:
+    data = product_home.read_json(product_home.home() / DOWNLOADED_NAME)
+    if data is None:
+        return None
+    try:
+        return validate_catalog(data)
+    except CatalogInvalid:
+        return None
+
+
+def effective_catalog() -> dict[str, Any]:
+    builtin = builtin_catalog()
+    downloaded = downloaded_catalog()
+    if downloaded and _version_key(downloaded["catalog_version"]) > _version_key(builtin["catalog_version"]):
+        return {**downloaded, "_source": "DOWNLOADED"}
+    return {**builtin, "_source": "BUILTIN"}
+
+
+def update_catalog(url: str | None = None, *, timeout: float = 8.0,
+                   fetch: Any = None) -> dict[str, Any]:
+    """Fetch the catalog from GitHub. Never raises for network trouble.
+
+    `fetch(url, timeout) -> bytes` is injectable for tests. Only a valid,
+    strictly newer catalog is stored; a stored update only affects NEW runs.
+    """
+    builtin = builtin_catalog()
+    current = effective_catalog()
+    url = url or builtin.get("update_url")
+    try:
+        if fetch is None:
+            context = ssl.create_default_context()
+            request = urllib.request.Request(url, headers={"User-Agent": "AAW-Product/0.1"})
+            with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
+                raw = response.read(2_000_000)
+        else:
+            raw = fetch(url, timeout)
+        candidate = validate_catalog(json.loads(raw.decode("utf-8")))
+    except CatalogInvalid as exc:
+        return {"status": "REJECTED", "detail": f"pobrany katalog jest nieprawidłowy: {exc}",
+                "catalog_version": current["catalog_version"], "source": current["_source"]}
+    except Exception as exc:  # offline, DNS, TLS, HTTP error, bad JSON: never blocks AAW
+        return {"status": "OFFLINE", "detail": f"aktualizacja niedostępna ({type(exc).__name__}); "
+                f"używam katalogu {current['catalog_version']}",
+                "catalog_version": current["catalog_version"], "source": current["_source"]}
+    if _version_key(candidate["catalog_version"]) <= _version_key(current["catalog_version"]):
+        return {"status": "UP_TO_DATE", "detail": "katalog jest aktualny",
+                "catalog_version": current["catalog_version"], "source": current["_source"]}
+    import datetime as dt
+    stored = {**candidate, "_fetched_from": url,
+              "_fetched_at": dt.datetime.now().astimezone().isoformat(timespec="seconds")}
+    product_home.write_json(product_home.home() / DOWNLOADED_NAME, stored)
+    return {"status": "UPDATED", "detail": "nowy katalog zapisany; dotyczy tylko nowych zadań",
+            "catalog_version": candidate["catalog_version"], "source": "DOWNLOADED"}
+
+
+# ── resolution ───────────────────────────────────────────────────────────────
+
+def _profiles() -> dict[str, dict[str, Any]]:
+    try:
+        return wr.load_implementer_profiles()
+    except wr.WorkflowStop:
+        return {}
+
+
+def profile_display(profile_id: str | None, profiles: Mapping[str, Mapping[str, Any]] | None = None) -> str:
+    if not profile_id:
+        return "—"
+    row = (profiles or _profiles()).get(profile_id) or {}
+    return str(row.get("display_name") or profile_id)
+
+
+def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: Mapping[str, Any] | None = None,
+                    overrides: Mapping[str, str] | None = None,
+                    detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Map the three simple levels onto every V0.3 policy slot for one new run."""
+    catalog = catalog or effective_catalog()
+    profiles = _profiles()
+    overrides = dict(overrides or {})
+    picked: dict[str, str] = {}
+    for group in CHOICE_GROUPS:
+        value = choices.get(group) or catalog["choices"][group]["default"]
+        if value not in catalog["choices"][group]["options"]:
+            raise ValueError(f"unknown {group} level {value!r}")
+        picked[group] = value
+    slot_candidates: dict[str, list[str]] = {}
+    for group in CHOICE_GROUPS:
+        slot_candidates.update(catalog["choices"][group]["options"][picked[group]]["slots"])
+    for group in CHOICE_GROUPS:  # a slot the chosen option does not name falls back to the group default
+        default = catalog["choices"][group]["options"][catalog["choices"][group]["default"]]["slots"]
+        for slot, candidates in default.items():
+            slot_candidates.setdefault(slot, candidates)
+    required = set(catalog.get("required_slots") or [])
+    meta = {row["profile"]: row for row in catalog.get("profiles", [])}
+    versions = {p["harness"]: p.get("version") for p in (detection or {}).get("providers", [])}
+
+    def runtime(profile_id: str) -> str | None:
+        return (profiles.get(profile_id) or {}).get("runtime_model_id")
+
+    slots: dict[str, dict[str, Any]] = {}
+    blockers: list[str] = []
+    warnings: list[str] = []
+    order = list(ap.PROFILE_KEYS)
+    implementer_model = None
+    for slot in order:
+        candidates = list(slot_candidates[slot])
+        recommended = candidates[0]
+        status, chosen, reason = None, None, None
+        if slot in overrides:
+            chosen, status = overrides[slot], "OVERRIDE"
+            if chosen not in profiles:
+                blockers.append(f"{SLOT_LABELS[slot]}: nieznany profil {chosen}")
+            elif chosen not in runnable:
+                (blockers if slot in required else warnings).append(
+                    f"{SLOT_LABELS[slot]}: wybrany ręcznie profil {chosen} nie jest teraz dostępny")
+        else:
+            usable = [c for c in candidates if c in runnable]
+            if slot in ("primary_reviewer", "final_review_default") and implementer_model:
+                independent = [c for c in usable if runtime(c) != implementer_model]
+                usable = independent or usable
+            if usable:
+                chosen = usable[0]
+                status = "RECOMMENDED" if chosen == recommended else "ALTERNATIVE"
+                if status == "ALTERNATIVE":
+                    reason = f"{recommended} niedostępny na tym komputerze"
+            else:
+                chosen, status = recommended, "UNAVAILABLE"
+                if slot in required:
+                    blockers.append(f"{SLOT_LABELS[slot]}: żaden rekomendowany profil nie jest dostępny "
+                                    f"({', '.join(candidates)})")
+                else:
+                    warnings.append(f"{SLOT_LABELS[slot]}: profil {recommended} niedostępny — jeśli ta "
+                                    "eskalacja będzie potrzebna, AAW zatrzyma się i poprosi o decyzję")
+        row_meta = meta.get(chosen) or {}
+        minimum = row_meta.get("minimum_cli_version")
+        harness = (profiles.get(chosen) or {}).get("harness")
+        if minimum and harness in versions:
+            from product_providers import compare_versions
+            if compare_versions(versions[harness], minimum) is False:
+                warnings.append(f"{SLOT_LABELS[slot]}: {chosen} wymaga {harness} CLI ≥ {minimum} "
+                                f"(wykryto {versions[harness]})")
+        slots[slot] = {"slot": slot, "label": SLOT_LABELS[slot], "profile_id": chosen,
+                       "display": profile_display(chosen, profiles), "recommended_profile_id": recommended,
+                       "status": status, "reason": reason, "required": slot in required,
+                       "harness": harness, "runtime_model_id": runtime(chosen),
+                       "effort": (profiles.get(chosen) or {}).get("effort"),
+                       "strength_class": row_meta.get("strength_class"),
+                       "speed_class": row_meta.get("speed_class"), "cost_class": row_meta.get("cost_class")}
+        if slot == "implementer_default":
+            implementer_model = runtime(chosen)
+    alternatives = [s for s in slots.values() if s["status"] == "ALTERNATIVE"]
+    if alternatives:
+        warnings.insert(0, f"{len(alternatives)} z {len(slots)} etapów użyje jawnej alternatywy, bo rekomendowany "
+                        "profil jest niedostępny na tym komputerze (szczegóły w tabeli poniżej).")
+    roles = {role: {"profile_id": slots[slot]["profile_id"]} for role, slot in ROLE_SLOTS.items()}
+    same_model = runtime(roles["reviewer"]["profile_id"]) == runtime(roles["implementer"]["profile_id"])
+    if same_model:
+        warnings.append("Review używa tego samego modelu co implementacja (świeży kontekst, słabsza niezależność).")
+    config = {"contract": ap.POLICY_VERSION, "preset_id": ap.PRESET_ID,
+              "purpose": "AAW Product run binding resolved from simple levels; frozen by the engine at start.",
+              "allow_same_model_fresh_context": same_model, "roles": roles,
+              "policy_profiles": {slot: slots[slot]["profile_id"] for slot in ap.PROFILE_KEYS}}
+    validated = None
+    try:
+        validated = ac.validate_roles(config, profiles)
+    except ac.AutonomyError as exc:
+        blockers.append(f"konfiguracja ról odrzucona przez silnik: {exc}")
+    return {"choices": picked, "catalog_version": catalog["catalog_version"],
+            "catalog_source": catalog.get("_source", "BUILTIN"), "slots": slots,
+            "roles_config": config, "roles_valid": validated is not None,
+            "blockers": blockers, "warnings": warnings}
+
+
+def choice_options(catalog: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    catalog = catalog or effective_catalog()
+    return {group: {"label": catalog["choices"][group].get("label", group),
+                    "default": catalog["choices"][group]["default"],
+                    "options": [{"value": key, "label": opt.get("label", key), "description": opt.get("description")}
+                                for key, opt in catalog["choices"][group]["options"].items()]}
+            for group in CHOICE_GROUPS}

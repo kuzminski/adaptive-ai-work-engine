@@ -23,9 +23,21 @@ operator-led workflows, not yet for unattended production automation.
 | Descriptive analytics | PARTIAL |
 | ORCA supervision | EXPERIMENTAL |
 | Local Qwen preprocessing | EXPERIMENTAL |
-| Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_2.md` |
+| Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
+| Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | MVP — see `AAW_PRODUCT_MVP_V0_1.md` |
 | Dynamic planner | PLANNED |
 | Repair merge/rejoin | PLANNED |
+
+## Product app (MVP V0.1)
+
+For a normal user: download `AAW-Windows-x64.zip` (built by
+`.github/workflows/aaw-portable.yml`), unzip, run `AAW\AAW.exe`. The app opens
+in the browser on 127.0.0.1, detects the locally installed AI CLIs (Claude CLI,
+Codex CLI — each needs its own active login; AAW stores no passwords), and
+lets you describe a goal, a first iteration and a broad direction, pick three
+simple levels and press START. You see where the run is, can STOP SAFELY and
+RESUME, and get a Human Gate at the end. No automatic merge or push. From a
+source checkout: `python AAW.py`. Details: `AAW_PRODUCT_MVP_V0_1.md`.
 
 ## Architecture
 

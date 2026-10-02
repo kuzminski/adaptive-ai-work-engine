@@ -38,6 +38,7 @@ from typing import Any, Mapping, Sequence
 import workflow_runner as wr
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
+from autonomy_contract import REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
@@ -157,7 +158,9 @@ for _schema in OUTPUT_SCHEMAS.values():
 ROLE_INSTRUCTIONS: dict[str, str] = {
     "plan": ("You are the AAW PLANNER. On the first invocation, act as INITIAL_ARCHITECT: return a directional_charter "
              "that exactly preserves the frozen MANDATE objective, roadmap item IDs/titles/dependencies, acceptance "
-             "criteria, boundaries, and all required Human Gate conditions. Include risk_guidance rows only where a "
+             "criteria, boundaries, and all required Human Gate conditions: copy every field of "
+             "DIRECTIONAL_CHARTER_TEMPLATE verbatim; human_gate_conditions must contain every code in "
+             "REQUIRED_HUMAN_GATE_CONDITIONS exactly as written (you may append others). Include risk_guidance rows only where a "
              "roadmap item warrants a higher implementation or final-review floor, with an evidence-based reason; use "
              "an empty array when no item warrants escalation. Do not add roadmap work. On later invocations, "
              "omit directional_charter and echo its directional_charter_hash; select only the next bounded iteration "
@@ -256,7 +259,10 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
               "SOURCE_REFERENCES": {"execution_descriptor": str(execution["descriptor_path"]),
                                     "mandate_hash": mandate["mandate_hash"]}}
     if name == "plan":
-        return {**common, "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
+        initial = ctx.get("planning_stage") == "INITIAL_ARCHITECT"
+        architect = {"DIRECTIONAL_CHARTER_TEMPLATE": directional_charter_template(mandate),
+                     "REQUIRED_HUMAN_GATE_CONDITIONS": list(REQUIRED_CHARTER_GATE_CONDITIONS)} if initial else {}
+        return {**common, **architect, "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
                 "PLANNING_STAGE": ctx.get("planning_stage"),
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),

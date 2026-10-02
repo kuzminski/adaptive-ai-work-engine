@@ -316,6 +316,35 @@ def autonomous_remaining_items(roadmap: Mapping[str, Mapping[str, Any]]) -> list
             if roadmap[item_id].get("dependency_state") not in {"HUMAN_REQUIRED", "BLOCKED_BY_SKIPPED_DEPENDENCY"}]
 
 
+# Human Gate conditions every directional charter must carry verbatim.
+REQUIRED_CHARTER_GATE_CONDITIONS = ("ROADMAP_EXHAUSTED", "SCOPE_CHANGE", "ROLE_PROFILE_UNAVAILABLE",
+                                    "PROMOTION_REQUIRES_HUMAN")
+
+
+def directional_charter_template(mandate: Mapping[str, Any]) -> dict[str, Any]:
+    """The charter fields that are verbatim copies of the frozen mandate.
+
+    Handed to the initial architect so it does not have to re-derive them;
+    `validate_directional_charter` remains the authority and still checks
+    every field. The architect contributes `risk_guidance` (and may append
+    further Human Gate conditions).
+    """
+    source = mandate["roadmap_mandate"]
+    contract = mandate["iteration_contract"]
+    return {"mandate_hash": mandate["mandate_hash"], "objective": source["objective"],
+            "roadmap_items": [{"item_id": item["item_id"], "title": item["title"],
+                               "depends_on": list(item.get("depends_on", [])),
+                               "human_required": item.get("human_required") is True}
+                              for item in source["items"]],
+            "acceptance_criteria": list(contract["acceptance_criteria"]),
+            "boundaries": {"scope": list(contract.get("scope", [])),
+                           "constraints": list(contract.get("constraints", [])),
+                           "forbidden_changes": list(contract.get("forbidden_changes", [])),
+                           "allowed_areas": source["autonomy_bounds"].get("allowed_areas"),
+                           "forbidden_areas": list(source["autonomy_bounds"].get("forbidden_areas", []))},
+            "human_gate_conditions": list(REQUIRED_CHARTER_GATE_CONDITIONS)}
+
+
 def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the one-time architect output against the immutable human mandate."""
     _require(isinstance(value, dict), "initial architect must return a directional_charter object")
@@ -362,7 +391,7 @@ def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict
     }
     _require(value.get("boundaries") == expected_boundaries,
              "directional charter changed or omitted human boundaries")
-    required_gates = {"ROADMAP_EXHAUSTED", "SCOPE_CHANGE", "ROLE_PROFILE_UNAVAILABLE", "PROMOTION_REQUIRES_HUMAN"}
+    required_gates = set(REQUIRED_CHARTER_GATE_CONDITIONS)
     gates = value.get("human_gate_conditions")
     _require(isinstance(gates, list) and required_gates.issubset(set(gates)),
              "directional charter removed a mandatory Human Gate condition")

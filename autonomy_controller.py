@@ -45,6 +45,7 @@ import autonomy_policy as ap
 import autonomy_run_lock as rl
 import execution_contract as xc
 import process_observation
+import run_cancellation
 from aaw_paths import AAW_ROOT, STATS_ROOT
 from execution_ledger import ExecutionLedger, LedgerError, LifecycleRecorder
 
@@ -542,19 +543,53 @@ class AutonomyController:
             while self.state["status"] == ac.RUNNING:
                 phase = self.state["phase"]
                 self.lock.assert_held()
+                if self._pause_requested(phase):
+                    break
                 try:
                     self.env.assert_safe()
                 except ac.GitPolicyViolation as exc:
                     self._escalate(ac.E_GIT, str(exc), self._iteration_id())
                     break
                 self.state["workspace_checkpoint"] = self.env.checkpoint()  # persisted with the phase's next save
-                handlers[phase]()
+                try:
+                    handlers[phase]()
+                except run_cancellation.RunCancelled as exc:
+                    # Cooperative stop inside a phase: the call was terminated
+                    # or never spawned. Status stays RUNNING and `in_flight`
+                    # names the interrupted execution for `resume`.
+                    flight = self.state.get("in_flight") or {}
+                    self.journal.append("RUN_CANCELLED_IN_FLIGHT", iteration_id=flight.get("iteration_id"),
+                                        phase=phase, payload={
+                                            "reason": exc.reason, "source": exc.source,
+                                            "at_boundary": exc.at_boundary,
+                                            "execution_id": flight.get("execution_id"),
+                                            "executor": flight.get("executor"),
+                                            "side_effect_phase": flight.get("phase") in ac.SIDE_EFFECT_PHASES})
+                    self._save()
+                    break
         finally:
             # Normal end, escalation or a crash in this process: this controller
             # stops controlling. A crash leaves `in_flight` for `resume`; a
             # killed process leaves the lock for explicit reconciliation.
             self.lock.release()
         return self.state
+
+    def _pause_requested(self, phase: str) -> bool:
+        """Honour an ambient stop request at a phase boundary (`run_cancellation`).
+
+        Nothing is in flight here, so stopping is clean: the next phase is
+        persisted unchanged and `resume` continues from it. No token in scope
+        (the default) means this never fires.
+        """
+        try:
+            run_cancellation.check(f"AUTONOMY_PHASE_BOUNDARY:{phase}")
+        except run_cancellation.RunCancelled as exc:
+            self.journal.append("RUN_PAUSED", iteration_id=self._iteration_id(), phase=phase, payload={
+                                    "reason": exc.reason, "source": exc.source, "at_boundary": exc.at_boundary,
+                                    "resume_phase": phase, "in_flight": None})
+            self._save()
+            return True
+        return False
 
     # small helpers -----------------------------------------------------------
 
@@ -780,6 +815,16 @@ class AutonomyController:
         try:
             with process_observation.observation_scope(recorder.observe_start):
                 result = executor(ctx)
+        except run_cancellation.RunCancelled as exc:
+            # A stop request terminated this call (or refused its spawn). The
+            # in-flight marker stays: `resume` decides from it exactly as after
+            # a crash (read-only phase -> replay under a new execution_id;
+            # EXECUTE/REPAIR -> INTERRUPTED_IN_FLIGHT, never a blind replay).
+            recorder.close(close_reason="CANCELLED",
+                           effect_certainty="UNKNOWN" if recorder.started else "CONFIRMED",
+                           observation_source="RUNNER_EXCEPTION" if recorder.started else "PRE_DISPATCH_FAILURE",
+                           outcome="CANCELLED_BY_REQUEST", detail=f"{exc.reason} at {exc.at_boundary}")
+            raise
         except ExecutorFailure as exc:
             recorder.close(close_reason="FAILED", effect_certainty="CONFIRMED" if not recorder.started else "UNKNOWN",
                            observation_source="RUNNER_EXCEPTION" if recorder.started else
