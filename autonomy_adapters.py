@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW AUTONOMOUS ITERATIONS V0.2 — real role executors.
+"""AAW AUTONOMOUS ITERATIONS V0.3 — real role executors.
 
 Binds the controller's six role operations to the existing DIRECT_CLI_CONTROL
 provider path. Resolution is pure configuration:
@@ -40,13 +40,13 @@ from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
 from model_catalog import CatalogError, validate_model_effort
 
-ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.2"
+ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
 SUPPORTED_HARNESSES = ("codex", "claude")
 # Provider-session variables a parent Claude Code session exports. Inherited by
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
 INHERITED_SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID")
-READ_ONLY_EXECUTORS = frozenset({"plan", "review", "final_review"})
+READ_ONLY_EXECUTORS = frozenset({"plan", "self_verify", "prepare_packet", "review", "final_review"})
 MAX_PROMPT_DIFF = 120_000
 
 _CHECK = {"type": "object", "additionalProperties": False, "required": ["name", "status", "summary"],
@@ -72,7 +72,34 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "skipped_items": {"type": "array", "items": {
                      "type": "object", "additionalProperties": False, "required": ["item_id", "reason"],
                      "properties": {"item_id": {"type": "string"}, "reason": {"type": "string"}}}},
-                 "reason": {"type": ["string", "null"]}}},
+                 "reason": {"type": ["string", "null"]},
+                 "directional_charter": {"type": ["object", "null"], "additionalProperties": False,
+                    "required": ["mandate_hash", "objective", "roadmap_items", "acceptance_criteria", "boundaries",
+                                 "human_gate_conditions", "risk_guidance"],
+                    "properties": {
+                        "mandate_hash": {"type": "string"}, "objective": {"type": "string"},
+                        "roadmap_items": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                            "required": ["item_id", "title", "depends_on", "human_required"],
+                            "properties": {"item_id": {"type": "string"}, "title": {"type": "string"},
+                                           "depends_on": _STRS, "human_required": {"type": "boolean"}}}},
+                        "acceptance_criteria": _STRS,
+                        "boundaries": {"type": "object", "additionalProperties": False,
+                            "required": ["scope", "constraints", "forbidden_changes", "allowed_areas", "forbidden_areas"],
+                            "properties": {"scope": _STRS, "constraints": _STRS, "forbidden_changes": _STRS,
+                                           "allowed_areas": {"type": ["array", "null"], "items": {"type": "string"}},
+                                           "forbidden_areas": _STRS}},
+                        "human_gate_conditions": _STRS,
+                        "risk_guidance": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                            "required": ["item_id", "implementation_floor", "final_review_floor", "reason"],
+                            "properties": {"item_id": {"type": "string"},
+                                "implementation_floor": {"type": "string", "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
+                                "final_review_floor": {"type": "string", "enum": ["DEFAULT", "HARD", "CRITICAL"]},
+                                "reason": {"type": "string"}}}}}},
+                 "directional_charter_hash": {"type": ["string", "null"]},
+                 "implementation_complexity": {"type": "string", "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
+                 "complexity_evidence": _STRS,
+                 "semantic_verification_required": {"type": "boolean"},
+                 "semantic_verification_reason": {"type": ["string", "null"]}}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
                 "properties": {"summary": {"type": "string"}, "changed_files": _STRS,
@@ -90,8 +117,17 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                        "properties": {"finding_key": {"type": ["string", "null"]},
                                       "severity": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
                                       "summary": {"type": "string"}, "file": {"type": ["string", "null"]},
-                                      "blocking": {"type": "boolean"},
-                                      "evidence_ref": {"type": ["string", "null"]}}}}}},
+                                      "blocking": {"type": "boolean"}, "evidence_ref": {"type": ["string", "null"]},
+                                      "finding_code": {"type": ["string", "null"], "enum": [None, "IMPLEMENTATION_CAPABILITY_MISMATCH"]}}}},
+                   "raw_evidence_requests": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                       "required": ["source_ref", "reason"],
+                       "properties": {"source_ref": {"type": "string"}, "reason": {"type": "string"}}}},
+                   "uncertainties": _STRS}},
+    "prepare_packet": {"type": "object", "additionalProperties": False,
+                       "required": ["summary", "implementation_claims", "check_refs", "finding_refs", "changed_files", "source_refs"],
+                       "properties": {"summary": {"type": "string"}, "implementation_claims": _STRS,
+                                      "check_refs": _STRS, "finding_refs": _STRS, "changed_files": _STRS,
+                                      "source_refs": _STRS}},
     "repair": {"type": "object", "additionalProperties": False,
                "required": ["summary", "addressed_findings", "changed_files", "checks", "uncertainties"],
                "properties": {"summary": {"type": "string"}, "addressed_findings": _STRS, "changed_files": _STRS,
@@ -99,25 +135,57 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 OUTPUT_SCHEMAS["final_review"] = OUTPUT_SCHEMAS["review"]
 
+
+def _require_all_schema_properties(node: Any) -> None:
+    """Codex structured outputs require every declared object key in required."""
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            required = list(node.get("required") or [])
+            required.extend(key for key in properties if key not in required)
+            node["required"] = required
+        for value in node.values():
+            _require_all_schema_properties(value)
+    elif isinstance(node, list):
+        for value in node:
+            _require_all_schema_properties(value)
+
+
+for _schema in OUTPUT_SCHEMAS.values():
+    _require_all_schema_properties(_schema)
+
 ROLE_INSTRUCTIONS: dict[str, str] = {
-    "plan": ("You are the AAW PLANNER. Decide the single next iteration inside the frozen human MANDATE, or that "
-             "no further justified action remains (every pending roadmap item skipped with a reason), or ESCALATE. "
-             "You choose how and in what order, never what for. Echo MANDATE.mandate_hash exactly. Iteration 1 must "
-             "carry all of ITERATION_CONTRACT.acceptance_criteria verbatim. roadmap_refs must be PENDING items whose "
-             "dependencies are met. decisions[].kind must be one of: IMPLEMENTATION_STRUCTURE, REFACTORING, "
-             "LOCAL_TECHNICAL, TESTS, INTERNAL_ARCHITECTURE, REORDER_ROADMAP, SPLIT_STAGE, MERGE_STAGES, SKIP_STAGE, "
-             "REPLACE_STAGE (anything else is escalated). Do not modify any file."),
+    "plan": ("You are the AAW PLANNER. On the first invocation, act as INITIAL_ARCHITECT: return a directional_charter "
+             "that exactly preserves the frozen MANDATE objective, roadmap item IDs/titles/dependencies, acceptance "
+             "criteria, boundaries, and all required Human Gate conditions. Include risk_guidance rows only where a "
+             "roadmap item warrants a higher implementation or final-review floor, with an evidence-based reason; use "
+             "an empty array when no item warrants escalation. Do not add roadmap work. On later invocations, "
+             "omit directional_charter and echo its directional_charter_hash; select only the next bounded iteration "
+             "from that frozen charter. Decide one iteration, no further justified action, or ESCALATE. Echo "
+             "MANDATE.mandate_hash exactly. Iteration 1 carries all human acceptance criteria verbatim. roadmap_refs "
+             "must be pending items with dependencies met. Set implementation_complexity to NORMAL, HARDER, or "
+             "SIGNIFICANTLY_DIFFICULT and cite concrete complexity_evidence. Never use that label alone to request Sonnet. "
+             "Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
-                "your changes uncommitted. Run the checks you can and report each honestly (FAIL is a valid "
+                "your changes uncommitted. Do not run Git commands: the controller owns and verifies Git boundaries. "
+                "Run the acceptance checks you can and report each honestly (FAIL is a valid "
                 "status). Report deviations from the plan and known limitations (uncertainties)."),
     "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
-                    "REQUIRED_EVIDENCE by reading code and running checks. You are READ-ONLY: do not create, edit or "
+                    "REQUIRED_EVIDENCE only where semantic verification is needed; run no mechanical checks that are "
+                    "already recorded. Do not run Git commands; the controller verifies Git boundaries. "
+                    "You are READ-ONLY: do not create, edit or "
                     "delete files (the controller compares the diff before and after you). Report each check."),
-    "review": ("You are an independent AAW REVIEWER with a fresh context. PACKET is a map, not the territory: "
-               "verify against RAW.diff (also at RAW.diff_path) and the repository. Return PASS only if the "
-               "acceptance criteria are met and nothing blocking remains; REPAIR_REQUIRED with concrete findings; "
-               "ESCALATE when the work cannot be judged inside the mandate. Do not modify any file."),
+    "prepare_packet": ("You are the AAW REVIEW-PRETREATMENT, not a reviewer. Condense and organize only the supplied evidence "
+                       "into the requested summary fields. Preserve every failure, warning, blocking finding, and source "
+                       "reference. Do not issue PASS/FAIL, assess correctness, hide evidence, or infer conclusions."),
+    "review": ("You are an independent AAW REVIEWER with a fresh context. The compact PACKET and "
+               "RAW_EVIDENCE_MANIFEST are supplied first; raw evidence is not included by default. If an evident "
+               "ambiguity changes interpretation, request specific source_ref values with a concise reason in "
+               "raw_evidence_requests and return ESCALATE pending the controller's targeted retrieval. List any "
+               "remaining substantive uncertainty in uncertainties. Do not run Git commands; review the supplied "
+               "diff/source evidence and use targeted retrieval when needed. Otherwise "
+               "return PASS, REPAIR_REQUIRED, or ESCALATE with evidence references. Do not modify any file."),
     "repair": ("You are the AAW REPAIRER. Address only FINDINGS, inside EXACT_ALLOWED_REPAIR_SCOPE. Do not expand "
                "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
                "finding keys you addressed and the checks you ran."),
@@ -184,6 +252,9 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                                     "mandate_hash": mandate["mandate_hash"]}}
     if name == "plan":
         return {**common, "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
+                "PLANNING_STAGE": ctx.get("planning_stage"),
+                "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
+                "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
     if name in ("execute", "repair", "self_verify"):
@@ -201,11 +272,21 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                             "findings": [f.get("finding_key") for f in ctx["findings"]],
                             "rule": "Only changes directly required by FINDINGS; no new goal, no new feature."}})
         return out
-    # review / final_review: fresh reviewer, packet + territory
+    if name == "prepare_packet":
+        return {**common, "REVIEW_KIND": "PRETREATMENT", "PACKET": ctx["packet"],
+                "ROLE_RULE": "organize evidence only; do not assess correctness or emit a verdict"}
+    # Review starts with the compact packet and source manifest. The controller
+    # adds only specifically requested, hash-verified raw sources on a second call.
     raw = dict(ctx["raw"])
-    raw["diff"] = _bounded(raw.get("diff"))
     return {**common, "REVIEW_KIND": ctx["review_kind"], "FROZEN_MANDATE": mandate,
-            "PLAN": ctx["iteration"]["plan"], "PACKET": ctx["packet"], "RAW": raw}
+            "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
+            "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
+            "PLAN": ctx["iteration"]["plan"], "PACKET": ctx["packet"],
+            "RAW_METADATA": {key: raw.get(key) for key in
+                             ("diff_sha256", "diff_path", "changed_files", "head", "base_head", "commits")},
+            "RAW_EVIDENCE_MANIFEST": raw.get("manifest", []),
+            "PREVIOUS_UNRESOLVED_FINDINGS": raw.get("previous_findings", []),
+            "RAW_EVIDENCE": ctx.get("raw_evidence_results", [])}
 
 
 # ── the executor ────────────────────────────────────────────────────────────
@@ -333,4 +414,4 @@ def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30) -> dict[
     """The production executor set for `AutonomyController` (no `prepare_packet`:
     the deterministic packet is used as-is)."""
     return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns)
-            for name in ("plan", "execute", "self_verify", "review", "repair", "final_review")}
+            for name in ("plan", "execute", "self_verify", "prepare_packet", "review", "repair", "final_review")}

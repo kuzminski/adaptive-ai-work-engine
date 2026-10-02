@@ -64,6 +64,9 @@ class Harness:
         self.stats = tmp_path / "stats"
         self.mandate = mandate or mandate_fixture()
         self.roles = roles or ac.load_roles(ROOT / "AUTONOMY_ROLES.json", ROOT / "IMPLEMENTER_PROFILES.json")
+        # V0.1/V0.2 lifecycle tests keep exercising their historical role
+        # bindings; V0.3 policy behavior has its own focused test module.
+        self.roles.pop("policy_profiles", None)
         self.ctxs = {}
 
     def script(self, name, *steps):
@@ -172,7 +175,8 @@ def test_3_and_4_repair_required_goes_to_repair_then_pass_resumes_roadmap_decisi
     c = h.controller()
     state = c.run()
     first = state["iterations"][0]
-    assert h.calls[:8] == ["plan", "execute", "self_verify", "review", "final_review", "repair", "final_review", "plan"]
+    assert h.calls[:10] == ["plan", "execute", "self_verify", "review", "final_review", "repair",
+                           "self_verify", "review", "final_review", "plan"]
     assert first["repair_attempts"] == 1 and first["outcome"] == "PASS"
     assert first["repairs"][0]["addresses"] == ["F1"]
     assert [e["payload"]["verdict"] for e in events(c, "REVIEW_VERDICT")][:3] == ["PASS", "REPAIR_REQUIRED", "PASS"]
@@ -185,8 +189,8 @@ def test_review_findings_route_through_repair_to_final_review(tmp_path):
                             "findings": [{"finding_key": "R1", "severity": "MEDIUM", "blocking": True, "summary": "x"}]}]
     h.script("repair", {"summary": "fixed R1", "checks": ok_checks()})
     state = h.controller().run()
-    assert h.calls[:6] == ["plan", "execute", "self_verify", "review", "repair", "final_review"]
-    assert state["iterations"][0]["outcome"] == "PASS"
+    assert h.calls[:7] == ["plan", "execute", "self_verify", "review", "repair", "self_verify", "review"]
+    assert state["escalation"]["code"] == ac.E_NO_PROGRESS
 
 
 def test_5_final_review_escalate_stops_autonomy_and_is_not_promotable(tmp_path):
@@ -384,7 +388,7 @@ def test_7_the_state_machine_only_reaches_promote_through_human_approval():
 
 def test_7_agents_cannot_approve_and_the_wrong_candidate_cannot_be_approved(tmp_path):
     h, cand = held_run(tmp_path)
-    for who in ("planner", "OPUS_HIGH", "gpt-5.6-sol", "implementer"):
+    for who in ("planner", "OPUS_5_5_HIGH", "gpt-5.6-sol", "implementer"):
         with pytest.raises(ac.AutonomyError, match="human identity"):
             ctl.approve_promotion("RUN1", approver=who, candidate_id=cand, stats_root=h.stats)
     with pytest.raises(ac.AutonomyError, match="HUMAN channel"):
@@ -560,7 +564,7 @@ def test_audit_answers_who_what_why_and_when_it_stopped(tmp_path):
     esc = events(c, "ESCALATED")[0]["payload"]
     assert esc["code"] == ac.E_DECISION
     frozen = events(c, "MANDATE_FROZEN")[0]["payload"]["roles"]
-    assert frozen["planner"]["profile_id"] == "OPUS_HIGH" and frozen["reviewer"]["review_independence"] == "DIFFERENT_MODEL"
+    assert frozen["planner"]["profile_id"] == "OPUS_5_5_HIGH" and frozen["reviewer"]["review_independence"] == "DIFFERENT_MODEL"
     seqs = [e["sequence"] for e in c.journal.read()]
     assert seqs == sorted(seqs) == list(range(1, len(seqs) + 1))
 
@@ -571,11 +575,12 @@ def test_14_reviewer_receives_the_real_diff_alongside_the_packet(tmp_path):
     h = Harness(tmp_path).defaults().script("plan", plan(["A"]), end_plan(["B", "C"]))
     h.controller().run()
     ctx = h.ctxs["review"][0]
-    assert ctx["raw"]["diff"] == h.env.diff_text and ctx["raw"]["head"] == "h1"
+    assert "diff" not in ctx["raw"] and ctx["raw"]["head"] == "h1"
+    assert Path(ctx["raw"]["diff_path"]).read_text(encoding="utf-8") == h.env.diff_text
     assert ctx["packet"]["authoritative"] is False and ctx["packet"]["access"]["source_of_truth"] == "REPOSITORY_STATE"
     assert ctx["packet"]["access"]["diff_sha256"] == ctx["raw"]["diff_sha256"]
     assert {"TASK", "PLAN", "IMPLEMENTATION", "EVIDENCE", "RISKS", "REVIEW_TARGETS"} <= set(ctx["packet"])
-    assert ctx["raw"]["evidence"] and ctx["binding"]["profile_id"] == "SOL_MEDIUM"
+    assert ctx["raw"]["evidence"] and ctx["binding"]["profile_id"] == "SOL_6_1_LIGHT"
 
 
 def test_14_a_stale_packet_is_rebuilt_not_trusted(tmp_path):
@@ -611,15 +616,17 @@ def test_14_compression_cannot_drop_failures_warnings_or_deviations(tmp_path):
         packet["access"]["diff_sha256"] = "sha256:lies"
         return packet
     h.script("prepare_packet", optimistic_compressor)
-    h.controller(with_prep=True).run()
+    c = h.controller(with_prep=True)
+    c.run()
     packet = h.ctxs["review"][0]["packet"]
     texts = json.dumps(packet["RISKS"]["adverse_items"])
     for must_survive in ("DeprecationWarning: foo", "swapped library X for Y", "thread safety unproven",
                          "no mypy here", "3 warnings"):
         assert must_survive in texts
-    assert packet["integrity"]["reinjected"] and packet["authoritative"] is False
+    assert packet["authoritative"] is False
+    assert any(e["event_type"] == "REVIEW_PRETREATMENT_REJECTED" for e in c.journal.read())
     assert packet["access"]["diff_sha256"] == h.ctxs["review"][0]["raw"]["diff_sha256"]
-    assert h.ctxs["prepare_packet"][0]["binding"]["profile_id"] == "LUNA_HIGH"
+    assert h.ctxs["prepare_packet"][0]["binding"]["profile_id"] == "GPT6_LUNA_VERY_HIGH"
 
 
 def test_14_failures_survive_into_the_final_review_packet_after_repair(tmp_path):

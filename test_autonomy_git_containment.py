@@ -297,7 +297,8 @@ def test_resume_on_a_real_dirty_worktree_keeps_the_original_baseline(tmp_path):
     assert state["status"] == ac.AWAITING_HUMAN and state["hold"]["promotable"], state["escalation"]
     assert h.env.describe()["base_head"] == base  # not the post-crash HEAD
     reviewed = h.ctxs["review"][-1]["raw"]
-    assert "+++ b/b.txt" in reviewed["diff"] and "+++ b/c.txt" in reviewed["diff"]  # committed + uncommitted
+    real_diff = Path(reviewed["diff_path"]).read_text(encoding="utf-8")
+    assert "+++ b/b.txt" in real_diff and "+++ b/c.txt" in real_diff  # committed + uncommitted
     assert [c.split(" ", 1)[1] for c in reviewed["commits"]] == ["checkpoint commit"]
 
 

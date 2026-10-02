@@ -184,7 +184,8 @@ def test_reviewer_packet_carries_the_required_review_material(tmp_path):
     raw = ctx["raw"]
     assert ctx["mandate"]["mandate_hash"] and ctx["iteration"]["plan"]["goal"]
     assert raw["base_head"] == "base0" and raw["head"] == "h1" and raw["changed_files"]
-    assert Path(raw["diff_path"]).read_text(encoding="utf-8") == raw["diff"]
+    assert Path(raw["diff_path"]).read_text(encoding="utf-8") == h.env.diff_text
+    assert "diff" not in raw
     assert raw["self_verify"] and raw["implementation"]["summary"] == "implemented"
     assert raw["previous_findings"] == [] and "commits" in raw and "commits" in ctx["packet"]["access"]
     assert "history" not in ctx and "transcript" not in json.dumps(ctx["packet"])
@@ -194,6 +195,7 @@ def test_reviewer_packet_carries_the_required_review_material(tmp_path):
 
 def test_A_unavailable_planner_profile_blocks_without_substitution(tmp_path):
     roles = ac.load_roles(ROOT / "AUTONOMY_ROLES.json", ROOT / "IMPLEMENTER_PROFILES.json")
+    roles.pop("policy_profiles", None)  # retain the V0.2 role-level preflight case
     roles["planner"] = {**roles["planner"], "profile_id": "FABLE_HIGH"}  # KNOWN_BUT_UNAVAILABLE in the catalog
     h = Harness(tmp_path, roles=roles)
     executors = aa.build_direct_executors()
@@ -436,7 +438,7 @@ def held(tmp_path):
 
 def test_human_gate_wrong_approver_and_agent_roles_cannot_approve(tmp_path):
     h, cand = held(tmp_path)
-    for who in ("", "  ", "repairer", "self_verifier", "SOL_MEDIUM", "LUNA_MAX"):
+    for who in ("", "  ", "repairer", "self_verifier", "GPT6_LUNA_HIGH", "gpt-6-luna"):
         with pytest.raises(ac.AutonomyError):
             ctl.approve_promotion("RUN1", approver=who, candidate_id=cand, stats_root=h.stats)
     with pytest.raises(ac.AutonomyError, match="HUMAN channel"):
@@ -554,22 +556,29 @@ def test_real_adapter_path_records_spawn_session_and_close_per_role(tmp_path, fa
     assert state["status"] == ac.AWAITING_HUMAN and state["hold"]["promotable"], state["escalation"]
     assert (env.path / "src/export/core.py").exists()
     calls = fake_cli["calls"]()
-    assert [x["role"] for x in calls] == ["PLANNER", "IMPLEMENTER", "SELF-VERIFIER", "REVIEWER", "FINAL REVIEWER"]
+    assert [x["role"] for x in calls] == ["PLANNER", "IMPLEMENTER", "SELF-VERIFIER", "REVIEW-PRETREATMENT",
+                                           "REVIEWER", "REVIEW-PRETREATMENT", "FINAL REVIEWER"]
     assert not any(x["inherited_session_env"] for x in calls)  # parent session id did not leak
     life = el.ExecutionLedger.for_run("RUN1", tmp_path / "stats").lifecycle()
-    for e, call in zip(state["executions"], calls):
+    calls_by_execution = {call["execution_id"]: call for call in calls}
+    for e in state["executions"]:
+        call = calls_by_execution[e["execution_id"]]
         assert call["execution_id"] == e["execution_id"] and call["iteration_id"] == e["iteration_id"]
         entry = life[e["execution_id"]]
         start = entry["started"][0]["payload"]
-        assert start["start_evidence"] == "CHILD_PROCESS_SPAWNED" and start["process_id"] == call["pid"]
+        assert start["start_evidence"] == "CHILD_PROCESS_SPAWNED" and start["process_id"] > 0
+        # On Windows the .cmd shim can spawn Python as a child; the ledger
+        # observes cmd.exe while the fixture logs the inner Python PID.
+        assert call["pid"] > 0
         close = entry["closed"][0]["payload"]
         assert close["observation_source"] == "CHILD_PROCESS_EXIT" and close["exit_code"] == 0
         assert e["provider_session_id"] == call["session_id"]
         artifact = json.loads(Path(close["result_refs"][0]).read_text())
         assert artifact["recorded_by"] == aa.ADAPTER_ID and artifact["model"] == "claude-sonnet-5"
-    assert len({e["provider_session_id"] for e in state["executions"]}) == 5
-    assert "MANDATE" in calls[0]["handoff_keys"] and "RAW" in calls[3]["handoff_keys"]
-    assert "HISTORY" not in calls[3]["handoff_keys"]  # reviewers get packet + territory, not prior conversation
+    assert len({e["provider_session_id"] for e in state["executions"]}) == 7
+    assert "MANDATE" in calls[0]["handoff_keys"] and "PACKET" in calls[3]["handoff_keys"]
+    assert "RAW_EVIDENCE_MANIFEST" in calls[4]["handoff_keys"]
+    assert "HISTORY" not in calls[4]["handoff_keys"]  # reviewers get packet + territory, not prior conversation
     assert el.validate_ledger(el.ledger_path_for_run("RUN1", tmp_path / "stats"), "RUN1")["valid"]
 
 
@@ -593,17 +602,16 @@ def test_C_identical_blocking_finding_after_bounded_repair_escalates_real_adapte
                        "FINAL REVIEWER": [{"output": repair_required}],
                        "REPAIRER": [{"output": {"summary": "tried", "addressed_findings": ["F-EDGE"],
                                                 "changed_files": [], "checks": [], "uncertainties": []}}]})
-    # V0.1 semantics kept: a repair answering REVIEW and one answering FINAL_REVIEW
-    # have different origins, so the identical finding stops the loop at the
-    # second repair (no progress), or earlier at the mandate's repair limit.
+    # V0.3 requires every repair to return through self-verification and primary
+    # review; the repeated identical primary finding stops further repair.
     c, _ = real_controller(tmp_path, fake_cli, mandate_fixture(max_repair_attempts=4) | {
         "roadmap_mandate": {**mandate_fixture(max_repair_attempts=4)["roadmap_mandate"],
                             "items": [{"item_id": "A", "title": "only"}]}})
     state = c.run()
-    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and state["iterations"][0]["repair_attempts"] == 2
+    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and state["iterations"][0]["repair_attempts"] == 1
     assert not state["hold"]["promotable"]
     roles = [x["role"] for x in fake_cli["calls"]()]
-    assert roles.count("REPAIRER") == 2 and roles[-1] == "FINAL REVIEWER"
+    assert roles.count("REPAIRER") == 1 and roles[-1] == "REVIEWER"
     c2, _ = real_controller(tmp_path / "limit", fake_cli)  # max_repair_attempts=2: the budget stops it first
     assert c2.run()["escalation"]["code"] in (ac.E_NO_PROGRESS, ac.E_REPAIR_LIMIT)
 

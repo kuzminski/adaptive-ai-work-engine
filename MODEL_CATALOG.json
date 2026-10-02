@@ -17,7 +17,9 @@
       "harness": "ollama_openai_compat",
       "model_family": "Qwen3-VL 4B Instruct",
       "runtime_model_id": "qwen3-vl:4b-instruct",
-      "supported_efforts": ["local"],
+      "supported_efforts": [
+        "local"
+      ],
       "runtime_available": true,
       "runtime_available_policy": "DYNAMIC_PREFLIGHT",
       "account_available": true,
@@ -36,110 +38,202 @@
       "model_max_context": 262144,
       "v0_1_context_ceiling": 8192,
       "v0_1_default_context": 4096,
-      "capabilities": ["completion", "vision", "tools", "json_object"],
+      "capabilities": [
+        "completion",
+        "vision",
+        "tools",
+        "json_object"
+      ],
       "requires_external_runtime_running": "AnythingLLM Desktop",
       "not_frontier_equivalent": true,
-      "verified_probe": {"transport": "openai_compat", "result": "AAW_LOCAL_QWEN_DIRECT_PASS"},
+      "verified_probe": {
+        "transport": "openai_compat",
+        "result": "AAW_LOCAL_QWEN_DIRECT_PASS"
+      },
       "role_hint": "Bounded LOW: cheap classifier / JSON normalization / short summary / small delta review. Not an implementer.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "ANYTHINGLLM_MANAGED_OLLAMA"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "ANYTHINGLLM_MANAGED_OLLAMA"
+      ]
     },
     {
       "provider": "openai",
       "harness": "codex",
       "model_family": "GPT-6 Astra",
       "runtime_model_id": "gpt-6-astra",
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": false,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_ASTRA_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_ASTRA_RUNTIME_PASS"
+      },
       "minimum_cli_version": "0.153.0",
       "role_hint": "Wyjątkowo trudne planowanie / architektura / adjudication.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "OFFICIAL_OPENAI_DOCS"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "OFFICIAL_OPENAI_DOCS"
+      ]
     },
     {
       "provider": "openai",
       "harness": "codex",
       "model_family": "GPT-5.6 Sol",
       "runtime_model_id": "gpt-5.6-sol",
-      "supported_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": true,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_SOL_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_SOL_RUNTIME_PASS"
+      },
       "role_hint": "Implementacja wymagająca lokalnego planowania / review / synthesis.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "CURRENT_CODEX_CLI"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "CURRENT_CODEX_CLI"
+      ]
     },
     {
       "provider": "openai",
       "harness": "codex",
       "model_family": "GPT-5.6 Terra",
       "runtime_model_id": "gpt-5.6-terra",
-      "supported_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": true,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_TERRA_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_TERRA_RUNTIME_PASS"
+      },
       "role_hint": "Jasna implementacja.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "CURRENT_CODEX_CLI"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "CURRENT_CODEX_CLI"
+      ]
     },
     {
       "provider": "openai",
       "harness": "codex",
       "model_family": "GPT-5.6 Luna",
       "runtime_model_id": "gpt-5.6-luna",
-      "supported_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": true,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_LUNA_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_LUNA_RUNTIME_PASS"
+      },
       "role_hint": "Mechaniczne / tanie / bounded repair / delta verification.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "CURRENT_CODEX_CLI"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "CURRENT_CODEX_CLI"
+      ]
     },
     {
       "provider": "anthropic",
       "harness": "claude",
       "model_family": "Claude Sonnet 5",
       "runtime_model_id": "claude-sonnet-5",
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": true,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_SONNET_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_SONNET_RUNTIME_PASS"
+      },
       "role_hint": "Codzienna implementacja / review / alternatywny provider.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "CURRENT_CLAUDE_CLI"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "CURRENT_CLAUDE_CLI"
+      ]
     },
     {
       "provider": "anthropic",
       "harness": "claude",
       "model_family": "Claude Opus 5",
       "runtime_model_id": "claude-opus-5",
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": true,
       "account_available": true,
       "access_class": "VERIFIED_INCLUDED",
       "automatic_use_allowed": true,
       "manual_use_allowed": true,
-      "verified_probe": {"effort": "low", "result": "AAW_OPUS_RUNTIME_PASS"},
+      "verified_probe": {
+        "effort": "low",
+        "result": "AAW_OPUS_RUNTIME_PASS"
+      },
       "role_hint": "Trudne reasoning / architecture / deep review.",
-      "source_class": ["LOCAL_RUNTIME_PROBE", "CURRENT_CLAUDE_CLI"]
+      "source_class": [
+        "LOCAL_RUNTIME_PROBE",
+        "CURRENT_CLAUDE_CLI"
+      ]
     },
     {
       "provider": "anthropic",
       "harness": "claude",
       "model_family": "Claude Fable 5.1",
       "runtime_model_id": "claude-fable-5-1",
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "runtime_available": false,
       "account_available": true,
       "access_class": "VERIFIED_CREDIT_REQUIRED",
@@ -150,7 +244,56 @@
       "local_cli_version": "2.1.245",
       "reason": "Available in Claude Code, but the current Pro plan requires usage credits and the installed CLI is below 2.1.255; blocked by NO_EXTRA_PAID_USAGE.",
       "role_hint": "Bardzo ciężka agentic work; current access policy wymaga extra credits.",
-      "source_class": ["LOCAL_AUTH_STATE", "OFFICIAL_ANTHROPIC_HELP"]
+      "source_class": [
+        "LOCAL_AUTH_STATE",
+        "OFFICIAL_ANTHROPIC_HELP"
+      ]
+    },
+    {
+      "provider": "openai",
+      "harness": "codex",
+      "model_family": "GPT-6 Luna",
+      "runtime_model_id": "gpt-6-luna",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "runtime_available": true,
+      "runtime_available_policy": "DYNAMIC_PREFLIGHT",
+      "account_available": true,
+      "access_class": "VERIFIED_INCLUDED",
+      "automatic_use_allowed": true,
+      "manual_use_allowed": true,
+      "source_class": [
+        "HOST_MODEL_CATALOG",
+        "LOCAL_RUNTIME_PROBE_PENDING"
+      ]
+    },
+    {
+      "provider": "openai",
+      "harness": "codex",
+      "model_family": "GPT-6.1 Sol",
+      "runtime_model_id": "gpt-6.1-sol",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "runtime_available": true,
+      "runtime_available_policy": "DYNAMIC_PREFLIGHT",
+      "account_available": true,
+      "access_class": "VERIFIED_INCLUDED",
+      "automatic_use_allowed": true,
+      "manual_use_allowed": true,
+      "source_class": [
+        "HOST_MODEL_CATALOG",
+        "LOCAL_RUNTIME_PROBE_PENDING"
+      ]
     }
   ]
 }

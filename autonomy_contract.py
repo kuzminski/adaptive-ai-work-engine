@@ -25,12 +25,11 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-CONTRACT_ID = "AAW_AUTONOMOUS_ITERATIONS_V0.2"
-SCHEMA_VERSION = "AAW_AUTONOMY_STATE_V0.2"
-JOURNAL_SCHEMA_VERSION = "AAW_AUTONOMY_JOURNAL_V0.2"
-# V0.2 reads V0.1 state unchanged (V0.1 iteration ids and in-flight markers
-# without an execution_id stay valid; nothing is backfilled).
-READABLE_SCHEMA_VERSIONS = ("AAW_AUTONOMY_STATE_V0.1", SCHEMA_VERSION)
+CONTRACT_ID = "AAW_AUTONOMOUS_ITERATIONS_V0.3"
+SCHEMA_VERSION = "AAW_AUTONOMY_STATE_V0.3"
+JOURNAL_SCHEMA_VERSION = "AAW_AUTONOMY_JOURNAL_V0.3"
+# V0.3 keeps the V0.2 execution/ledger protocol and can read historical runs.
+READABLE_SCHEMA_VERSIONS = ("AAW_AUTONOMY_STATE_V0.1", "AAW_AUTONOMY_STATE_V0.2", SCHEMA_VERSION)
 
 # ── lifecycle ────────────────────────────────────────────────────────────────
 
@@ -58,8 +57,8 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     SELF_VERIFY: frozenset({AWAITING_REVIEW, REPAIR, AWAITING_HUMAN}),
     AWAITING_REVIEW: frozenset({REVIEW, AWAITING_HUMAN}),
     REVIEW: frozenset({REPAIR, FINAL_REVIEW, AWAITING_HUMAN}),
-    # A repair that answers a failed SELF_VERIFY re-verifies; one that answers
-    # a reviewer goes to FINAL_REVIEW (REVIEW -> REPAIR -> FINAL_REVIEW).
+    # Every repair returns through self-verification and primary review before
+    # a fresh final review; the same bounded repair/no-progress gates apply.
     REPAIR: frozenset({SELF_VERIFY, FINAL_REVIEW, AWAITING_HUMAN}),
     FINAL_REVIEW: frozenset({REPAIR, ROADMAP_CHECK, AWAITING_HUMAN}),
     ROADMAP_CHECK: frozenset({PLAN, AWAITING_HUMAN}),
@@ -191,6 +190,8 @@ def validate_mandate(data: Any) -> dict[str, Any]:
         _require(item_id not in ids, f"duplicate roadmap item_id {item_id!r}")
         ids.add(item_id)
         _require(isinstance(item.get("title"), str) and item["title"].strip(), f"{item_id}: title is required")
+        _require("human_required" not in item or type(item["human_required"]) is bool,
+                 f"{item_id}: human_required must be a boolean")
     for item in items:
         deps = item.get("depends_on", [])
         _require(isinstance(deps, list) and all(d in ids and d != item["item_id"] for d in deps),
@@ -206,6 +207,18 @@ def validate_mandate(data: Any) -> dict[str, Any]:
     _require(allowed is None or isinstance(allowed, list) and all(isinstance(x, str) and x for x in allowed),
              "autonomy_bounds.allowed_areas must be null or an array of path prefixes")
     _str_list(bounds.get("forbidden_areas", []), "autonomy_bounds.forbidden_areas")
+    _require("critical_scope" not in bounds or type(bounds["critical_scope"]) is bool,
+             "autonomy_bounds.critical_scope must be a boolean")
+    overrides = data.get("model_policy_overrides", {})
+    _require(isinstance(overrides, dict), "model_policy_overrides must be an object")
+    _require(set(overrides).issubset({"implementation"}),
+             "model_policy_overrides may only name implementation")
+    if "implementation" in overrides:
+        override = overrides["implementation"]
+        _require(isinstance(override, dict)
+                 and override.get("profile_key") == "implementer_capability_escalation"
+                 and isinstance(override.get("reason"), str) and override["reason"].strip(),
+                 "model_policy_overrides.implementation must explicitly name the escalation profile and reason")
     for key in ("priorities", "possible_directions"):
         _str_list(roadmap.get(key, []), f"roadmap_mandate.{key}")
 
@@ -257,16 +270,106 @@ PLAN_NO_FURTHER_ACTION = "NO_FURTHER_ACTION"
 PLAN_ESCALATE = "ESCALATE"
 PLAN_STATUSES = (PLAN_ITERATION, PLAN_NO_FURTHER_ACTION, PLAN_ESCALATE)
 
-R_PENDING, R_DONE, R_SKIPPED = "PENDING", "DONE", "SKIPPED"
+R_PENDING, R_DONE, R_SKIPPED, R_HUMAN_REQUIRED = "PENDING", "DONE", "SKIPPED", "HUMAN_REQUIRED"
 
 
 def initial_roadmap(mandate: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    return {i["item_id"]: {"status": R_PENDING, "iteration_id": None, "reason": None}
-            for i in mandate["roadmap_mandate"]["items"]}
+    items = mandate["roadmap_mandate"]["items"]
+    roadmap = {}
+    for item in items:
+        human_required = item.get("human_required") is True
+        roadmap[item["item_id"]] = {
+            "status": R_HUMAN_REQUIRED if human_required else R_PENDING,
+            "iteration_id": None,
+            "reason": "human-required roadmap item" if human_required else None,
+            "depends_on": list(item.get("depends_on", [])),
+            "dependency_state": "HUMAN_REQUIRED" if human_required else "READY",
+            "human_required": human_required,
+        }
+    refresh_dependency_states(roadmap)
+    return roadmap
+
+
+def refresh_dependency_states(roadmap: dict[str, dict[str, Any]]) -> None:
+    """Keep dependency readiness visible without treating missing work as done."""
+    for item in roadmap.values():
+        if item.get("status") in {R_DONE, R_SKIPPED, R_HUMAN_REQUIRED}:
+            continue
+        dependencies = [roadmap.get(dep, {}) for dep in item.get("depends_on", [])]
+        if any(dep.get("status") == R_HUMAN_REQUIRED for dep in dependencies):
+            item["dependency_state"] = "HUMAN_REQUIRED"
+        elif any(dep.get("status") == R_SKIPPED for dep in dependencies):
+            item["dependency_state"] = "BLOCKED_BY_SKIPPED_DEPENDENCY"
+        elif all(dep.get("status") == R_DONE for dep in dependencies):
+            item["dependency_state"] = "READY"
+        else:
+            item["dependency_state"] = "WAITING_FOR_DEPENDENCIES"
 
 
 def remaining_items(roadmap: Mapping[str, Mapping[str, Any]]) -> list[str]:
     return [k for k, v in roadmap.items() if v["status"] == R_PENDING]
+
+
+def autonomous_remaining_items(roadmap: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """Pending work the autonomous planner can still select under current gates."""
+    return [item_id for item_id in remaining_items(roadmap)
+            if roadmap[item_id].get("dependency_state") not in {"HUMAN_REQUIRED", "BLOCKED_BY_SKIPPED_DEPENDENCY"}]
+
+
+def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the one-time architect output against the immutable human mandate."""
+    _require(isinstance(value, dict), "initial architect must return a directional_charter object")
+    _require(mandate_hash_ok(mandate), "the frozen mandate no longer matches its hash")
+    _require(value.get("mandate_hash") == mandate["mandate_hash"],
+             "directional charter does not reference the frozen human mandate")
+    source = mandate["roadmap_mandate"]
+    expected_items = [{"item_id": item["item_id"], "title": item["title"],
+                       "depends_on": list(item.get("depends_on", [])),
+                       "human_required": item.get("human_required") is True}
+                      for item in source["items"]]
+    _require(value.get("objective") == source["objective"],
+             "directional charter changed the human roadmap objective")
+    _require(value.get("roadmap_items") == expected_items,
+             "directional charter added, removed, or changed roadmap items or dependencies")
+    item_ids = {item["item_id"] for item in expected_items}
+    risk_guidance = value.get("risk_guidance")
+    _require(isinstance(risk_guidance, list), "directional charter risk_guidance must be an array")
+    normalized_risk: list[dict[str, str]] = []
+    seen_risks: set[str] = set()
+    for row in risk_guidance:
+        _require(isinstance(row, dict) and row.get("item_id") in item_ids,
+                 "each risk_guidance row must reference a roadmap item")
+        item_id = row["item_id"]
+        _require(item_id not in seen_risks, f"duplicate risk_guidance for {item_id!r}")
+        seen_risks.add(item_id)
+        implementation_floor = row.get("implementation_floor")
+        review_floor = row.get("final_review_floor")
+        reason = row.get("reason")
+        _require(implementation_floor in {"NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"},
+                 f"{item_id}: invalid implementation_floor")
+        _require(review_floor in {"DEFAULT", "HARD", "CRITICAL"}, f"{item_id}: invalid final_review_floor")
+        _require(isinstance(reason, str) and reason.strip(), f"{item_id}: risk guidance needs a reason")
+        normalized_risk.append({"item_id": item_id, "implementation_floor": implementation_floor,
+                                "final_review_floor": review_floor, "reason": reason.strip()})
+    _require(value.get("acceptance_criteria") == mandate["iteration_contract"]["acceptance_criteria"],
+             "directional charter changed the human acceptance criteria")
+    expected_boundaries = {
+        "scope": list(mandate["iteration_contract"].get("scope", [])),
+        "constraints": list(mandate["iteration_contract"].get("constraints", [])),
+        "forbidden_changes": list(mandate["iteration_contract"].get("forbidden_changes", [])),
+        "allowed_areas": source["autonomy_bounds"].get("allowed_areas"),
+        "forbidden_areas": list(source["autonomy_bounds"].get("forbidden_areas", [])),
+    }
+    _require(value.get("boundaries") == expected_boundaries,
+             "directional charter changed or omitted human boundaries")
+    required_gates = {"ROADMAP_EXHAUSTED", "SCOPE_CHANGE", "ROLE_PROFILE_UNAVAILABLE", "PROMOTION_REQUIRES_HUMAN"}
+    gates = value.get("human_gate_conditions")
+    _require(isinstance(gates, list) and required_gates.issubset(set(gates)),
+             "directional charter removed a mandatory Human Gate condition")
+    frozen = {key: value[key] for key in ("mandate_hash", "objective", "roadmap_items", "acceptance_criteria",
+                                          "boundaries", "human_gate_conditions")}
+    frozen["risk_guidance"] = normalized_risk
+    return {**frozen, "charter_hash": canonical_hash(frozen)}
 
 
 def _area_match(path: str, areas: Sequence[str]) -> bool:
@@ -275,7 +378,8 @@ def _area_match(path: str, areas: Sequence[str]) -> bool:
 
 
 def check_plan(plan: Any, mandate: Mapping[str, Any], roadmap: Mapping[str, Mapping[str, Any]],
-               iteration_index: int, *, expected_mandate_hash: str | None = None) -> dict[str, Any]:
+               iteration_index: int, *, expected_mandate_hash: str | None = None,
+               expected_directional_charter_hash: str | None = None) -> dict[str, Any]:
     """Decide whether a planner proposal stays inside the human's mandate.
 
     Returns `{"decision": "ACCEPT"|"ESCALATE", "code", "reasons", "levels"}`.
@@ -296,9 +400,29 @@ def check_plan(plan: Any, mandate: Mapping[str, Any], roadmap: Mapping[str, Mapp
         return escalate(E_MANDATE_TAMPERED, "the frozen mandate no longer matches its hash")
     if plan.get("mandate_hash") != mandate["mandate_hash"]:
         return escalate(E_MANDATE_MISMATCH, "plan was not derived from the frozen mandate")
+    if expected_directional_charter_hash:
+        if plan.get("directional_charter_hash") != expected_directional_charter_hash:
+            return escalate(E_MANDATE_MISMATCH, "plan was not derived from the frozen directional charter")
+        if plan.get("directional_charter") is not None:
+            return escalate(E_EXTENSION, "a later planner attempted to rewrite the frozen directional charter")
     extension = sorted(EXTENSION_KEYS & set(plan))
     if extension and any(plan.get(k) for k in extension):
         return escalate(E_EXTENSION, f"planner attempted to alter its own mandate via {extension}")
+    complexity = plan.get("implementation_complexity", "NORMAL")
+    if complexity not in {"NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"}:
+        return escalate(E_PLAN_INVALID, f"unknown implementation_complexity {complexity!r}")
+    complexity_evidence = plan.get("complexity_evidence", [])
+    if not (isinstance(complexity_evidence, list)
+            and all(isinstance(item, str) and item.strip() for item in complexity_evidence)):
+        return escalate(E_PLAN_INVALID, "complexity_evidence must be an array of non-empty strings")
+    if complexity != "NORMAL" and not complexity_evidence:
+        return escalate(E_PLAN_INVALID, "a harder implementation tier needs concrete complexity_evidence")
+    semantic_required = plan.get("semantic_verification_required", False)
+    semantic_reason = plan.get("semantic_verification_reason")
+    if type(semantic_required) is not bool:
+        return escalate(E_PLAN_INVALID, "semantic_verification_required must be a boolean")
+    if semantic_required and not (isinstance(semantic_reason, str) and semantic_reason.strip()):
+        return escalate(E_PLAN_INVALID, "semantic verification needs an explicit reason")
 
     status = plan.get("status", PLAN_ITERATION)
     if status not in PLAN_STATUSES:
@@ -361,8 +485,13 @@ def check_plan(plan: Any, mandate: Mapping[str, Any], roadmap: Mapping[str, Mapp
         return escalate(E_PLAN_INVALID, f"items both planned and skipped: {sorted(overlap)}")
     by_item = {i["item_id"]: i for i in mandate["roadmap_mandate"]["items"]}
     for ref in refs:
-        unmet = [d for d in by_item[ref].get("depends_on", [])
-                 if roadmap[d]["status"] == R_PENDING and d not in refs]
+        if by_item[ref].get("human_required") is True or roadmap[ref].get("status") == R_HUMAN_REQUIRED:
+            return escalate(E_SCOPE, f"{ref} is explicitly human-required and cannot be selected autonomously")
+        dependencies = by_item[ref].get("depends_on", [])
+        gated = [d for d in dependencies if roadmap[d]["status"] in {R_HUMAN_REQUIRED, R_SKIPPED}]
+        if gated:
+            return escalate(E_SCOPE, f"{ref} depends on human-required or skipped items {gated}")
+        unmet = [d for d in dependencies if roadmap[d]["status"] == R_PENDING and d not in refs]
         if unmet:
             return escalate(E_SCOPE, f"{ref} depends on unfinished items {unmet}")
 
@@ -431,7 +560,17 @@ def normalize_review(raw: Any, *, failing_evidence: Sequence[str] = ()) -> dict[
         # A repair verdict must name something to repair.
         clean.append({"finding_key": "UNSPECIFIED_REPAIR", "severity": "HIGH", "blocking": True,
                       "summary": str(raw.get("summary") or "reviewer required repair without findings")})
+    requests = raw.get("raw_evidence_requests", [])
+    if not isinstance(requests, list) or any(not isinstance(row, dict) for row in requests):
+        return {"verdict": V_ESCALATE, "summary": "raw evidence requests were malformed", "findings": clean,
+                "code": E_REVIEW_INVALID, "downgraded_from": downgraded, "raw": None}
+    uncertainties = raw.get("uncertainties", [])
+    if not (isinstance(uncertainties, list) and all(isinstance(item, str) and item.strip() for item in uncertainties)):
+        return {"verdict": V_ESCALATE, "summary": "review uncertainties were malformed", "findings": clean,
+                "code": E_REVIEW_INVALID, "downgraded_from": downgraded, "raw": None}
     return {"verdict": verdict, "summary": str(raw.get("summary", "")), "findings": clean,
+            "uncertainties": list(uncertainties),
+            "raw_evidence_requests": [dict(row) for row in requests],
             "code": None, "downgraded_from": downgraded, "raw": None}
 
 
@@ -556,11 +695,28 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
         profile = profiles.get(row["profile_id"])
         _require(profile is not None, f"role {role}: unknown profile {row['profile_id']!r}")
         resolved[role] = _binding(role, row["profile_id"], profile, "AUTONOMY_ROLES")
+    policy_ids = config.get("policy_profiles")
+    if policy_ids is not None:
+        _require(isinstance(policy_ids, dict), "policy_profiles must be an object of profile IDs")
+        resolved_policy: dict[str, dict[str, Any]] = {}
+        for key, profile_id in policy_ids.items():
+            _require(isinstance(key, str) and isinstance(profile_id, str) and profile_id.strip(),
+                     f"policy profile {key!r} needs a profile_id")
+            profile = profiles.get(profile_id)
+            if profile is None:
+                resolved_policy[key] = {"role": key, "profile_id": profile_id,
+                                        "availability": "KNOWN_BUT_UNAVAILABLE",
+                                        "binding_source": "AUTONOMY_ROLES.policy_profiles"}
+            else:
+                resolved_policy[key] = _binding(key, profile_id, profile, "AUTONOMY_ROLES.policy_profiles")
+        resolved["policy_profiles"] = resolved_policy
     same = resolved["reviewer"]["runtime_model_id"] == resolved["implementer"]["runtime_model_id"]
     _require(not same or config.get("allow_same_model_fresh_context") is True,
              "reviewer must not share the implementer's runtime model unless allow_same_model_fresh_context is true")
     independence = "SAME_MODEL_FRESH_CONTEXT" if same else "DIFFERENT_MODEL"
-    for binding in resolved.values():
+    for role, binding in resolved.items():
+        if role == "policy_profiles":
+            continue
         binding["review_independence"] = independence if binding["role"] in {"reviewer", "final_reviewer"} else None
     return resolved
 
@@ -580,7 +736,16 @@ def load_roles(path: Path, profiles_path: Path) -> dict[str, dict[str, Any]]:
 
 def agent_identities(roles: Mapping[str, Mapping[str, Any]]) -> set[str]:
     out: set[str] = set()
-    for binding in roles.values():
+    bindings: list[Mapping[str, Any]] = []
+    for value in roles.values():
+        if not isinstance(value, Mapping):
+            continue
+        if "profile_id" in value:
+            bindings.append(value)
+        else:
+            bindings.extend(row for row in value.values()
+                            if isinstance(row, Mapping) and "profile_id" in row)
+    for binding in bindings:
         for key in ("role", "profile_id", "runtime_model_id"):
             if binding.get(key):
                 out.add(str(binding[key]).lower())

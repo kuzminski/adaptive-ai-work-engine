@@ -28,7 +28,7 @@ import time
 import uuid
 from pathlib import Path
 
-ROLES = ("FINAL REVIEWER", "SELF-VERIFIER", "PLANNER", "IMPLEMENTER", "REVIEWER", "REPAIRER")
+ROLES = ("FINAL REVIEWER", "SELF-VERIFIER", "REVIEW-PRETREATMENT", "PLANNER", "IMPLEMENTER", "REVIEWER", "REPAIRER")
 
 
 def _substitute(value, handoff):

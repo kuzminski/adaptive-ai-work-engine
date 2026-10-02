@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW AUTONOMOUS ITERATIONS V0.2 — the iteration controller.
+"""AAW AUTONOMOUS ITERATIONS V0.3 — the iteration controller.
 
 Sits above the static workflow layer and adds the one thing it lacked: after
 an iteration passes independent review the *controller* re-asks the planner
@@ -15,7 +15,7 @@ bridge asserts equal to its own contract list, and that stream models graph
 semantics, not iteration lifecycle. Extending it would change a UI-facing
 contract. This stream reuses the same shape (append-only, fsync, sequence).
 
-V0.2 evidence boundary (see AAW_AUTONOMOUS_ITERATIONS_V0_2.md):
+V0.2/V0.3 evidence boundary (see AAW_AUTONOMOUS_ITERATIONS_V0_3.md):
 
   * every role call is exactly one V0.4A execution: descriptor
     (`<run>/EXECUTIONS/<execution_id>.json`) → EXECUTION_INTENT → dispatch →
@@ -32,6 +32,7 @@ V0.2 evidence boundary (see AAW_AUTONOMOUS_ITERATIONS_V0_2.md):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 import autonomy_contract as ac
+import autonomy_policy as ap
 import autonomy_run_lock as rl
 import execution_contract as xc
 import process_observation
@@ -346,7 +348,7 @@ class AutonomyController:
     compression; the deterministic packet is always built and always keeps the
     bad news.
 
-    V0.2: the controller — not the executor — owns execution identity. Every
+    V0.2/V0.3: the controller — not the executor — owns execution identity. Every
     executor call is allocated a V0.4A `execution_id`, recorded as
     EXECUTION_INTENT before dispatch and closed in the V0.4B ledger. The
     executor receives the allocation in `ctx["execution"]`.
@@ -368,6 +370,10 @@ class AutonomyController:
         self.results_root = self.dir / "RESULTS"
         self.lock = rl.RunLock(self.dir, run_id)
         self.state: dict[str, Any] = {}
+        self.policy_bindings = dict(self.roles.get("policy_profiles") or {})
+        self.policy_active = bool(self.policy_bindings)
+        if self.policy_active:
+            ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
         self._recovered: dict[str, Any] | None = None   # adopted result of a reconciled read-only call
         self._retry_of: str | None = None                # execution a replayed read-only call supersedes
         self._adopted_execution_id: str | None = None
@@ -392,6 +398,8 @@ class AutonomyController:
             "schema_version": ac.SCHEMA_VERSION, "contract": ac.CONTRACT_ID, "run_id": run_id,
             "status": ac.RUNNING, "phase": ac.PLAN, "mandate": frozen, "mandate_hash": frozen["mandate_hash"],
             "roadmap": ac.initial_roadmap(frozen), "iterations": [], "roles": dict(self.roles),
+            "directional_charter": None, "directional_charter_hash": None,
+            "planner_invocation_count": 0, "policy_preset": ap.PRESET_ID if self.policy_active else None,
             "in_flight": None, "hold": None, "escalation": None, "human": None, "promotion": None,
             "planning": None, "executions": [], "workspace": self.env.describe(),
             "workspace_checkpoint": self.env.checkpoint(),
@@ -419,6 +427,16 @@ class AutonomyController:
         except ac.AutonomyError:
             self.lock.release()
             raise
+        # A run keeps the role/profile bindings with which it started. This
+        # preserves V0.1/V0.2 resume semantics and prevents a config edit from
+        # silently changing tiers mid-run.
+        saved_roles = self.state.get("roles")
+        if isinstance(saved_roles, dict) and saved_roles:
+            self.roles = dict(saved_roles)
+            self.policy_bindings = dict(self.roles.get("policy_profiles") or {})
+            self.policy_active = bool(self.policy_bindings)
+            if self.policy_active:
+                ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
         self.state.setdefault("executions", [])
         self.state.setdefault("planning", None)
         self.journal.append("RUN_RESUMED", phase=self.state["phase"], payload={
@@ -458,6 +476,7 @@ class AutonomyController:
         result_path = self.results_root / f"{execution_id}.json"
         view = {"execution_id": execution_id,
                 "ledger_state": entry["state"] if entry else "NO_INTENT",
+                "started": bool(entry and entry.get("started")),
                 "close": dict(entry["closed"][-1]["payload"]) if entry and entry["closed"] else None,
                 "result_artifact": str(result_path) if result_path.is_file() else None}
         return view
@@ -482,15 +501,23 @@ class AutonomyController:
             decision = "ESCALATE_SIDE_EFFECT_PHASE"
         elif view.get("close") and view["close"].get("close_reason") == "COMPLETED" and view.get("result_artifact"):
             decision = "ADOPT_RECORDED_RESULT"
+        elif flight.get("role") == "initial_planner" and view.get("started"):
+            # The initial architect is explicitly one-shot. A spawned call with
+            # no durable result is ambiguous, so it must reach a human instead
+            # of issuing another Opus invocation on resume.
+            decision = "ESCALATE_INITIAL_PLANNER_ALREADY_INVOKED"
         else:
             decision = "REPLAY_READ_ONLY_PHASE_WITH_NEW_EXECUTION_ID"
         self.journal.append("IN_FLIGHT_RECONCILED", iteration_id=flight.get("iteration_id"), phase=phase,
                             payload={**view, "executor": flight.get("executor"), "decision": decision})
-        if decision == "ESCALATE_SIDE_EFFECT_PHASE":
+        if decision in {"ESCALATE_SIDE_EFFECT_PHASE", "ESCALATE_INITIAL_PLANNER_ALREADY_INVOKED"}:
             # The worktree may already hold half of this phase's effects.
             # Never repeat it blindly (same rule as workflow V0.2).
-            self._escalate(ac.E_INTERRUPTED, f"{phase} was interrupted mid-flight; its worktree effects are unknown "
-                           f"and it is not re-run automatically (execution {execution_id}: ledger "
+            code = ac.E_INTERRUPTED if decision == "ESCALATE_SIDE_EFFECT_PHASE" else ac.E_RECONCILE
+            reason = (f"{phase} was interrupted mid-flight; its worktree effects are unknown "
+                      if decision == "ESCALATE_SIDE_EFFECT_PHASE" else
+                      "the one-time initial architect was already invoked but has no adoptable result ")
+            self._escalate(code, f"{reason}and it is not re-run automatically (execution {execution_id}: ledger "
                            f"{view['ledger_state']}, result artifact {view.get('result_artifact')})",
                            flight["iteration_id"])
             return
@@ -538,7 +565,104 @@ class AutonomyController:
     def _role_audit(self) -> dict[str, Any]:
         return {r: {k: b.get(k) for k in ("role", "profile_id", "runtime_model_id", "effort", "review_independence",
                                           "binding_source")}
-                for r, b in self.roles.items()}
+                for r, b in self.roles.items() if r != "policy_profiles"}
+
+    def _policy_ids(self) -> dict[str, str]:
+        return ap.profile_id_map(self.policy_bindings)
+
+    def _policy_selection(self, name: str, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
+        if not self.policy_active:
+            return None
+        supplied = ctx.get("model_selection")
+        if isinstance(supplied, Mapping):
+            return dict(supplied)
+        ids = self._policy_ids()
+        if name == "plan":
+            index = int(ctx.get("iteration_index", len(self.state.get("iterations", [])) + 1))
+            if index == 1:
+                return ap.select_initial_planner(ids)
+            prior = self.state.get("iterations", [])[-1].get("final_review_selection") or {}
+            return ap.select_continuation_planner(ids, prior)
+        if name == "execute":
+            plan = ctx.get("plan") or {}
+            mandate_override = (self.state.get("mandate") or {}).get("model_policy_overrides", {}).get("implementation")
+            complexity = str(plan.get("implementation_complexity", "NORMAL")).upper()
+            complexity_evidence = list(plan.get("complexity_evidence", []))
+            floors = {"NORMAL": 0, "HARDER": 1, "SIGNIFICANTLY_DIFFICULT": 2}
+            charter = self.state.get("directional_charter") or {}
+            refs = set(plan.get("roadmap_refs", []))
+            risk_rows = [row for row in charter.get("risk_guidance", []) if row.get("item_id") in refs]
+            if risk_rows:
+                floor = max((row["implementation_floor"] for row in risk_rows), key=lambda item: floors[item])
+                if floors[floor] > floors[complexity]:
+                    complexity = floor
+                complexity_evidence.extend(f"FROZEN_CHARTER_RISK:{row['item_id']}:{row['reason']}"
+                                           for row in risk_rows)
+            return ap.select_implementation(ids, complexity, evidence=complexity_evidence,
+                                             human_override=mandate_override)
+        if name == "prepare_packet":
+            return {"policy_version": ap.POLICY_VERSION, "profile_key": "review_pretreatment",
+                    "profile_id": ids["review_pretreatment"], "selection_reason": "REVIEW_PRETREATMENT",
+                    "tier": "VERY_HIGH", "complexity_risk_evidence": [], "previous_attempt": None,
+                    "escalated_from": None}
+        if name == "review":
+            return {"policy_version": ap.POLICY_VERSION, "profile_key": "primary_reviewer",
+                    "profile_id": ids["primary_reviewer"], "selection_reason": "PRIMARY_REVIEW",
+                    "tier": "LIGHT", "complexity_risk_evidence": [], "previous_attempt": None,
+                    "escalated_from": None}
+        if name == "repair":
+            it = self._it()
+            prior_attempt = self._luna_max_capability_attempt(it)
+            return ap.select_repair(ids, attempt=int(ctx.get("attempt", 1)),
+                                    findings=ctx.get("findings", []), previous_attempt=prior_attempt)
+        if name == "final_review":
+            it = self._it()
+            prior_findings = [f for review in it.get("reviews", []) for f in review.get("findings", [])]
+            selection = ap.select_final_review(
+                ids, changed_files=self.env.changed_files(), repair_attempts=it.get("repair_attempts", 0),
+                findings=prior_findings, human_critical=bool(
+                    self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"].get("critical_scope")),
+                implementation_profile_id=next((e.get("profile") for e in reversed(self.state["executions"])
+                                                if e.get("executor") == "execute"), None),
+                uncertainty=bool((it.get("execution") or {}).get("uncertainties") or
+                                 (it.get("execution") or {}).get("unresolved") or
+                                 any(review.get("uncertainties") for review in it.get("reviews", []))))
+            current_refs = set(it.get("lineage", {}).get("roadmap_refs", []))
+            risk_rows = [row for row in (self.state.get("directional_charter") or {}).get("risk_guidance", [])
+                         if row.get("item_id") in current_refs]
+            review_order = {"DEFAULT": 0, "HARD": 1, "CRITICAL": 2}
+            if risk_rows:
+                floor = max((row["final_review_floor"] for row in risk_rows), key=lambda item: review_order[item])
+                if review_order[floor] > review_order[selection["tier"]]:
+                    profile_key = {"DEFAULT": "final_review_default", "HARD": "final_review_hard",
+                                   "CRITICAL": "final_review_critical"}[floor]
+                    previous_profile = selection["profile_id"]
+                    selection.update({"profile_key": profile_key, "profile_id": ids[profile_key], "tier": floor,
+                                      "selection_reason": "DIRECTIONAL_CHARTER_RISK_FLOOR",
+                                      "complexity_risk_evidence": [*selection["complexity_risk_evidence"],
+                                          *(f"FROZEN_CHARTER_RISK:{row['item_id']}:{row['reason']}"
+                                            for row in risk_rows)],
+                                      "escalated_from": previous_profile})
+            selection["iteration_id"] = it["iteration_id"]
+            return selection
+        return None
+
+    def _luna_max_capability_attempt(self, iteration: Mapping[str, Any]) -> dict[str, Any] | None:
+        findings = [f for review in iteration.get("reviews", []) + iteration.get("final_reviews", [])
+                    for f in review.get("findings", [])]
+        finding = next((f for f in findings if f.get("finding_code") == "IMPLEMENTATION_CAPABILITY_MISMATCH"
+                        and f.get("blocking")), None)
+        if not finding:
+            return None
+        execution = next((e for e in reversed(self.state.get("executions", []))
+                          if e.get("executor") == "execute"
+                          and e.get("profile") == self._policy_ids()["implementer_hard"]), None)
+        evidence_ref = finding.get("evidence_ref")
+        if not execution or not isinstance(evidence_ref, str) or not evidence_ref.strip():
+            return None
+        return {"profile_id": self._policy_ids()["implementer_hard"], "outcome": "FAILED",
+                "finding_code": "IMPLEMENTATION_CAPABILITY_MISMATCH", "execution_id": execution.get("execution_id"),
+                "evidence_ref": evidence_ref}
 
     def _it(self) -> dict[str, Any]:
         return self.state["iterations"][-1]
@@ -584,7 +708,14 @@ class AutonomyController:
                                          "reason": "recorded COMPLETED result reconciled after restart; not re-invoked"})
             return adopted["result"]
         role_key = role if role in self.roles else ac.OPTIONAL_ROLE_ALIASES.get(role, role)
-        binding = dict(self.roles[role_key])
+        selection = self._policy_selection(name, ctx)
+        if selection:
+            binding = dict(self.policy_bindings.get(selection["profile_key"]) or {
+                "role": role, "profile_id": selection["profile_id"], "availability": "KNOWN_BUT_UNAVAILABLE",
+                "binding_source": "AUTONOMY_ROLES.policy_profiles"})
+            binding["role"] = role
+        else:
+            binding = dict(self.roles[role_key])
         executor = self.executors[name]
         preflight = getattr(executor, "preflight", None)
         reason = preflight(binding) if callable(preflight) else None
@@ -603,16 +734,22 @@ class AutonomyController:
             invocation_kind=ac.INVOCATION_KIND_BY_EXECUTOR[name], subtask_id=None,
             provider=binding.get("provider") or binding.get("harness"), harness=binding.get("harness"),
             model=binding.get("runtime_model_id"), effort=binding.get("effort"), profile=binding.get("profile_id"),
-            input_contract_hash=xc.canonical_hash(serial), selection_reason=f"AUTONOMY_ROLES:{role}",
+            input_contract_hash=xc.canonical_hash(serial),
+            selection_reason=(selection or {}).get("selection_reason") or f"AUTONOMY_ROLES:{role}",
             policy_version=ac.CONTRACT_ID, fixture_class=getattr(executor, "fixture_class", "UNDECLARED_EXECUTOR"),
             retry_of_execution_id=self._retry_of, relations=self._relations(name))
         self._retry_of = None
         execution_id = descriptor["execution_id"]
         ref = {"execution_id": execution_id, "iteration_id": iteration_id, "role": role, "executor": name,
                "phase": phase, "node_id": node_id, "profile": binding.get("profile_id"),
+               "selection": dict(selection) if selection else None,
                "harness": binding.get("harness"), "model": binding.get("runtime_model_id"),
                "effort": binding.get("effort"), "descriptor_path": str(descriptor_path),
                "retry_of_execution_id": descriptor.get("retry_of_execution_id")}
+        if selection:
+            self.journal.append("MODEL_POLICY_SELECTED", iteration_id=iteration_id, phase=phase, payload={
+                **dict(selection), "role": role, "selected_profile": binding.get("profile_id"),
+                "execution_id": execution_id})
         self.state["in_flight"] = {"phase": phase, "executor": name, "role": role, "iteration_id": iteration_id,
                                    "execution_id": execution_id, "execution_ref": ref, "started_at": _now()}
         self._save()
@@ -623,14 +760,15 @@ class AutonomyController:
                 model=descriptor.get("model"), effort=descriptor.get("effort"), profile=descriptor.get("profile"),
                 input_contract_hash=descriptor.get("input_contract_hash"),
                 repository=self.env.describe().get("repo"), worktree=self.env.describe().get("worktree"),
-                extra={"autonomy_iteration_id": iteration_id, "autonomy_role": role})
+                extra={"autonomy_iteration_id": iteration_id, "autonomy_role": role,
+                       "model_policy": dict(selection) if selection else None})
         except LedgerError as exc:
             self.state["in_flight"] = None
             self._escalate(ac.E_LEDGER, f"execution intent for {execution_id} could not be durably recorded; "
                            f"nothing was dispatched: {exc}", iteration_id)
             return None
         self.journal.append("PHASE_STARTED", iteration_id=iteration_id, phase=phase,
-                            payload={"role": role, "binding": self._role_audit().get(role_key),
+                            payload={"role": role, "binding": binding,
                                      "execution_id": execution_id})
         recorder = LifecycleRecorder(self.ledger, execution_id)
         result_path = self.results_root / f"{execution_id}.json"
@@ -736,53 +874,91 @@ class AutonomyController:
                     "roadmap_refs": i["lineage"]["roadmap_refs"],
                     "unresolved": (i.get("final_review") or {}).get("non_blocking_findings", [])}
                    for i in self.state["iterations"]]
-        plan = self._call("plan", "planner", {
-            "iteration_index": index, "roadmap": json.loads(json.dumps(self.state["roadmap"])),
-            "history": history, "workspace": self.env.describe(),
+        initial_architect = self.policy_active and self.state.get("directional_charter") is None
+        if self.policy_active and not initial_architect:
+            frozen = self.state.get("directional_charter") or {}
+            if frozen.get("charter_hash") != self.state.get("directional_charter_hash"):
+                self._escalate(ac.E_MANDATE_TAMPERED, "frozen directional charter hash does not match", None)
+                return
+        role = "initial_planner" if initial_architect else "continuation_planner" if self.policy_active else "planner"
+        plan = self._call("plan", role, {
+            "iteration_index": index, "planning_stage": "INITIAL_ARCHITECT" if initial_architect else "NEXT_ITERATION_PLAN",
+            "roadmap": json.loads(json.dumps(self.state["roadmap"])), "history": history,
+            "workspace": self.env.describe(),
+            "directional_charter": self.state.get("directional_charter"),
+            "directional_charter_hash": self.state.get("directional_charter_hash"),
             "iteration_contract": self.state["mandate"]["iteration_contract"] if index == 1 else None})
         if self.state["status"] != ac.RUNNING:
             return
+        if not isinstance(plan, dict):
+            self._escalate(ac.E_PLAN_INVALID, "planner returned no structured plan", None)
+            return
+        if initial_architect:
+            try:
+                charter = ac.validate_directional_charter(plan.get("directional_charter"), self.state["mandate"])
+            except ac.AutonomyError as exc:
+                self._escalate(ac.E_EXTENSION, f"initial directional charter was rejected: {exc}", None)
+                return
+            self.state["directional_charter"] = charter
+            self.state["directional_charter_hash"] = charter["charter_hash"]
+            plan["directional_charter_hash"] = charter["charter_hash"]
+            plan.pop("directional_charter", None)
+            self.state["planner_invocation_count"] = int(self.state.get("planner_invocation_count", 0)) + 1
+            self.journal.append("DIRECTIONAL_CHARTER_FROZEN", phase=ac.PLAN, payload={
+                "mandate_hash": self.state["mandate_hash"], "charter_hash": charter["charter_hash"],
+                "roadmap_items": [item["item_id"] for item in charter["roadmap_items"]],
+                "initial_planner_execution_id": next((e.get("execution_id") for e in reversed(self.state["executions"])
+                                                       if e.get("role") == "initial_planner"), None)})
         verdict = ac.check_plan(plan, self.state["mandate"], self.state["roadmap"], index,
-                                expected_mandate_hash=self.state["mandate_hash"])
+                                expected_mandate_hash=self.state["mandate_hash"],
+                                expected_directional_charter_hash=self.state.get("directional_charter_hash")
+                                if self.policy_active else None)
         self.journal.append("SCOPE_CHECK", phase=ac.PLAN, payload={
             "iteration_index": index, "decision": verdict["decision"], "code": verdict["code"],
             "reasons": verdict["reasons"], "levels": verdict["levels"],
+            "directional_charter_hash": self.state.get("directional_charter_hash"),
             "within_mandate": verdict["decision"] != ac.ESCALATE})
         if verdict["decision"] == ac.ESCALATE:
             self._escalate(verdict["code"], "; ".join(verdict["reasons"]), None)
             return
         for item_id in verdict.get("skipped", []):
             reason = next(r["reason"] for r in plan["skipped_items"] if r["item_id"] == item_id)
-            self.state["roadmap"][item_id] = {"status": ac.R_SKIPPED, "iteration_id": None, "reason": reason}
+            self.state["roadmap"][item_id].update({"status": ac.R_SKIPPED, "iteration_id": None, "reason": reason})
+            ac.refresh_dependency_states(self.state["roadmap"])
             self.journal.append("ROADMAP_ITEM_SKIPPED", phase=ac.PLAN, payload={"item_id": item_id, "reason": reason})
         if verdict["decision"] == ac.ACCEPT_END:
             self._done(outcome="NO_FURTHER_ACTION")
             self._await_human(ac.HOLD_ROADMAP_EXHAUSTED, "planner found no further justified action; "
-                              "every remaining item was individually skipped with a reason")
+                              "every autonomous roadmap item was individually skipped with a reason")
             return
         iteration_id = self.state["planning"]["iteration_id"]
+        plan_execution = next((e for e in reversed(self.state["executions"]) if e.get("executor") == "plan"), {})
         self.state["iterations"].append({
             "iteration_id": iteration_id, "index": index, "status": "IN_PROGRESS", "outcome": None,
             "lineage": {"mandate_id": self.state["mandate"]["mandate_id"], "mandate_hash": self.state["mandate_hash"],
-                        "source": "ITERATION_CONTRACT" if index == 1 else "ROADMAP_MANDATE",
+                        "directional_charter_hash": self.state.get("directional_charter_hash"),
+                        "source": ("ITERATION_CONTRACT" if index == 1 else
+                                   "FROZEN_DIRECTIONAL_CHARTER" if self.policy_active else "ROADMAP_MANDATE"),
                         "roadmap_refs": list(plan.get("roadmap_refs", [])),
                         "parent_iteration_id": self.state["iterations"][-1]["iteration_id"] if index > 1 else None,
                         "scope_justification": plan["scope_justification"]},
-            "plan": plan, "planned_by": self._role_audit()["planner"], "executed_by": self._role_audit()["implementer"],
+            "plan": plan, "planned_by": {"role": plan_execution.get("role"), "profile_id": plan_execution.get("profile"),
+                                          "runtime_model_id": plan_execution.get("model"), "effort": plan_execution.get("effort")},
+            "executed_by": self._role_audit()["implementer"],
             "execution": None, "self_verify": [], "checks": [], "evidence_state": {}, "repairs": [],
             "repair_attempts": 0, "reviews": [], "final_reviews": [], "packet": None, "repair_origin": None,
             "started_at": _now(), "finished_at": None,
-            "plan_execution_id": self.state["executions"][-1]["execution_id"] if self.state["executions"] else None})
+            "plan_execution_id": plan_execution.get("execution_id")})
         self.state["planning"] = None
         self.journal.append("ITERATION_PLANNED", iteration_id=iteration_id, phase=ac.PLAN, payload={
             "index": index, "goal": plan["goal"], "roadmap_refs": plan.get("roadmap_refs", []),
             "scope_justification": plan["scope_justification"], "acceptance_criteria": plan["acceptance_criteria"],
-            "planned_by": self._role_audit()["planner"], "lineage": self._it()["lineage"],
+            "planned_by": self._it()["planned_by"], "lineage": self._it()["lineage"],
+            "directional_charter_hash": self.state.get("directional_charter_hash"),
             "plan_hash": ac.canonical_hash(plan)})
         self._done(outcome="PLANNED")
         self._goto(ac.EXECUTE)
         self._save()
-
     # EXECUTE / SELF_VERIFY ---------------------------------------------------
 
     def _do_execute(self) -> None:
@@ -793,6 +969,8 @@ class AutonomyController:
             self._escalate(ac.E_EXECUTOR, "implementer returned no structured result", self._iteration_id())
             return
         self._it()["execution"] = result
+        execute_ref = self.state["executions"][-1] if self.state.get("executions") else {}
+        self._it()["executed_by"] = self._execution_audit(execute_ref.get("execution_id"))
         self._record_checks(result.get("checks"))
         self._done(summary=result["summary"], deviations=result.get("deviations", []))
         self._goto(ac.SELF_VERIFY)
@@ -800,22 +978,50 @@ class AutonomyController:
 
     def _do_self_verify(self) -> None:
         before = diff_digest(self.env.diff())
-        result = self._call("self_verify", "self_verifier", {"iteration": self._it(), "plan": self._it()["plan"],
-                                                             "diff": self.env.diff(),
-                                                             "changed_files": self.env.changed_files()})
-        if self.state["status"] != ac.RUNNING:
-            return
+        verification_mode = "MODEL"
+        semantic_reason: Any = None
+        if self.policy_active:
+            rows = self._deterministic_self_verification()
+            iteration = self._it()
+            execution_result = iteration.get("execution") or {}
+            plan = iteration.get("plan") or {}
+            semantic_required = bool(plan.get("semantic_verification_required")) or bool(
+                execution_result.get("uncertainties") or execution_result.get("unresolved"))
+            if semantic_required:
+                verification_mode = "DETERMINISTIC_PLUS_SEMANTIC_MODEL"
+                semantic_reason = plan.get("semantic_verification_reason") or \
+                    execution_result.get("uncertainties") or execution_result.get("unresolved")
+                semantic = self._call("self_verify", "self_verifier", {
+                    "iteration": iteration, "plan": plan, "diff": self.env.diff(),
+                    "changed_files": self.env.changed_files(), "deterministic_checks": rows,
+                    "semantic_verification_reason": semantic_reason})
+                if self.state["status"] != ac.RUNNING:
+                    return
+                if not isinstance(semantic, dict) or not isinstance(semantic.get("checks"), list):
+                    self._escalate(ac.E_EXECUTOR, "semantic self-verification returned no checks", self._iteration_id())
+                    return
+                rows.extend(dict(row) for row in semantic["checks"] if isinstance(row, Mapping))
+            else:
+                verification_mode = "DETERMINISTIC"
+        else:
+            result = self._call("self_verify", "self_verifier", {"iteration": self._it(), "plan": self._it()["plan"],
+                                                                 "diff": self.env.diff(),
+                                                                 "changed_files": self.env.changed_files()})
+            if self.state["status"] != ac.RUNNING:
+                return
+            if not (isinstance(result, dict) and isinstance(result.get("checks"), list)):
+                self._escalate(ac.E_EXECUTOR, "self-verification returned no checks", self._iteration_id())
+                return
+            rows = [dict(row) for row in result["checks"] if isinstance(row, Mapping)]
         if diff_digest(self.env.diff()) != before:
             # SELF_VERIFY is read-only (it is replayed after a crash); a verifier
             # that edits the candidate has silently become an implementer.
             self._escalate(ac.E_VERIFY_MUTATION, "the worktree diff changed during SELF_VERIFY", self._iteration_id())
             return
-        if not (isinstance(result, dict) and isinstance(result.get("checks"), list)):
-            self._escalate(ac.E_EXECUTOR, "self-verification returned no checks", self._iteration_id())
-            return
-        rows = self._record_checks(result["checks"])
+        rows = self._record_checks(rows)
         failing = ac.evidence_failures(self._checks())
-        self._it()["self_verify"].append({"checks": rows, "failing": failing, "at": _now()})
+        self._it()["self_verify"].append({"mode": verification_mode, "semantic_reason": semantic_reason,
+                                           "checks": rows, "failing": failing, "at": _now()})
         self._done(failing=failing, checks=len(rows))
         if failing:
             findings = [{"finding_key": f"SELF_VERIFY::{n}", "severity": "HIGH", "blocking": True,
@@ -824,6 +1030,33 @@ class AutonomyController:
         else:
             self._goto(ac.AWAITING_REVIEW)
             self._save()
+
+    def _deterministic_self_verification(self) -> list[dict[str, Any]]:
+        """Check evidence coverage and statuses without spending a model call."""
+        it = self._it()
+        required = self.state["mandate"]["iteration_contract"].get("required_evidence", [])
+        checks = list(it.get("checks", []))
+        rows: list[dict[str, Any]] = []
+        for evidence in required:
+            target = " ".join(str(evidence).casefold().split())
+            matches = [row for row in checks if target in " ".join(
+                f"{row.get('name', '')} {row.get('summary', '')}".casefold().split()) or
+                " ".join(str(row.get("name", "")).casefold().split()) in target]
+            passed = any(str(row.get("status", "")).upper() == "PASS" for row in matches)
+            rows.append({"name": f"required_evidence::{evidence}", "status": "PASS" if passed else "FAIL",
+                         "summary": (f"required evidence is backed by {len(matches)} recorded check(s)"
+                                     if passed else f"required evidence {evidence!r} has no passing recorded check"),
+                         "source_refs": [row.get("log_ref") or row.get("name") for row in matches]})
+        try:
+            self.env.assert_safe()
+            rows.append({"name": "controller.git_boundary", "status": "PASS",
+                         "summary": "workspace and protected Git boundaries pass"})
+        except ac.GitPolicyViolation as exc:
+            rows.append({"name": "controller.git_boundary", "status": "FAIL", "summary": str(exc)})
+        if not rows:
+            rows.append({"name": "controller.evidence_integrity", "status": "PASS",
+                         "summary": "all implementation and machine check records are retained for independent review"})
+        return rows
 
     # packet + REVIEW ---------------------------------------------------------
 
@@ -837,44 +1070,194 @@ class AutonomyController:
             base=self.env.describe().get("base_head"), worktree=self.env.describe().get("worktree"),
             checks=it["checks"], adverse=adverse, kind=kind, commits=self.env.commits())
         packet = built
-        compress = self.executors.get("prepare_packet")
-        if compress is not None:
+        if self.executors.get("prepare_packet") is not None:
             draft = self._call("prepare_packet", "review_prep", {"iteration": it, "packet": built})
             if self.state["status"] != ac.RUNNING:
                 return built
-            if isinstance(draft, dict):
-                packet = draft
-        # Whatever the compressor did, the bad news is put back, and the
-        # access block (diff hash, pointers) stays code-owned, never model-owned.
+            if self._valid_pretreatment(draft):
+                packet = json.loads(json.dumps(built))
+                packet["PRETREATMENT"] = {key: draft[key] for key in
+                    ("summary", "implementation_claims", "check_refs", "finding_refs", "changed_files", "source_refs")}
+            else:
+                self.journal.append("REVIEW_PRETREATMENT_REJECTED", iteration_id=it["iteration_id"],
+                                    phase=self.state["phase"], payload={
+                                        "execution_id": self.state["executions"][-1].get("execution_id")
+                                        if self.state["executions"] else None,
+                                        "reason": "malformed packet or authoritative verdict field"})
+        # The deterministic packet remains authoritative for coverage. Pretreatment
+        # can only add a non-authoritative index; every adverse item and source link
+        # remains in the original packet.
         packet = ac.enforce_adverse_preservation(packet, adverse)
         packet["access"] = built["access"]
+        packet["authoritative"] = False
         return packet
 
     def _do_prepare_review(self) -> None:
+        """Build a fresh deterministic packet, then advance to the reviewer."""
         packet = self._build_packet("REVIEW")
         if self.state["status"] != ac.RUNNING:
             return
         self._it()["packet"] = packet
-        self._done(integrity=packet.get("integrity"), diff_sha256=packet["access"]["diff_sha256"])
+        self.journal.append("REVIEW_PACKET_PREPARED", iteration_id=self._iteration_id(),
+                            phase=ac.AWAITING_REVIEW, payload={
+                                "authoritative": False,
+                                "diff_sha256": packet.get("access", {}).get("diff_sha256"),
+                                "integrity": packet.get("integrity")})
+        self._done(packet_prepared=True)
         self._goto(ac.REVIEW)
         self._save()
 
+    @staticmethod
+    def _valid_pretreatment(draft: Any) -> bool:
+        if not isinstance(draft, dict):
+            return False
+        forbidden = {"verdict", "decision", "is_correct", "is_ready", "approved", "pass", "fail"}
+        def contains_forbidden(value: Any) -> bool:
+            if isinstance(value, Mapping):
+                return any(str(key).lower() in forbidden or contains_forbidden(item)
+                           for key, item in value.items())
+            if isinstance(value, list):
+                return any(contains_forbidden(item) for item in value)
+            return False
+        if contains_forbidden(draft):
+            return False
+        required = {"summary": str, "implementation_claims": list, "check_refs": list,
+                    "finding_refs": list, "changed_files": list, "source_refs": list}
+        return all(isinstance(draft.get(key), kind) for key, kind in required.items()) and all(
+            all(isinstance(item, str) for item in draft[key]) for key in
+            ("implementation_claims", "check_refs", "finding_refs", "changed_files", "source_refs"))
+
     def _reviewer_context(self, packet: dict[str, Any], kind: str) -> dict[str, Any]:
-        # The reviewer is handed the packet AND the territory. `raw` is read
-        # from the repository now, not from anything the implementer produced.
+        # Only a compact manifest is sent initially. Raw bytes stay in the
+        # controller-owned files until the reviewer requests specific sources.
         diff = self.env.diff()
         it = self._it()
-        diff_path = self.dir / "PACKETS" / f"{it['iteration_id']}_{kind}_{len(it['reviews']) + len(it['final_reviews']) + 1}.diff"
+        sequence = len(it["reviews"]) + len(it["final_reviews"]) + 1
+        diff_path = self.dir / "PACKETS" / f"{it['iteration_id']}_{kind}_{sequence}.diff"
         diff_path.parent.mkdir(parents=True, exist_ok=True)
         diff_path.write_text(diff, encoding="utf-8")
+        manifest: list[dict[str, Any]] = []
+
+        def add_source(source_ref: str, source_kind: str, path: Path) -> None:
+            try:
+                resolved = path.resolve(strict=True)
+                if not resolved.is_file():
+                    return
+                raw = resolved.read_bytes()
+            except OSError:
+                return
+            manifest.append({"source_ref": source_ref, "kind": source_kind, "path": str(resolved),
+                             "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)})
+
+        add_source("RAW_DIFF", "DIFF", diff_path)
+        for execution in self.state.get("executions", []):
+            execution_id = execution.get("execution_id")
+            if not execution_id:
+                continue
+            result_path = self.results_root / f"{execution_id}.json"
+            add_source(f"EXECUTION_RESULT:{execution_id}", "EXECUTION_RESULT", result_path)
+        worktree = (self.env.describe() or {}).get("worktree")
+        worktree_root = Path(worktree).resolve() if worktree else None
+        for index, row in enumerate(it.get("checks", []), 1):
+            log_ref = row.get("log_ref")
+            if not isinstance(log_ref, str) or not log_ref:
+                continue
+            path = Path(log_ref)
+            if not path.is_absolute() and worktree_root:
+                path = worktree_root / path
+            if not worktree_root:
+                continue
+            try:
+                path.resolve(strict=True).relative_to(worktree_root)
+            except (OSError, ValueError):
+                continue
+            add_source(f"CHECK_LOG:{index}", "CHECK_LOG", path)
         return {"iteration": it, "packet": packet, "review_kind": kind,
-                "raw": {"diff": diff, "diff_sha256": diff_digest(diff), "diff_path": str(diff_path),
+                "directional_charter": self.state.get("directional_charter"),
+                "directional_charter_hash": self.state.get("directional_charter_hash"),
+                "raw": {"diff_sha256": diff_digest(diff), "diff_path": str(diff_path),
                         "changed_files": self.env.changed_files(), "head": self.env.head(),
                         "base_head": self.env.describe().get("base_head"), "commits": self.env.commits(),
                         "evidence": list(it["checks"]), "self_verify": list(it["self_verify"]),
-                        "implementation": it["execution"],
+                        "implementation": it["execution"], "manifest": manifest,
                         "previous_findings": [f for r in it["reviews"] + it["final_reviews"] for f in r["findings"]]}}
 
+    def _review_with_raw_access(self, name: str, role: str, context: dict[str, Any],
+                                model_selection: Mapping[str, Any] | None = None) -> Any:
+        if model_selection:
+            context = {**context, "model_selection": dict(model_selection)}
+        raw = self._call(name, role, context)
+        if self.state["status"] != ac.RUNNING or not isinstance(raw, dict):
+            return raw
+        requests = raw.get("raw_evidence_requests") or []
+        if not requests:
+            return raw
+        manifest = {item["source_ref"]: item for item in context["raw"].get("manifest", [])}
+        if len(requests) > 5:
+            self.journal.append("RAW_EVIDENCE_REQUEST_REJECTED", iteration_id=self._iteration_id(),
+                                phase=self.state["phase"], payload={"reason": "request_count_exceeded", "count": len(requests)})
+            return {"verdict": "ESCALATE", "summary": "reviewer requested more than five raw sources",
+                    "findings": [], "raw_evidence_requests": []}
+        provided = []
+        total_raw_bytes = 0
+        request_execution_id = self.state["executions"][-1].get("execution_id") if self.state["executions"] else None
+        for request in requests:
+            source_ref = request.get("source_ref") if isinstance(request, Mapping) else None
+            reason = request.get("reason") if isinstance(request, Mapping) else None
+            if not isinstance(source_ref, str) or not isinstance(reason, str) or not reason.strip() or source_ref not in manifest:
+                self.journal.append("RAW_EVIDENCE_REQUEST_REJECTED", iteration_id=self._iteration_id(),
+                                    phase=self.state["phase"], payload={"source_ref": source_ref, "reason": reason,
+                                                                         "detail": "unknown source_ref or empty reason"})
+                return {"verdict": "ESCALATE", "summary": "reviewer requested an unknown source or gave no reason",
+                        "findings": [], "raw_evidence_requests": []}
+            item = manifest[source_ref]
+            self.journal.append("RAW_EVIDENCE_REQUESTED", iteration_id=self._iteration_id(),
+                                phase=self.state["phase"], payload={"execution_id": request_execution_id,
+                                    "source_ref": source_ref, "reason": reason[:500], "sha256": item["sha256"]})
+            try:
+                path = Path(item["path"]).resolve(strict=True)
+                if item.get("kind") == "CHECK_LOG":
+                    worktree = (self.env.describe() or {}).get("worktree")
+                    if not worktree:
+                        raise ValueError("worktree root unavailable for check log")
+                    path.relative_to(Path(worktree).resolve())
+                else:
+                    path.relative_to(self.dir.resolve())
+                data = path.read_bytes()
+                if len(data) > 1_000_000:
+                    raise ValueError("source exceeds the 1 MB per-source limit")
+                if total_raw_bytes + len(data) > 1_000_000:
+                    raise ValueError("requested raw sources exceed the 1 MB total retrieval limit")
+                digest = hashlib.sha256(data).hexdigest()
+                if digest != item["sha256"]:
+                    raise ValueError("source hash changed after manifest creation")
+            except (OSError, ValueError) as exc:
+                self.journal.append("RAW_EVIDENCE_REQUEST_REJECTED", iteration_id=self._iteration_id(),
+                                    phase=self.state["phase"], payload={"source_ref": source_ref,
+                                                                        "detail": str(exc)})
+                return {"verdict": "ESCALATE", "summary": f"requested source {source_ref} could not be verified",
+                        "findings": [], "raw_evidence_requests": []}
+            provided.append({"source_ref": source_ref, "kind": item["kind"], "sha256": digest,
+                             "content": data.decode("utf-8", errors="replace")})
+            total_raw_bytes += len(data)
+            self.journal.append("RAW_EVIDENCE_PROVIDED", iteration_id=self._iteration_id(),
+                                phase=self.state["phase"], payload={"source_ref": source_ref,
+                                    "sha256": digest, "size_bytes": len(data)})
+        retry_context = {**context, "raw_evidence_results": provided}
+        if model_selection:
+            retry_context["model_selection"] = dict(model_selection)
+        retry = self._call(name, role, retry_context)
+        if self.state["status"] != ac.RUNNING or not isinstance(retry, dict):
+            return retry
+        if retry.get("raw_evidence_requests"):
+            self.journal.append("RAW_EVIDENCE_REQUEST_REJECTED", iteration_id=self._iteration_id(),
+                                phase=self.state["phase"], payload={"reason": "one_targeted_retrieval_round_limit",
+                                                                     "requests": retry["raw_evidence_requests"]})
+            retry = dict(retry)
+            retry["raw_evidence_requests"] = []
+            retry["verdict"] = "ESCALATE"
+            retry["summary"] = "review remains ambiguous after the bounded raw evidence retrieval"
+        return retry
     def _do_review(self) -> None:
         it = self._it()
         if it["packet"]["access"]["diff_sha256"] != diff_digest(self.env.diff()):
@@ -883,7 +1266,7 @@ class AutonomyController:
             it["packet"] = self._build_packet("REVIEW")
             if self.state["status"] != ac.RUNNING:
                 return
-        raw = self._call("review", "reviewer", self._reviewer_context(it["packet"], "REVIEW"))
+        raw = self._review_with_raw_access("review", "reviewer", self._reviewer_context(it["packet"], "REVIEW"))
         if self.state["status"] != ac.RUNNING:
             return
         result = ac.normalize_review(raw, failing_evidence=ac.evidence_failures(self._checks()))
@@ -905,8 +1288,16 @@ class AutonomyController:
         self.journal.append("REVIEW_VERDICT", iteration_id=self._iteration_id(), phase=phase, payload={
             "verdict": result["verdict"], "downgraded_from": result.get("downgraded_from"),
             "summary": result.get("summary"), "findings": result["findings"],
-            "reviewed_by": self._role_audit()["reviewer" if phase == ac.REVIEW else "final_reviewer"],
+            "reviewed_by": self._execution_audit(result.get("execution_id")),
             "execution_id": result.get("execution_id")})
+
+    def _execution_audit(self, execution_id: str | None) -> dict[str, Any] | None:
+        execution = next((row for row in reversed(self.state.get("executions", []))
+                          if row.get("execution_id") == execution_id), None)
+        if not execution:
+            return None
+        return {key: execution.get(key) for key in
+                ("role", "profile", "model", "effort", "execution_id", "selection")}
 
     # REPAIR ------------------------------------------------------------------
 
@@ -949,12 +1340,18 @@ class AutonomyController:
         for key in ("deviations", "uncertainties", "unresolved"):
             if result.get(key):
                 it["execution"][key] = list(it["execution"].get(key, [])) + list(result[key])
+        repair_execution = self.state["executions"][-1] if self.state.get("executions") else {}
+        it["repairs"][-1].update({"profile_id": repair_execution.get("profile"),
+                                  "execution_id": repair_execution.get("execution_id"),
+                                  "selection": repair_execution.get("selection")})
         self.journal.append("REPAIR_COMPLETED", iteration_id=it["iteration_id"], phase=ac.REPAIR, payload={
             "attempt": it["repair_attempts"], "origin": origin["origin"], "addresses": it["repairs"][-1]["addresses"],
-            "repaired_by": self._role_audit()["repairer"],
-            "execution_id": self.state["executions"][-1]["execution_id"] if self.state["executions"] else None})
+            "repaired_by": self._execution_audit(repair_execution.get("execution_id")),
+            "execution_id": repair_execution.get("execution_id")})
         self._done(attempt=it["repair_attempts"])
-        self._goto(ac.SELF_VERIFY if origin["origin"] == "SELF_VERIFY" else ac.FINAL_REVIEW)
+        # Every repair returns through deterministic/semantic self-verification
+        # and the primary review pipeline before a fresh final review.
+        self._goto(ac.SELF_VERIFY)
         self._save()
 
     # FINAL_REVIEW ------------------------------------------------------------
@@ -965,7 +1362,11 @@ class AutonomyController:
         if self.state["status"] != ac.RUNNING:
             return
         it["packet"] = packet
-        raw = self._call("final_review", "final_reviewer", self._reviewer_context(packet, "FINAL_REVIEW"))
+        selection = self._policy_selection("final_review", {})
+        it["final_review_selection"] = dict(selection) if selection else None
+        self._save()
+        raw = self._review_with_raw_access("final_review", "final_reviewer",
+                                           self._reviewer_context(packet, "FINAL_REVIEW"), selection)
         if self.state["status"] != ac.RUNNING:
             return
         result = ac.normalize_review(raw, failing_evidence=ac.evidence_failures(self._checks()))
@@ -981,6 +1382,7 @@ class AutonomyController:
             it["status"], it["outcome"], it["finished_at"] = "ACCEPTED", "PASS", _now()
             for item_id in it["lineage"]["roadmap_refs"]:
                 self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
+            ac.refresh_dependency_states(self.state["roadmap"])
             self.journal.append("ITERATION_ACCEPTED", iteration_id=it["iteration_id"], phase=ac.FINAL_REVIEW, payload={
                 "roadmap_refs": it["lineage"]["roadmap_refs"], "repair_attempts": it["repair_attempts"],
                 "repaired": [r["addresses"] for r in it["repairs"]], "checks": it["evidence_state"],
@@ -997,15 +1399,22 @@ class AutonomyController:
 
     def _do_roadmap_check(self) -> None:
         remaining = ac.remaining_items(self.state["roadmap"])
+        autonomous_remaining = ac.autonomous_remaining_items(self.state["roadmap"])
         cap = self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"]["max_iterations"]
         done = len(self.state["iterations"])
-        payload = {"remaining": remaining, "iterations_done": done, "max_iterations": cap}
-        if not remaining:
+        human_gated = [item_id for item_id, item in self.state["roadmap"].items()
+                       if item.get("status") == ac.R_HUMAN_REQUIRED or
+                       item.get("dependency_state") in {"HUMAN_REQUIRED", "BLOCKED_BY_SKIPPED_DEPENDENCY"}]
+        payload = {"remaining": remaining, "autonomous_remaining": autonomous_remaining,
+                   "human_gated": human_gated, "iterations_done": done, "max_iterations": cap}
+        if not autonomous_remaining:
             self.journal.append("ROADMAP_DECISION", phase=ac.ROADMAP_CHECK, payload={
                 **payload, "next_action_available": False, "roadmap_exhausted": True,
-                "reason": "every roadmap item is DONE or justified SKIPPED"})
+                "reason": "no valid autonomous roadmap item remains; remaining human-gated items are preserved"})
             self._done(next="AWAITING_HUMAN")
-            self._await_human(ac.HOLD_ROADMAP_EXHAUSTED, "roadmap exhausted")
+            self._await_human(ac.HOLD_ROADMAP_EXHAUSTED,
+                              "no valid autonomous roadmap item remains; human-gated items: " +
+                              (", ".join(human_gated) if human_gated else "none"))
         elif done >= cap:
             self.journal.append("ROADMAP_DECISION", phase=ac.ROADMAP_CHECK, payload={
                 **payload, "next_action_available": False, "roadmap_exhausted": False,
