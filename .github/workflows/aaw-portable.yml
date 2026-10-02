@@ -34,8 +34,7 @@ jobs:
         run: |
           python -m pip install pytest
           python -m pytest -q -p no:cacheprovider test_autonomy_safe_stop.py test_product_mvp.py -k "catalog_recommended_equals or unavailable_recommended or login_parsers or update_newer or no_cli or server_requires"
-      - name: Full product suite on Windows (informational; fake CLIs via .cmd wrappers)
-        continue-on-error: true
+      - name: Full product suite on Windows (real worker processes, fake CLIs via .cmd wrappers)
         timeout-minutes: 10
         run: python -m pytest -q -p no:cacheprovider -rf test_product_mvp.py
       - name: Build portable app
