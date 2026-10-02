@@ -57,6 +57,11 @@ artifact, journal events).
 
 Without a token in scope nothing changes (full regression unchanged).
 
+On Windows the token now ends the provider's whole process tree
+(`taskkill /T /F` in `run_cancellation`): provider CLIs are often `.cmd`/npm
+shims, and terminating only the shim left the real CLI running (found by the
+Windows CI product suite). POSIX behaviour is unchanged.
+
 ### 2. Planner handoff contract (found by the live walkthrough)
 
 The V0.3 freeze never ran the initial architect live (it was scripted). The
@@ -136,3 +141,31 @@ hold, the old run is rejected as superseded. Pokaż dowody → raw artifacts.
 
 User accounts, payments, cloud backend, telemetry upload, marketplace,
 benchmark scraping, team collaboration, automatic merge/push.
+
+## Validation summary
+
+| Check | Result |
+|---|---|
+| Baseline before changes (`961e7f6`, Python 3.12, codex stub on PATH, Xvfb) | 445 passed, 2 skipped |
+| Full regression after changes (same setup) | 476 passed, 2 skipped, 0 failed (445 + 24 product + 7 engine-hook/handoff) |
+| Windows CI (`windows-latest`): engine-hook + product suite (real worker processes, fake CLIs), PyInstaller build, frozen `AAW.exe --self-test`, `--detect`, UI served on loopback, `AAW-Windows-x64.zip` uploaded | green |
+| Linux portable build: unzip → frozen binary → UI → START → frozen worker → Human Gate (fake CLI) | passed |
+| Live walkthrough (real Claude CLI) | 2 iterations PASS → Human Gate (see above) |
+
+## Known limitations
+
+* The Windows `.exe` is built and smoke-tested in CI, but no real provider run
+  was executed on Windows (the runner has no AI CLI); the live run was on Linux.
+* Codex CLI was not available here: Codex paths are covered with a fake CLI
+  only; the Claude-only live run used visible alternatives for the V0.3
+  Codex-based slots.
+* `OPUS_5_5_*` / `SONNET_5_5_MEDIUM` stay `KNOWN_BUT_UNAVAILABLE` in the frozen
+  catalog (not changed here), so "Najsilniejsza" planning resolves to the
+  visible alternative `OPUS_HIGH` / `ASTRA_MAX`.
+* The canonical checkout must stay clean during a run (V0.3 Git boundary):
+  editing the main folder while AAW works stops the run.
+* POSIX STOP terminates the provider process itself, not its process group;
+  a read-only call whose CLI spawned long-running children may need FORCE.
+* The executable is unsigned (SmartScreen may warn on first start).
+* Live E2E covered the happy path; repair, STOP/RESUME, crash/resume and
+  roadmap/iteration-cap paths are covered with real workers and scripted CLIs.
