@@ -433,6 +433,9 @@ def test_restart_after_worker_crash_resumes_through_lock_reconciliation(env):
     run_id = start(env, directions=[])
     wait_for(run_id, lambda v: (v.get("process") or {}).get("phase") == "REVIEW"
              and v["process"].get("execution_id"), timeout=30, interval=0.05)
+    deadline = time.time() + 30   # the provider call itself must have started (slow process start on Windows)
+    while not any(c["role"] == "REVIEWER" for c in env.calls()) and time.time() < deadline:
+        time.sleep(0.05)
     worker = json.loads((prun.product_dir(run_id) / "worker.json").read_text())
     os.kill(worker["pid"], getattr(signal, "SIGKILL", signal.SIGTERM))  # power loss / app crash
     view = wait_for(run_id, lambda v: v["status"] == pv.S_INTERRUPTED, timeout=15)
