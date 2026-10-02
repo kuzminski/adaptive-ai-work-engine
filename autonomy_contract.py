@@ -25,9 +25,12 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-CONTRACT_ID = "AAW_AUTONOMOUS_ITERATIONS_V0.1"
-SCHEMA_VERSION = "AAW_AUTONOMY_STATE_V0.1"
-JOURNAL_SCHEMA_VERSION = "AAW_AUTONOMY_JOURNAL_V0.1"
+CONTRACT_ID = "AAW_AUTONOMOUS_ITERATIONS_V0.2"
+SCHEMA_VERSION = "AAW_AUTONOMY_STATE_V0.2"
+JOURNAL_SCHEMA_VERSION = "AAW_AUTONOMY_JOURNAL_V0.2"
+# V0.2 reads V0.1 state unchanged (V0.1 iteration ids and in-flight markers
+# without an execution_id stay valid; nothing is backfilled).
+READABLE_SCHEMA_VERSIONS = ("AAW_AUTONOMY_STATE_V0.1", SCHEMA_VERSION)
 
 # ── lifecycle ────────────────────────────────────────────────────────────────
 
@@ -71,6 +74,14 @@ PHASES = tuple(TRANSITIONS)
 # never silently re-run (the V0.2 rule: no repeated side effects).
 SIDE_EFFECT_PHASES = frozenset({EXECUTE, REPAIR})
 
+# V0.2: every role call is one V0.4A execution. The invocation kind is drawn
+# from the closed V0.4A vocabulary (IMPLEMENT / SELF_VERIFY are `LLM` with the
+# role kept as a node attribute, exactly as V0.4A prescribes).
+INVOCATION_KIND_BY_EXECUTOR: dict[str, str] = {
+    "plan": "PLAN", "execute": "LLM", "self_verify": "LLM", "review": "REVIEW",
+    "repair": "REPAIR", "final_review": "REVIEW", "prepare_packet": "PREPROCESS",
+}
+
 RUNNING = "RUNNING"
 STATUSES = (RUNNING, AWAITING_HUMAN, HUMAN_APPROVED, PROMOTED, REJECTED)
 
@@ -111,6 +122,12 @@ E_GIT = "GIT_BOUNDARY_VIOLATION"
 E_INTERRUPTED = "INTERRUPTED_IN_FLIGHT"
 E_EXECUTOR = "EXECUTOR_FAILED"
 E_UNEXPLAINED_END = "ROADMAP_END_UNJUSTIFIED"
+# V0.2
+E_ROLE_UNAVAILABLE = "ROLE_PROFILE_UNAVAILABLE"      # configured profile not runnable now; no substitution
+E_LEDGER = "LEDGER_WRITE_ERROR"                      # durable INTENT failed: nothing was dispatched
+E_RECONCILE = "RECONCILIATION_REQUIRED"              # lifecycle evidence is ambiguous; a human decides
+E_SESSION_REUSE = "PROVIDER_SESSION_REUSED"          # a fresh-context role reported a reused provider session
+E_VERIFY_MUTATION = "SELF_VERIFY_MUTATED_WORKTREE"   # a read-only phase changed the diff
 
 
 class AutonomyError(ValueError):
@@ -450,7 +467,8 @@ def build_review_packet(*, iteration: Mapping[str, Any], mandate: Mapping[str, A
                         diff_sha256: str, changed_files: Sequence[str], head: str | None,
                         base: str | None, worktree: str | None,
                         checks: Sequence[Mapping[str, Any]], adverse: Sequence[Mapping[str, Any]],
-                        diff_stat: str | None = None, kind: str = "REVIEW") -> dict[str, Any]:
+                        diff_stat: str | None = None, kind: str = "REVIEW",
+                        commits: Sequence[str] = ()) -> dict[str, Any]:
     """The map handed to a reviewer — explicitly not the territory.
 
     `access` tells the reviewer where the real diff, files and evidence live
@@ -479,6 +497,7 @@ def build_review_packet(*, iteration: Mapping[str, Any], mandate: Mapping[str, A
         "REVIEW_TARGETS": list(execution.get("review_targets", [])) or list(changed_files)[:10],
         "access": {"source_of_truth": "REPOSITORY_STATE", "worktree": worktree, "base_head": base,
                    "head": head, "diff_sha256": diff_sha256, "changed_files": list(changed_files),
+                   "commits": list(commits),
                    "note": "this packet is a map; verify against the real diff, files and test output"},
     }
 
@@ -503,6 +522,14 @@ def enforce_adverse_preservation(packet: Mapping[str, Any], adverse: Sequence[Ma
 # ── role configuration (kept apart from the state machine) ──────────────────
 
 ROLES = ("planner", "implementer", "review_prep", "reviewer", "final_reviewer")
+# V0.2 roles that V0.1 executed under the implementer binding. A config may
+# bind them to their own profile; when it does not, the alias below is the
+# *declared contract default* (recorded as binding_source), never a runtime
+# substitution for an unavailable model.
+OPTIONAL_ROLE_ALIASES = {"self_verifier": "implementer", "repairer": "implementer"}
+ROLE_BY_EXECUTOR = {"plan": "planner", "execute": "implementer", "self_verify": "self_verifier",
+                    "review": "reviewer", "repair": "repairer", "final_review": "final_reviewer",
+                    "prepare_packet": "review_prep"}
 
 
 def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -519,9 +546,16 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
         _require(isinstance(row, dict) and isinstance(row.get("profile_id"), str), f"role {role} needs a profile_id")
         profile = profiles.get(row["profile_id"])
         _require(profile is not None, f"role {role}: unknown profile {row['profile_id']!r}")
-        resolved[role] = {"role": role, "profile_id": row["profile_id"], "harness": profile.get("harness"),
-                          "runtime_model_id": profile.get("runtime_model_id"), "effort": profile.get("effort"),
-                          "availability": profile.get("availability")}
+        resolved[role] = _binding(role, row["profile_id"], profile, "AUTONOMY_ROLES")
+    for role, alias in OPTIONAL_ROLE_ALIASES.items():
+        row = config["roles"].get(role)
+        if row is None:
+            resolved[role] = {**resolved[alias], "role": role, "binding_source": f"CONTRACT_ALIAS:{alias}"}
+            continue
+        _require(isinstance(row, dict) and isinstance(row.get("profile_id"), str), f"role {role} needs a profile_id")
+        profile = profiles.get(row["profile_id"])
+        _require(profile is not None, f"role {role}: unknown profile {row['profile_id']!r}")
+        resolved[role] = _binding(role, row["profile_id"], profile, "AUTONOMY_ROLES")
     same = resolved["reviewer"]["runtime_model_id"] == resolved["implementer"]["runtime_model_id"]
     _require(not same or config.get("allow_same_model_fresh_context") is True,
              "reviewer must not share the implementer's runtime model unless allow_same_model_fresh_context is true")
@@ -529,6 +563,13 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
     for binding in resolved.values():
         binding["review_independence"] = independence if binding["role"] in {"reviewer", "final_reviewer"} else None
     return resolved
+
+
+def _binding(role: str, profile_id: str, profile: Mapping[str, Any], source: str) -> dict[str, Any]:
+    return {"role": role, "profile_id": profile_id, "harness": profile.get("harness"),
+            "provider": profile.get("provider"), "runtime_model_id": profile.get("runtime_model_id"),
+            "effort": profile.get("effort"), "availability": profile.get("availability"),
+            "binding_source": source}
 
 
 def load_roles(path: Path, profiles_path: Path) -> dict[str, dict[str, Any]]:
@@ -606,26 +647,37 @@ class GuardedGit:
     """
 
     def __init__(self, runner: Callable[[Sequence[str]], tuple[int, str, str]], *,
-                 token: "PromotionToken | None" = None, on_denied: Callable[[Sequence[str], str], None] | None = None) -> None:
+                 token: "PromotionToken | None" = None, on_denied: Callable[[Sequence[str], str], None] | None = None,
+                 candidate_id: str | None = None, run_id: str | None = None) -> None:
         self._runner, self._token, self._on_denied = runner, token, on_denied
+        # V0.2: a handle bound to a candidate/run accepts only a token minted for exactly that.
+        self._candidate_id, self._run_id = candidate_id, run_id
+
+    def _token_matches(self) -> bool:
+        token = self._token
+        if not (token and token.valid()):
+            return False
+        if self._candidate_id is not None and token.candidate_id != self._candidate_id:
+            return False
+        return self._run_id is None or token.run_id == self._run_id
 
     def run(self, argv: Sequence[str]) -> tuple[int, str, str]:
-        ok, why = classify_git_command(argv, promotion_authorized=bool(self._token and self._token.valid()))
+        ok, why = classify_git_command(argv, promotion_authorized=self._token_matches())
         if not ok:
             if self._on_denied:
                 self._on_denied(argv, why)
             raise GitPolicyViolation(why)
-        if self._token and self._token.valid() and _git_subcommand(argv)[0] in {"merge", "push"}:
+        if self._token_matches() and _git_subcommand(argv)[0] in {"merge", "push"}:
             self._token.consume()
         return self._runner(argv)
 
 
 class PromotionToken:
     """One-shot authority to integrate. Only `AutonomyController.promote` mints
-    one, and only from a recorded human approval."""
+    one, and only from a recorded human approval of one exact candidate."""
 
-    def __init__(self, run_id: str, approval_id: str) -> None:
-        self.run_id, self.approval_id, self._uses = run_id, approval_id, 1
+    def __init__(self, run_id: str, approval_id: str, candidate_id: str | None = None) -> None:
+        self.run_id, self.approval_id, self.candidate_id, self._uses = run_id, approval_id, candidate_id, 1
 
     def valid(self) -> bool:
         return self._uses > 0

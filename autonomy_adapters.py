@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""AAW AUTONOMOUS ITERATIONS V0.2 — real role executors.
+
+Binds the controller's six role operations to the existing DIRECT_CLI_CONTROL
+provider path. Resolution is pure configuration:
+
+    role → AUTONOMY_ROLES.json profile_id → IMPLEMENTER_PROFILES → MODEL_CATALOG
+         → harness (codex | claude) → `workflow_runner.run_process(dispatch=True)`
+
+No model name appears here. The *controller* allocates the V0.4A execution and
+records EXECUTION_INTENT before calling an executor; this module only
+
+  1. refuses (`preflight`) a profile that is not runnable now — the controller
+     then stops with ROLE_PROFILE_UNAVAILABLE; nothing is substituted;
+  2. dispatches one fresh provider process inside the controller's observation
+     scope (so EXECUTION_STARTED is the real spawn receipt);
+  3. persists the raw result artifact, records the provider session on the
+     descriptor, and closes the execution with the observed exit.
+
+Each role gets a structured handoff (frozen mandate, plan, packet, raw diff,
+explicit source references) — never another role's chat history. Every call is
+a new process with no session persistence (`claude --no-session-persistence`,
+`codex exec --ephemeral`), and any provider session id inherited from a parent
+Claude Code session is removed from the child environment.
+
+Local models (ollama) are not bound to these roles: the catalog forbids them
+for implementation and independent review.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import workflow_runner as wr
+from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
+from execution_contract import update_execution
+from model_catalog import CatalogError, validate_model_effort
+
+ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.2"
+SUPPORTED_HARNESSES = ("codex", "claude")
+# Provider-session variables a parent Claude Code session exports. Inherited by
+# a child `claude --print`, they make the child report the *parent's* session
+# id — fresh context would then be unprovable from evidence.
+INHERITED_SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID")
+READ_ONLY_EXECUTORS = frozenset({"plan", "review", "final_review"})
+MAX_PROMPT_DIFF = 120_000
+
+_CHECK = {"type": "object", "additionalProperties": False, "required": ["name", "status", "summary"],
+          "properties": {"name": {"type": "string"},
+                         "status": {"type": "string", "enum": ["PASS", "FAIL", "ERROR", "WARN", "SKIPPED"]},
+                         "summary": {"type": "string"}}}
+_STRS = {"type": "array", "items": {"type": "string"}}
+
+# Small, closed role output contracts. Field names are the V0.1 controller
+# contract; the V0.2 role vocabulary maps onto them (see the V0.2 document).
+OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "plan": {"type": "object", "additionalProperties": False,
+             "required": ["status", "mandate_hash", "goal", "roadmap_refs", "scope_justification",
+                          "acceptance_criteria", "touched_areas", "decisions", "skipped_items", "reason"],
+             "properties": {
+                 "status": {"type": "string", "enum": ["ITERATION", "NO_FURTHER_ACTION", "ESCALATE"]},
+                 "mandate_hash": {"type": "string"}, "goal": {"type": ["string", "null"]},
+                 "roadmap_refs": _STRS, "scope_justification": {"type": ["string", "null"]},
+                 "acceptance_criteria": _STRS, "touched_areas": _STRS,
+                 "decisions": {"type": "array", "items": {
+                     "type": "object", "additionalProperties": False, "required": ["kind", "summary"],
+                     "properties": {"kind": {"type": "string"}, "summary": {"type": "string"}}}},
+                 "skipped_items": {"type": "array", "items": {
+                     "type": "object", "additionalProperties": False, "required": ["item_id", "reason"],
+                     "properties": {"item_id": {"type": "string"}, "reason": {"type": "string"}}}},
+                 "reason": {"type": ["string", "null"]}}},
+    "execute": {"type": "object", "additionalProperties": False,
+                "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
+                "properties": {"summary": {"type": "string"}, "changed_files": _STRS,
+                               "checks": {"type": "array", "items": _CHECK},
+                               "deviations": _STRS, "uncertainties": _STRS}},
+    "self_verify": {"type": "object", "additionalProperties": False, "required": ["summary", "checks"],
+                    "properties": {"summary": {"type": "string"}, "checks": {"type": "array", "items": _CHECK}}},
+    "review": {"type": "object", "additionalProperties": False, "required": ["verdict", "summary", "findings"],
+               "properties": {
+                   "verdict": {"type": "string", "enum": ["PASS", "REPAIR_REQUIRED", "ESCALATE"]},
+                   "summary": {"type": "string"},
+                   "findings": {"type": "array", "items": {
+                       "type": "object", "additionalProperties": False,
+                       "required": ["finding_key", "severity", "summary", "file", "blocking", "evidence_ref"],
+                       "properties": {"finding_key": {"type": ["string", "null"]},
+                                      "severity": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+                                      "summary": {"type": "string"}, "file": {"type": ["string", "null"]},
+                                      "blocking": {"type": "boolean"},
+                                      "evidence_ref": {"type": ["string", "null"]}}}}}},
+    "repair": {"type": "object", "additionalProperties": False,
+               "required": ["summary", "addressed_findings", "changed_files", "checks", "uncertainties"],
+               "properties": {"summary": {"type": "string"}, "addressed_findings": _STRS, "changed_files": _STRS,
+                              "checks": {"type": "array", "items": _CHECK}, "uncertainties": _STRS}},
+}
+OUTPUT_SCHEMAS["final_review"] = OUTPUT_SCHEMAS["review"]
+
+ROLE_INSTRUCTIONS: dict[str, str] = {
+    "plan": ("You are the AAW PLANNER. Decide the single next iteration inside the frozen human MANDATE, or that "
+             "no further justified action remains (every pending roadmap item skipped with a reason), or ESCALATE. "
+             "You choose how and in what order, never what for. Echo MANDATE.mandate_hash exactly. Iteration 1 must "
+             "carry all of ITERATION_CONTRACT.acceptance_criteria verbatim. roadmap_refs must be PENDING items whose "
+             "dependencies are met. decisions[].kind must be one of: IMPLEMENTATION_STRUCTURE, REFACTORING, "
+             "LOCAL_TECHNICAL, TESTS, INTERNAL_ARCHITECTURE, REORDER_ROADMAP, SPLIT_STAGE, MERGE_STAGES, SKIP_STAGE, "
+             "REPLACE_STAGE (anything else is escalated). Do not modify any file."),
+    "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
+                "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
+                "your changes uncommitted. Run the checks you can and report each honestly (FAIL is a valid "
+                "status). Report deviations from the plan and known limitations (uncertainties)."),
+    "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
+                    "REQUIRED_EVIDENCE by reading code and running checks. You are READ-ONLY: do not create, edit or "
+                    "delete files (the controller compares the diff before and after you). Report each check."),
+    "review": ("You are an independent AAW REVIEWER with a fresh context. PACKET is a map, not the territory: "
+               "verify against RAW.diff (also at RAW.diff_path) and the repository. Return PASS only if the "
+               "acceptance criteria are met and nothing blocking remains; REPAIR_REQUIRED with concrete findings; "
+               "ESCALATE when the work cannot be judged inside the mandate. Do not modify any file."),
+    "repair": ("You are the AAW REPAIRER. Address only FINDINGS, inside EXACT_ALLOWED_REPAIR_SCOPE. Do not expand "
+               "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
+               "finding keys you addressed and the checks you ran."),
+}
+ROLE_INSTRUCTIONS["final_review"] = ROLE_INSTRUCTIONS["review"].replace("REVIEWER", "FINAL REVIEWER")
+
+
+# ── role → runtime resolution ───────────────────────────────────────────────
+
+def resolve_runtime(binding: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (runtime, None) when the configured profile is runnable now, else (None, reason)."""
+    try:
+        profiles = wr.load_implementer_profiles()
+    except wr.WorkflowStop as exc:
+        return None, str(exc)
+    profile_id = str(binding.get("profile_id") or "")
+    profile = profiles.get(profile_id)
+    if profile is None:
+        return None, f"unknown profile {profile_id!r}"
+    harness = str(profile.get("harness") or "")
+    if harness not in SUPPORTED_HARNESSES:
+        return None, f"harness {harness!r} is not a direct CLI harness for autonomy roles"
+    status, reason = wr.profile_availability(profile)
+    if status != "VERIFIED":
+        return None, reason or "profile unavailable"
+    executable = wr.harness_executable(harness)
+    try:
+        model = validate_model_effort(str(profile["runtime_model_id"]), str(profile["effort"]))
+    except CatalogError as exc:
+        return None, str(exc)
+    return {"profile_id": profile_id, "harness": harness, "executable": executable,
+            "model": str(profile["runtime_model_id"]), "effort": str(profile["effort"]),
+            "provider": model.get("provider")}, None
+
+
+def preflight_roles(roles: Mapping[str, Mapping[str, Any]], executors: Sequence[str] | None = None) -> dict[str, Any]:
+    """Availability of every role the run will use. Diagnostic; the controller re-checks per call."""
+    from autonomy_contract import ROLE_BY_EXECUTOR
+    report = {}
+    for name in executors or ("plan", "execute", "self_verify", "review", "repair", "final_review"):
+        role = ROLE_BY_EXECUTOR[name]
+        runtime, reason = resolve_runtime(roles[role])
+        report[role] = {"profile_id": roles[role].get("profile_id"), "available": runtime is not None,
+                        "reason": reason, "harness": (runtime or {}).get("harness"),
+                        "model": (runtime or {}).get("model"), "effort": (runtime or {}).get("effort")}
+    return {"all_available": all(r["available"] for r in report.values()), "roles": report}
+
+
+# ── handoffs (structured, never a chat history) ─────────────────────────────
+
+def _bounded(text: str | None, limit: int = MAX_PROMPT_DIFF) -> str:
+    text = text or ""
+    return text if len(text) <= limit else text[:limit] + f"\n...[truncated {len(text) - limit} chars; see diff_path]"
+
+
+def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
+    mandate = ctx["mandate"]
+    contract = mandate["iteration_contract"]
+    execution = ctx["execution"]
+    worktree = (ctx["env"].describe() or {}).get("worktree")
+    common = {"ROLE": ctx["role"], "AAW_RUN_ID": execution["run_id"], "ITERATION_ID": execution["iteration_id"],
+              "EXECUTION_ID": execution["execution_id"], "WORKTREE_PATH": worktree,
+              "SOURCE_REFERENCES": {"execution_descriptor": str(execution["descriptor_path"]),
+                                    "mandate_hash": mandate["mandate_hash"]}}
+    if name == "plan":
+        return {**common, "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
+                "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
+                "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
+    if name in ("execute", "repair", "self_verify"):
+        it = ctx["iteration"]
+        out = {**common, "PLAN": ctx["plan"], "CONSTRAINTS": contract.get("constraints", []),
+               "FORBIDDEN_CHANGES": contract.get("forbidden_changes", []),
+               "REQUIRED_EVIDENCE": contract.get("required_evidence", []),
+               "FORBIDDEN_AREAS": mandate["roadmap_mandate"]["autonomy_bounds"].get("forbidden_areas", [])}
+        if name == "self_verify":
+            out.update({"CHANGED_FILES": ctx.get("changed_files", []), "DIFF": _bounded(ctx.get("diff")),
+                        "IMPLEMENTATION_RESULT": it.get("execution")})
+        if name == "repair":
+            out.update({"FINDINGS": ctx["findings"], "ATTEMPT": ctx["attempt"],
+                        "EXACT_ALLOWED_REPAIR_SCOPE": {
+                            "findings": [f.get("finding_key") for f in ctx["findings"]],
+                            "rule": "Only changes directly required by FINDINGS; no new goal, no new feature."}})
+        return out
+    # review / final_review: fresh reviewer, packet + territory
+    raw = dict(ctx["raw"])
+    raw["diff"] = _bounded(raw.get("diff"))
+    return {**common, "REVIEW_KIND": ctx["review_kind"], "FROZEN_MANDATE": mandate,
+            "PLAN": ctx["iteration"]["plan"], "PACKET": ctx["packet"], "RAW": raw}
+
+
+# ── the executor ────────────────────────────────────────────────────────────
+
+def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Path, final_path: Path,
+          schema: Mapping[str, Any], max_turns: int) -> tuple[list[str], bool]:
+    """Same direct-CLI invocation shape as `workflow_runner.execute_llm_node`.
+
+    Returns (argv, prompt_on_stdin). The prompt always goes on stdin: a review
+    handoff with a diff exceeds the Windows command-line limit as an argument.
+    """
+    read_only = name in READ_ONLY_EXECUTORS
+    if runtime["harness"] == "codex":
+        sandbox = "read-only" if read_only else "workspace-write"
+        return [str(runtime["executable"]), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", sandbox,
+                "--model", runtime["model"], "--config", f'model_reasoning_effort="{runtime["effort"]}"',
+                "--cd", worktree, "--output-schema", str(schema_path), "--output-last-message", str(final_path),
+                "--json", "-"], True
+    argv = [str(runtime["executable"]), "--print", "--no-session-persistence",
+            "--permission-mode", "plan" if read_only else "acceptEdits",
+            "--model", runtime["model"], "--effort", runtime["effort"], "--output-format", "json",
+            "--json-schema", json.dumps(schema, separators=(",", ":")), "--max-turns", str(max_turns)]
+    if not read_only:
+        # Checks need a shell; integration commands stay denied (the Git
+        # boundary check after the phase is the authority, this is defence).
+        argv += ["--allowedTools", "Bash", "Read", "Edit", "Write", "Glob", "Grep",
+                 "--disallowedTools", "Bash(git push:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
+                 "Bash(git pull:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git reset:*)"]
+    return argv, True
+
+
+class DirectRoleExecutor:
+    """One role operation bound to the direct CLI provider path."""
+
+    fixture_class = "REAL_PROVIDER_DIRECT_CLI"
+
+    def __init__(self, name: str, *, timeout: int = 1800, max_turns: int = 30) -> None:
+        self.name, self.timeout, self.max_turns = name, timeout, max_turns
+
+    def preflight(self, binding: Mapping[str, Any]) -> str | None:
+        return resolve_runtime(binding)[1]
+
+    def __call__(self, ctx: dict[str, Any]) -> dict[str, Any] | None:
+        execution = ctx["execution"]
+        recorder, descriptor_path = execution["recorder"], Path(execution["descriptor_path"])
+        runtime, reason = resolve_runtime(ctx["binding"])
+        if runtime is None:  # availability changed since preflight: still nothing dispatched
+            raise RoleUnavailable(reason or "profile unavailable")
+        worktree = str((ctx["env"].describe() or {}).get("worktree") or ".")
+        schema = OUTPUT_SCHEMAS[self.name]
+        handoff = build_handoff(self.name, ctx)
+        prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
+                  "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix="aaw_autonomy_role_") as temp:
+            schema_path, final_path = Path(temp) / "schema.json", Path(temp) / "final.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+            argv, on_stdin = _argv(runtime, self.name, worktree, schema_path, final_path, schema, self.max_turns)
+            try:
+                rc, stdout, stderr = wr.run_process(argv, cwd=Path(worktree), stdin=prompt if on_stdin else None,
+                                                    timeout=self.timeout, provider=runtime["provider"],
+                                                    adapter=ADAPTER_ID, dispatch=True,
+                                                    env_remove=INHERITED_SESSION_ENV)
+            except wr.WorkflowStop as exc:
+                recorder.close(close_reason="FAILED", effect_certainty="CONFIRMED", outcome="BLOCKED",
+                               observation_source="RUNNER_EXCEPTION" if recorder.started else "SPAWN_FAILURE",
+                               detail=str(exc))
+                raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started) from exc
+            session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
+        elapsed = round(time.monotonic() - started, 3)
+        update_execution(descriptor_path, execution["execution_id"],
+                         provider_session_id=str(session) if session else None,
+                         status="COMPLETED" if rc == 0 else "FAILED")
+        result_path = Path(execution["result_path"])
+        _write_once(result_path, {
+            "execution_id": execution["execution_id"], "role": ctx["role"], "executor": self.name,
+            "recorded_by": ADAPTER_ID, "result": raw, "exit_code": rc, "provider_session_id": session,
+            "harness": runtime["harness"], "model": runtime["model"], "effort": runtime["effort"],
+            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "usage": usage, "provider_meta": provider_meta,
+            "stderr_tail": (stderr or "")[-4000:], "stdout_tail": (stdout or "")[-4000:] if raw is None else None})
+        close = wr._close_from_returncode(rc, provider_session_id=session)
+        valid = rc == 0 and isinstance(raw, dict)
+        if rc == 0 and not valid:
+            close["effect_certainty"] = "PARTIAL"  # process exited cleanly; only the structured result is untrusted
+        recorder.close(outcome="RESULT_RECEIVED" if valid else ("INVALID" if rc == 0 else "BLOCKED"),
+                       result_refs=[str(result_path)], detail=None if valid else (stderr or stdout)[-2000:], **close)
+        if rc != 0:
+            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True)
+        if not valid and self.name not in ("review", "final_review"):
+            raise ExecutorFailure(f"{self.name}: provider returned no structured result", dispatched=True)
+        # An invalid reviewer result is handed back as-is: `normalize_review`
+        # turns it into ESCALATE (REVIEW_RESULT_INVALID), never a silent PASS.
+        return raw
+
+    @staticmethod
+    def _parse(harness: str, rc: int, stdout: str, final_path: Path) -> tuple[Any, dict, Any, dict]:
+        if harness == "codex":
+            _, session, usage = wr.parse_codex_events(stdout)
+            raw = None
+            if rc == 0 and final_path.is_file():
+                try:
+                    raw = json.loads(final_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    raw = None
+            return session, usage, raw, {}
+        try:
+            envelope = json.loads(stdout) if stdout.strip() else {}
+        except json.JSONDecodeError:
+            envelope = {}
+        raw = envelope.get("structured_output")
+        if raw is None and isinstance(envelope.get("result"), str):
+            text = envelope["result"].strip()
+            if text.startswith("```"):
+                text = text.strip("`").split("\n", 1)[-1]
+            try:
+                raw = json.loads(text) if text.startswith("{") else None
+            except json.JSONDecodeError:
+                raw = None
+        meta = {k: envelope.get(k) for k in ("total_cost_usd", "num_turns", "terminal_reason", "is_error",
+                                             "permission_denials")}
+        return envelope.get("session_id"), dict(envelope.get("usage") or {}), raw, meta
+
+
+def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30) -> dict[str, DirectRoleExecutor]:
+    """The production executor set for `AutonomyController` (no `prepare_packet`:
+    the deterministic packet is used as-is)."""
+    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns)
+            for name in ("plan", "execute", "self_verify", "review", "repair", "final_review")}

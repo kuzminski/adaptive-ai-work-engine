@@ -1,12 +1,14 @@
 {
-  "contract": "AAW_AUTONOMOUS_ITERATIONS_V0.1",
-  "purpose": "Logical role -> IMPLEMENTER_PROFILES profile. The state machine knows only role names; swap a profile_id here to re-bind a role. Not a model registry or ranking.",
+  "contract": "AAW_AUTONOMOUS_ITERATIONS_V0.2",
+  "purpose": "Logical role -> IMPLEMENTER_PROFILES profile. The state machine knows only role names; swap a profile_id here to re-bind a role. Not a model registry or ranking. An unavailable profile stops the run (ROLE_PROFILE_UNAVAILABLE); there is no fallback unless one is declared here.",
   "allow_same_model_fresh_context": false,
   "roles": {
     "planner":        {"profile_id": "OPUS_HIGH"},
     "implementer":    {"profile_id": "LUNA_MAX"},
+    "self_verifier":  {"profile_id": "LUNA_MAX"},
     "review_prep":    {"profile_id": "LUNA_HIGH"},
     "reviewer":       {"profile_id": "SOL_MEDIUM"},
+    "repairer":       {"profile_id": "LUNA_MAX"},
     "final_reviewer": {"profile_id": "OPUS_HIGH"}
   }
 }

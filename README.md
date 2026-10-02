@@ -23,7 +23,7 @@ operator-led workflows, not yet for unattended production automation.
 | Descriptive analytics | PARTIAL |
 | ORCA supervision | EXPERIMENTAL |
 | Local Qwen preprocessing | EXPERIMENTAL |
-| Autonomous iterations (controller, scope guard) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_1.md` |
+| Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_2.md` |
 | Dynamic planner | PLANNED |
 | Repair merge/rejoin | PLANNED |
 

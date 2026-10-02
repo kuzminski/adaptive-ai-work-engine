@@ -424,7 +424,11 @@ def test_reject_closes_the_run_and_blocks_promotion(tmp_path):
 
 def test_a_running_run_cannot_be_approved(tmp_path):
     h = Harness(tmp_path).defaults().script("plan", plan(["A"]))
-    h.controller()  # started, not run
+    c = h.controller()  # started, not run
+    # V0.2: while a controller owns the run, the human surface is refused outright.
+    with pytest.raises(ac.AutonomyError, match="RUN_LOCK_BUSY"):
+        ctl.approve_promotion("RUN1", approver="kamil", candidate_id="x", stats_root=h.stats)
+    c.release()
     with pytest.raises(ac.AutonomyError, match="only possible in AWAITING_HUMAN"):
         ctl.approve_promotion("RUN1", approver="kamil", candidate_id="x", stats_root=h.stats)
 
@@ -475,8 +479,10 @@ def test_promoter_hook_receives_a_token_only_after_approval(tmp_path):
         ctl.promote("RUN1", promoter=lambda t, s: seen.append(t) or {}, stats_root=h.stats)
     assert seen == []
     ctl.approve_promotion("RUN1", approver="kamil", candidate_id=cand, stats_root=h.stats)
-    state = ctl.promote("RUN1", promoter=lambda t, s: (seen.append(t), {"status": "INTEGRATED"})[1], stats_root=h.stats)
-    assert len(seen) == 1 and seen[0].valid() and state["promotion"]["integration"]["status"] == "INTEGRATED"
+    # V0.2: an integrating promoter re-verifies the approved candidate against the workspace.
+    state = ctl.promote("RUN1", promoter=lambda t, s: (seen.append(t), {"status": "INTEGRATED"})[1], stats_root=h.stats,
+                        env=h.env)
+    assert len(seen) == 1 and seen[0].candidate_id == cand and seen[0].valid() and state["promotion"]["integration"]["status"] == "INTEGRATED"
 
 
 def test_a_git_boundary_violation_between_phases_escalates(tmp_path):
@@ -510,7 +516,10 @@ def test_8_real_git_a_merge_into_main_is_detected_at_the_next_boundary(tmp_path)
     run(["git", "add", "."], worktree)
     run(["git", "commit", "-m", "iteration checkpoint"], worktree)
     env.assert_safe()  # a local commit on the iteration branch is fine
-    assert env.diff() == "" and "b.txt" not in env.changed_files()
+    # V0.2 defect fix: V0.1 diffed against HEAD, so a checkpoint commit made the
+    # iteration's work invisible to the reviewer. The diff is now base..worktree.
+    assert "+++ b/b.txt" in env.diff() and "b.txt" in env.changed_files()
+    assert [c.split(" ", 1)[1] for c in env.commits()] == ["iteration checkpoint"]
     run(["git", "merge", "--ff-only", "aaw/it"], repo)  # what an agent must never do
     with pytest.raises(ac.GitPolicyViolation):
         env.assert_safe()
