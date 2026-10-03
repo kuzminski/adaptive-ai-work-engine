@@ -52,7 +52,8 @@ ESCALATION_TEXT = {
     ac.E_REVIEW: "Reviewer nie mógł potwierdzić poprawności i przekazał decyzję człowiekowi.",
     ac.E_REVIEW_INVALID: "Reviewer zwrócił nieprawidłową odpowiedź — AAW nie traktuje tego jako PASS.",
     ac.E_REPAIR_LIMIT: "Kolejne naprawy nie doprowadziły do akceptacji w dozwolonym limicie.",
-    ac.E_NO_PROGRESS: "Naprawa nie zmieniła wyników review — AAW przerwał pętlę.",
+    ac.E_NO_PROGRESS: "Naprawy nie rozwiązały problemu mimo automatycznej eskalacji (wyższy wysiłek, mocniejszy model, diagnoza) — drabina eskalacji wyczerpana.",
+    ac.E_ROUTING: "Żaden odpowiedni model nie był dostępny (limity, zaufanie, możliwości lub awaria dostawcy) — nic nie zostało uruchomione.",
     ac.E_GIT: "Wykryto zmianę poza izolowaną kopią roboczą (np. ktoś edytował pliki w głównym folderze projektu albo gałąź main się zmieniła). AAW zatrzymał się, żeby niczego nie nadpisać.",
     ac.E_EXECUTOR: "Wywołanie modelu nie powiodło się (błąd CLI, limit czasu lub nieprawidłowa odpowiedź).",
     ac.E_PLANNER: "Planista uznał, że dalsza praca wymaga decyzji człowieka.",
@@ -482,6 +483,9 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
             warnings.append(f"Uwaga z final review (it. {it['index']}): {_finding_text(f)}")
         for u in (it.get("execution") or {}).get("uncertainties", []):
             warnings.append(f"Niepewność implementacji (it. {it['index']}): {u}")
+        for c in it.get("classified", []):     # not masked: a classified limitation stays visible to the human
+            warnings.append(f"Sklasyfikowane ograniczenie (it. {it['index']}): {c.get('id')} — "
+                            f"{c.get('classification')}: {c.get('description')} [dowód: {c.get('evidence_ref')}]")
     for execution_id, entry in ledger.items():
         close = (entry.get("closed") or [{}])[-1].get("payload", {}) if entry.get("closed") else {}
         if entry.get("state") in ("INTENT_ONLY", "STARTED_NOT_CLOSED"):
@@ -507,6 +511,7 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         "candidate": {"candidate_id": hold.get("candidate_id"), "head": fingerprint.get("head"),
                       "diff_sha256": fingerprint.get("diff_sha256"),
                       "changed_files": fingerprint.get("changed_files", []),
+                      "last_repair": hold.get("last_repair"),
                       "branch": workspace.get("branch"), "worktree": workspace.get("worktree"),
                       "base_commit": workspace.get("base_commit"), "promotable": bool(hold.get("promotable")),
                       "roadmap_exhausted": bool(hold.get("roadmap_exhausted"))},

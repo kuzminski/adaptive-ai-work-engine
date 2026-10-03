@@ -79,6 +79,7 @@ SIDE_EFFECT_PHASES = frozenset({EXECUTE, REPAIR})
 INVOCATION_KIND_BY_EXECUTOR: dict[str, str] = {
     "plan": "PLAN", "execute": "LLM", "self_verify": "LLM", "review": "REVIEW",
     "repair": "REPAIR", "final_review": "REVIEW", "prepare_packet": "PREPROCESS",
+    "diagnose": "LLM",     # read-only root-cause analysis before an escalated repair
 }
 
 RUNNING = "RUNNING"
@@ -97,7 +98,9 @@ REVIEW_VERDICTS = (V_PASS, V_REPAIR, V_ESCALATE)
 SEVERITY_LADDER = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
 BLOCKING_SEVERITIES = frozenset({"HIGH", "CRITICAL"})
 FAILING_STATUSES = frozenset({"FAIL", "ERROR"})
-ADVERSE_STATUSES = frozenset({"FAIL", "ERROR", "WARN", "WARNING", "SKIPPED"})
+# Evidence-backed reclassifications (see repair_escalation): never failing, always shown to reviewers.
+CLASSIFIED_STATUSES = frozenset({"BASELINE_FAILURE", "ENVIRONMENTAL_LIMITATION", "SUPERSEDED"})
+ADVERSE_STATUSES = frozenset({"FAIL", "ERROR", "WARN", "WARNING", "SKIPPED"}) | CLASSIFIED_STATUSES
 
 # Absolute ceilings no mandate can raise: a human typo (max_iterations: 10**9)
 # must not turn into an unbounded autonomous run.
@@ -127,6 +130,8 @@ E_LEDGER = "LEDGER_WRITE_ERROR"                      # durable INTENT failed: no
 E_RECONCILE = "RECONCILIATION_REQUIRED"              # lifecycle evidence is ambiguous; a human decides
 E_SESSION_REUSE = "PROVIDER_SESSION_REUSED"          # a fresh-context role reported a reused provider session
 E_VERIFY_MUTATION = "SELF_VERIFY_MUTATED_WORKTREE"   # a read-only phase changed the diff
+# V0.4 (quota routing / repair escalation)
+E_ROUTING = "ROUTING_NO_ELIGIBLE_PROFILE"            # router found no adequate profile (quota/trust/capability/health)
 
 
 class AutonomyError(ValueError):
@@ -175,6 +180,12 @@ def validate_mandate(data: Any) -> dict[str, Any]:
     _str_list(contract.get("acceptance_criteria"), "iteration_contract.acceptance_criteria", non_empty=True)
     for key in ("scope", "constraints", "forbidden_changes", "required_evidence"):
         _str_list(contract.get(key, []), f"iteration_contract.{key}")
+    limits = contract.get("known_limitations", [])
+    _require(isinstance(limits, list) and all(
+        isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"].strip()
+        and row.get("classification") in ("PRE_EXISTING_BASELINE", "ENVIRONMENTAL_LIMITATION", "BY_DESIGN")
+        and isinstance(row.get("description"), str) and row["description"].strip() for row in limits),
+        "iteration_contract.known_limitations must be rows of {id, classification, description}")
 
     roadmap = data.get("roadmap_mandate")
     _require(isinstance(roadmap, dict), "roadmap_mandate must be an object")
@@ -695,7 +706,8 @@ ROLES = ("planner", "implementer", "review_prep", "reviewer", "final_reviewer")
 # *declared contract default* (recorded as binding_source), never a runtime
 # substitution for an unavailable model.
 OPTIONAL_ROLE_ALIASES = {"self_verifier": "implementer", "repairer": "implementer"}
-ROLE_BY_EXECUTOR = {"plan": "planner", "execute": "implementer", "self_verify": "self_verifier",
+NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation"})
+ROLE_BY_EXECUTOR = {"plan": "planner", "diagnose": "repairer", "execute": "implementer", "self_verify": "self_verifier",
                     "review": "reviewer", "repair": "repairer", "final_review": "final_reviewer",
                     "prepare_packet": "review_prep"}
 
@@ -739,12 +751,34 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
             else:
                 resolved_policy[key] = _binding(key, profile_id, profile, "AUTONOMY_ROLES.policy_profiles")
         resolved["policy_profiles"] = resolved_policy
+    if config.get("routing") is not None:
+        import model_router
+        routing = config["routing"]
+        _require(isinstance(routing, dict), "routing must be an object")
+        try:
+            model_router.normalize_policy(routing.get("policy"))
+        except model_router.RouterError as exc:
+            raise AutonomyError(f"routing.policy invalid: {exc}") from exc
+        traits = routing.get("profiles", {})
+        _require(isinstance(traits, dict), "routing.profiles must map profile IDs to traits")
+        for pid, row in traits.items():
+            _require(isinstance(row, dict) and str(row.get("trust", "")).upper() in model_router.TRUSTS
+                     and type(row.get("capability_class")) is int and isinstance(row.get("capabilities"), list),
+                     f"routing.profiles.{pid}: needs trust, integer capability_class and capabilities[]")
+        resolved["routing"] = json.loads(json.dumps(routing))
+    if config.get("repair_escalation") is not None:
+        import repair_escalation
+        try:
+            resolved["repair_escalation"] = repair_escalation.normalize_config(config["repair_escalation"],
+                                                                               known_profiles=profiles)
+        except repair_escalation.EscalationError as exc:
+            raise AutonomyError(str(exc)) from exc
     same = resolved["reviewer"]["runtime_model_id"] == resolved["implementer"]["runtime_model_id"]
     _require(not same or config.get("allow_same_model_fresh_context") is True,
              "reviewer must not share the implementer's runtime model unless allow_same_model_fresh_context is true")
     independence = "SAME_MODEL_FRESH_CONTEXT" if same else "DIFFERENT_MODEL"
     for role, binding in resolved.items():
-        if role == "policy_profiles":
+        if role in NON_ROLE_KEYS:
             continue
         binding["review_independence"] = independence if binding["role"] in {"reviewer", "final_reviewer"} else None
     return resolved
@@ -766,8 +800,8 @@ def load_roles(path: Path, profiles_path: Path) -> dict[str, dict[str, Any]]:
 def agent_identities(roles: Mapping[str, Mapping[str, Any]]) -> set[str]:
     out: set[str] = set()
     bindings: list[Mapping[str, Any]] = []
-    for value in roles.values():
-        if not isinstance(value, Mapping):
+    for key, value in roles.items():
+        if not isinstance(value, Mapping) or key in ("routing", "repair_escalation"):
             continue
         if "profile_id" in value:
             bindings.append(value)

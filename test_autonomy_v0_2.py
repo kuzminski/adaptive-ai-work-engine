@@ -603,15 +603,17 @@ def test_C_identical_blocking_finding_after_bounded_repair_escalates_real_adapte
                        "REPAIRER": [{"output": {"summary": "tried", "addressed_findings": ["F-EDGE"],
                                                 "changed_files": [], "checks": [], "uncertainties": []}}]})
     # V0.3 requires every repair to return through self-verification and primary
-    # review; the repeated identical primary finding stops further repair.
+    # review. A repeated identical primary finding no longer stops after one repair: the
+    # (here minimal, unconfigured) ladder re-diagnoses once on the same profile, then stops.
     c, _ = real_controller(tmp_path, fake_cli, mandate_fixture(max_repair_attempts=4) | {
         "roadmap_mandate": {**mandate_fixture(max_repair_attempts=4)["roadmap_mandate"],
                             "items": [{"item_id": "A", "title": "only"}]}})
     state = c.run()
-    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and state["iterations"][0]["repair_attempts"] == 1
+    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and state["iterations"][0]["repair_attempts"] == 2
     assert not state["hold"]["promotable"]
+    assert [r["stage"] for r in state["iterations"][0]["repairs"]] == ["CURRENT", "EFFORT_UP"]
     roles = [x["role"] for x in fake_cli["calls"]()]
-    assert roles.count("REPAIRER") == 1 and roles[-1] == "REVIEWER"
+    assert roles.count("REPAIRER") == 2 and roles[-1] == "REVIEWER"
     c2, _ = real_controller(tmp_path / "limit", fake_cli)  # max_repair_attempts=2: the budget stops it first
     assert c2.run()["escalation"]["code"] in (ac.E_NO_PROGRESS, ac.E_REPAIR_LIMIT)
 
