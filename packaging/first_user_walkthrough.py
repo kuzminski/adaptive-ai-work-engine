@@ -386,6 +386,9 @@ def stop_now_flow(page, report: Report, sandbox: dict, scenario: Path) -> None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--exe", help="path to the built AAW executable (default: run AAW.py from source)")
     parser.add_argument("--providers", default="claude,codex")

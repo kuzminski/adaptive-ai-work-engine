@@ -149,6 +149,10 @@ def model_probe(harness: str, argv: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
+    # The engine talks UTF-8 on stdin/stdout (like the real CLIs); never the console code page.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     harness = "claude"
     if argv[:1] == ["--as"]:
         harness, argv = argv[1], argv[2:]

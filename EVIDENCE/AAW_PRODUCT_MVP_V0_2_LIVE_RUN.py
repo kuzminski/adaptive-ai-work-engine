@@ -36,6 +36,9 @@ FIRST = "Add slugify(text) in textutil.py that lowercases, trims and joins words
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("--chromium", default=os.environ.get("AAW_WALK_CHROMIUM"))
     parser.add_argument("--timeout-min", type=int, default=45)
