@@ -656,3 +656,35 @@ def test_read_only_timeout_retries_once_with_explicit_lineage(tmp_path, fake_cli
     reviews = [e for e in state["executions"] if e["executor"] == "review"]
     assert len(reviews) == 2 and reviews[1]["retry_of_execution_id"] == reviews[0]["execution_id"]
     assert any(e["event_type"] == "EXECUTOR_RETRY_SCHEDULED" for e in c.journal.read())
+
+
+def test_operator_can_adopt_verified_timeout_work_without_replaying_execute(tmp_path):
+    h = Harness(tmp_path, mandate=single_item_mandate()).defaults().script("plan", plan(["A"]))
+
+    def timeout(_ctx):
+        raise ctl.ExecutorFailure("provider process exited rc=124", code=ac.E_EXECUTOR_TIMEOUT)
+
+    h.scripts["execute"] = [timeout]
+    state = h.controller().run()
+    execution_id = state["executions"][-1]["execution_id"]
+    ledger_path = el.ledger_path_for_run("RUN1", h.stats)
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+    close = next(row for row in rows if row["event_type"] == el.EXECUTION_CLOSED
+                 and row["execution_id"] == execution_id)
+    close["payload"].update({"close_reason": "TIMEOUT", "exit_code": 124, "timed_out": True,
+                             "effect_certainty": "PARTIAL"})
+    ledger_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    recovered = ctl.adopt_timed_out_side_effect_result(
+        "RUN1", execution_id=execution_id, env=h.env, operator="operator-test", stats_root=h.stats,
+        result={"summary": "preserved implementation", "changed_files": h.env.changed_files(),
+                "checks": ok_checks("unit tests")})
+
+    assert recovered["status"] == ac.RUNNING and recovered["phase"] == ac.SELF_VERIFY
+    assert recovered["iterations"][-1]["execution"]["recovered_after_timeout"] is True
+    assert recovered["iterations"][-1]["execution"]["source_execution_id"] == execution_id
+    assert len(recovered["recovery_history"]) == 1
+    backup = Path(recovered["recovery_history"][0]["backup_dir"])
+    assert (backup / "autonomy_state.before.json").is_file()
+    assert el.ExecutionLedger.for_run("RUN1", h.stats).close_status(execution_id)["close_reason"] == "TIMEOUT"
+    assert any(row["event_type"] == "TIMEOUT_PARTIAL_PROGRESS_ADOPTED" for row in journal(h))

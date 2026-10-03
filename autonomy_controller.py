@@ -1576,6 +1576,93 @@ def _human_surface_lock(run_id: str, stats_root: Path | None) -> rl.RunLock:
     return lock
 
 
+def adopt_timed_out_side_effect_result(
+        run_id: str, *, execution_id: str, result: Mapping[str, Any], env: WorkspaceEnvironment,
+        operator: str, stats_root: Path | None = None) -> dict[str, Any]:
+    """Adopt verified partial work after an EXECUTE/REPAIR process timeout.
+
+    This is an explicit operator recovery action.  It never re-dispatches the
+    side-effecting call, never rewrites its TIMEOUT ledger close, and resumes at
+    SELF_VERIFY so the preserved work still passes the normal evidence and
+    independent-review pipeline.
+    """
+    root = Path(stats_root or STATS_ROOT)
+    if not isinstance(operator, str) or not operator.strip():
+        raise ac.AutonomyError("timeout recovery requires an operator identity")
+    if not isinstance(result, Mapping) or not isinstance(result.get("summary"), str):
+        raise ac.AutonomyError("timeout recovery requires a structured implementation result")
+    with _human_surface_lock(run_id, root):
+        state = load_state(run_id, root)
+        escalation = state.get("escalation") or {}
+        if state.get("status") != ac.AWAITING_HUMAN or state.get("phase") != ac.AWAITING_HUMAN:
+            raise ac.AutonomyError("timeout recovery is only possible from AWAITING_HUMAN")
+        if escalation.get("from_phase") not in ac.SIDE_EFFECT_PHASES:
+            raise ac.AutonomyError("timeout recovery requires an EXECUTE or REPAIR escalation")
+        if escalation.get("code") not in {ac.E_EXECUTOR, ac.E_EXECUTOR_TIMEOUT}:
+            raise ac.AutonomyError("timeout recovery requires an executor timeout escalation")
+        execution = next((row for row in reversed(state.get("executions", []))
+                          if row.get("execution_id") == execution_id), None)
+        if not execution or execution.get("phase") != escalation.get("from_phase") \
+                or execution.get("iteration_id") != escalation.get("iteration_id"):
+            raise ac.AutonomyError("execution does not match the escalated side-effecting phase")
+        close = ExecutionLedger.for_run(run_id, root).close_status(execution_id) or {}
+        if close.get("close_reason") != "TIMEOUT" or close.get("exit_code") != 124:
+            raise ac.AutonomyError("execution ledger does not prove a provider timeout with exit code 124")
+        env.restore(state.get("workspace_checkpoint") or {})
+        env.assert_safe()
+        actual_files = env.changed_files()
+        if not actual_files:
+            raise ac.AutonomyError("timeout recovery found no preserved worktree changes")
+        reported_files = result.get("changed_files")
+        if reported_files is not None and set(reported_files) != set(actual_files):
+            raise ac.AutonomyError("recovered result changed_files do not match the current worktree")
+
+        recovery_id = "REC_" + uuid.uuid4().hex
+        recovery_dir = autonomy_dir(run_id, root) / "RECOVERY" / recovery_id
+        recovery_dir.mkdir(parents=True, exist_ok=False)
+        state_path = autonomy_dir(run_id, root) / "autonomy_state.json"
+        events_path = autonomy_dir(run_id, root) / "autonomy_events.jsonl"
+        (recovery_dir / "autonomy_state.before.json").write_bytes(state_path.read_bytes())
+        if events_path.exists():
+            (recovery_dir / "autonomy_events.before.jsonl").write_bytes(events_path.read_bytes())
+
+        adopted = json.loads(json.dumps(dict(result), ensure_ascii=False, default=str))
+        adopted["changed_files"] = actual_files
+        adopted["recovered_after_timeout"] = True
+        adopted["source_execution_id"] = execution_id
+        iteration = next((row for row in state.get("iterations", [])
+                          if row.get("iteration_id") == escalation.get("iteration_id")), None)
+        if iteration is None:
+            raise ac.AutonomyError("escalated iteration is missing")
+        if iteration.get("execution") is not None:
+            raise ac.AutonomyError("iteration already has an adopted implementation result")
+        checks = [dict(row) for row in adopted.get("checks", []) if isinstance(row, Mapping)]
+        iteration["execution"] = adopted
+        iteration["executed_by"] = {key: execution.get(key) for key in
+                                    ("role", "profile", "model", "effort", "execution_id", "selection")}
+        for row in checks:
+            iteration.setdefault("evidence_state", {})[str(row.get("name"))] = str(row.get("status", "")).upper()
+            iteration.setdefault("checks", []).append(row)
+        recovery = {
+            "recovery_id": recovery_id, "at": _now(), "operator": operator.strip(),
+            "kind": "TIMED_OUT_SIDE_EFFECT_RESULT_ADOPTED", "execution_id": execution_id,
+            "iteration_id": iteration["iteration_id"], "from_phase": escalation["from_phase"],
+            "ledger_close": close, "changed_files": actual_files, "backup_dir": str(recovery_dir),
+            "previous_escalation": escalation, "previous_hold": state.get("hold"),
+        }
+        (recovery_dir / "recovered_result.json").write_text(
+            json.dumps(adopted, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        state.setdefault("recovery_history", []).append(recovery)
+        state["status"], state["phase"] = ac.RUNNING, ac.SELF_VERIFY
+        state["escalation"], state["hold"], state["in_flight"] = None, None, None
+        _save_state(run_id, state, root)
+        AutonomyJournal(events_path, run_id).append(
+            "TIMEOUT_PARTIAL_PROGRESS_ADOPTED", iteration_id=iteration["iteration_id"], phase=ac.SELF_VERIFY,
+            payload={key: recovery[key] for key in ("recovery_id", "operator", "execution_id", "from_phase",
+                                                     "changed_files", "backup_dir")})
+        return state
+
+
 def approve_promotion(run_id: str, *, approver: str, candidate_id: str, early_end: bool = False,
                       channel: str = "HUMAN", note: str | None = None,
                       stats_root: Path | None = None) -> dict[str, Any]:
