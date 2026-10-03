@@ -35,6 +35,7 @@ What cancellation can and cannot interrupt, stated honestly:
 from __future__ import annotations
 
 import datetime as dt
+import os
 import subprocess
 import threading
 from contextlib import contextmanager
@@ -166,12 +167,18 @@ class CancellationToken:
             record["signal"] = "ALREADY_EXITED"
             record["exit_code"] = process.returncode
             return record
-        try:
-            process.terminate()
-            record["signal"] = "TERMINATE"
-        except Exception as exc:  # a child that vanished is already stopped
-            record["signal"] = f"TERMINATE_FAILED: {exc}"
-            return record
+        if os.name == "nt" and _taskkill_tree(process.pid):
+            # Provider CLIs on Windows are often .cmd / npm shims: terminating
+            # only the shim leaves the real CLI running and holding the pipes,
+            # so the wait would not end. Stop the whole process tree instead.
+            record["signal"] = "TASKKILL_TREE"
+        else:
+            try:
+                process.terminate()
+                record["signal"] = "TERMINATE"
+            except Exception as exc:  # a child that vanished is already stopped
+                record["signal"] = f"TERMINATE_FAILED: {exc}"
+                return record
         try:
             process.wait(timeout=TERMINATE_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
@@ -201,6 +208,16 @@ class CancellationToken:
             yield tracked
         finally:
             self.unregister(process)
+
+
+def _taskkill_tree(pid: int) -> bool:
+    """Windows only: forcefully end `pid` and its descendants. Never raises."""
+    try:
+        done = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return done.returncode == 0
+    except Exception:
+        return False
 
 
 _TOKEN: ContextVar[CancellationToken | None] = ContextVar("aaw_cancellation_token", default=None)

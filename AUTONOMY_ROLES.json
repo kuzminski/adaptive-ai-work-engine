@@ -1,0 +1,43 @@
+{
+  "contract": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+  "preset_id": "DEFAULT_AUTONOMOUS",
+  "purpose": "Logical policy tiers resolve to profile IDs here; runtime IDs and effort support live only in IMPLEMENTER_PROFILES and MODEL_CATALOG. Unavailable selected profiles stop with ROLE_PROFILE_UNAVAILABLE.",
+  "allow_same_model_fresh_context": false,
+  "roles": {
+    "planner": {
+      "profile_id": "OPUS_5_5_HIGH"
+    },
+    "implementer": {
+      "profile_id": "GPT6_LUNA_HIGH"
+    },
+    "self_verifier": {
+      "profile_id": "GPT6_LUNA_HIGH"
+    },
+    "review_prep": {
+      "profile_id": "GPT6_LUNA_VERY_HIGH"
+    },
+    "reviewer": {
+      "profile_id": "SOL_6_1_LIGHT"
+    },
+    "repairer": {
+      "profile_id": "GPT6_LUNA_VERY_HIGH"
+    },
+    "final_reviewer": {
+      "profile_id": "SOL_5_6_LIGHT"
+    }
+  },
+  "policy_profiles": {
+    "initial_planner": "OPUS_5_5_HIGH",
+    "implementer_default": "GPT6_LUNA_HIGH",
+    "implementer_harder": "GPT6_LUNA_VERY_HIGH",
+    "implementer_hard": "GPT6_LUNA_MAX",
+    "implementer_capability_escalation": "SONNET_5_5_MEDIUM",
+    "review_pretreatment": "GPT6_LUNA_VERY_HIGH",
+    "primary_reviewer": "SOL_6_1_LIGHT",
+    "repair_default": "GPT6_LUNA_VERY_HIGH",
+    "repair_hard": "GPT6_LUNA_MAX",
+    "final_review_default": "SOL_5_6_LIGHT",
+    "final_review_hard": "SONNET_5_5_MEDIUM",
+    "final_review_critical": "OPUS_5_5_MEDIUM"
+  }
+}

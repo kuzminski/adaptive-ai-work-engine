@@ -1,0 +1,188 @@
+name: AAW portable build
+
+# Every run builds and validates AAW-Windows-x64.zip (workflow artifact).
+# Release: push a tag v<product_version.RELEASE> (e.g. v0.2.0-rc1), or run this workflow
+# manually with release_tag (the tag is then created on the selected commit). After the
+# Windows and Linux jobs pass, the `publish` job attaches the ZIP to that GitHub Release.
+# No binary is ever committed to the repository.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Publish a GitHub Release with this tag, e.g. v0.2.0-rc1 (empty = build only)"
+        required: false
+        default: ""
+  push:
+    tags: ["v*"]          # path filters are not evaluated for tag pushes
+    branches: ["claude/**", "main"]
+    paths:
+      - "AAW.py"
+      - "product_*.py"
+      - "autonomy_*.py"
+      - "run_cancellation.py"
+      - "workflow_runner.py"
+      - "model_catalog.py"
+      - "test_*.py"
+      - "PRODUCT_UI/**"
+      - "packaging/**"
+      - "release/**"
+      - "QUICK_START.md"
+      - "SZYBKI_START.txt"
+      - "CHANGELOG.md"
+      - "MODEL_RECOMMENDATIONS.json"
+      - "MODEL_CATALOG.json"
+      - "IMPLEMENTER_PROFILES.json"
+      - "AUTONOMY_ROLES.json"
+      - ".github/workflows/aaw-portable.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows x64 — product tests, build, frozen-exe validation
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build and test tools
+        run: python -m pip install pyinstaller==6.22.3 pytest playwright
+      - name: Engine safe-stop + product suites (real worker processes, fake CLIs via .cmd wrappers)
+        timeout-minutes: 15
+        run: python -m pytest -q -p no:cacheprovider -rf test_autonomy_safe_stop.py test_product_mvp.py test_product_mvp_v0_2.py
+      - name: Build portable app (includes frozen --self-test and --version)
+        timeout-minutes: 10
+        run: python packaging/build_portable.py
+      - name: Frozen exe — version, self-test, provider detection, UI on loopback
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $env:AAW_PRODUCT_HOME = "$PWD\build\smoke_home"
+          $v = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--version","--report-file","$PWD\build\version.json" -PassThru -Wait
+          Get-Content "$PWD\build\version.json"
+          if ($v.ExitCode -ne 0) { throw "--version failed" }
+          $s = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--self-test","--report-file","$PWD\build\selftest.json" -PassThru -Wait
+          Get-Content "$PWD\build\selftest.json"
+          if ($s.ExitCode -ne 0) { throw "--self-test failed" }
+          $d = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--detect","--report-file","$PWD\build\detect.json" -PassThru -Wait
+          Get-Content "$PWD\build\detect.json"
+          if ($d.ExitCode -ne 0) { throw "--detect failed" }
+          $p = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--no-browser","--port","8799" -PassThru
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            try {
+              $page = Invoke-WebRequest -Uri "http://127.0.0.1:8799/" -UseBasicParsing -TimeoutSec 3
+              if ($page.StatusCode -eq 200 -and $page.Content -match "aaw-token") { $ok = $true; break }
+            } catch { }
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "UI did not load" }
+          Write-Output "UI served by the frozen AAW.exe"
+      - name: Unzip the release ZIP and check its contents
+        shell: pwsh
+        run: |
+          Expand-Archive -Path dist\AAW-Windows-x64.zip -DestinationPath build\unzipped -Force
+          $top = @(Get-ChildItem build\unzipped | ForEach-Object Name)
+          if ($top.Count -ne 1 -or $top[0] -ne "AAW") { throw "ZIP root must contain only the AAW folder, found: $top" }
+          foreach ($f in "AAW.exe","SZYBKI_START.txt","QUICK_START.md","README.md","CHANGELOG.md","VERSION.txt","LICENSE","EXAMPLES\01_expense_tracker.md","EXAMPLES\02_tests_and_validation.md","EXAMPLES\03_todo_web_page.md") {
+            if (-not (Test-Path "build\unzipped\AAW\$f")) { throw "missing $f in the ZIP" }
+          }
+          Get-ChildItem build\unzipped\AAW | ForEach-Object Name
+          Get-Content build\unzipped\AAW\VERSION.txt
+          python packaging/check_release_zip.py dist\AAW-Windows-x64.zip
+          if ($LASTEXITCODE -ne 0) { throw "release ZIP layout / start-guide path check failed" }
+      - name: First-user walkthrough on the unzipped AAW.exe (real browser, scripted CLIs)
+        timeout-minutes: 12
+        run: |
+          python -m playwright install chromium
+          python packaging/first_user_walkthrough.py --exe build\unzipped\AAW\AAW.exe --stop-now --out build\walkthrough
+      - name: AAW logs
+        if: always()
+        shell: pwsh
+        run: Get-ChildItem -Recurse build -Include aaw.log,worker.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "== $_"; Get-Content $_ -Tail 60 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AAW-Windows-x64
+          path: dist/AAW-Windows-x64.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AAW-Windows-walkthrough
+          path: build/walkthrough
+          if-no-files-found: warn
+
+  linux-regression:
+    name: Linux — full regression (engine + product)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test tools
+        run: |
+          python -m pip install pytest
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb python3-tk > /dev/null
+      - name: Full root regression (frozen-baseline setup - codex stub on PATH, Xvfb)
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          printf '#!/bin/sh\necho "codex-cli 0.0.0-stub"\n' > "$RUNNER_TEMP/stub/codex"
+          chmod +x "$RUNNER_TEMP/stub/codex"
+          export PATH="$RUNNER_TEMP/stub:$PATH"
+          xvfb-run -a python -m pytest -q -p no:cacheprovider $(ls test_*.py | sort)
+
+  publish:
+    name: Publish GitHub Release (AAW-Windows-x64.zip)
+    needs: [windows, linux-regression]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.release_tag || github.ref_name }}
+      ASSET: AAW-Windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: AAW-Windows-x64
+          path: dist
+      - name: Tag matches the product version
+        run: |
+          release=$(python3 -c "import product_version; print(product_version.RELEASE)")
+          echo "RELEASE=$release" >> "$GITHUB_ENV"
+          if [ "$TAG" != "v$release" ]; then echo "tag $TAG does not match product version v$release"; exit 1; fi
+      - name: Release ZIP layout and start-guide paths
+        run: |
+          ls -l "dist/$ASSET"
+          python3 packaging/check_release_zip.py "dist/$ASSET"
+      - name: Create or update the release and upload the ZIP
+        run: |
+          sed "s/@RELEASE@/$RELEASE/g" release/RELEASE_NOTES.md > "$RUNNER_TEMP/notes.md"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "dist/$ASSET" --clobber
+            gh release edit "$TAG" --title "AAW $RELEASE" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest
+          else
+            gh release create "$TAG" "dist/$ASSET" --target "$GITHUB_SHA" --title "AAW $RELEASE" \
+              --notes-file "$RUNNER_TEMP/notes.md" --latest
+          fi
+      - name: Verify the uploaded asset (download it back as a user would)
+        run: |
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets \
+            --jq '{url, isDraft, isPrerelease, assets: [.assets[] | {name, size, state}]}'
+          mkdir verify
+          curl -fsSL -o "verify/$ASSET" "https://github.com/$GH_REPO/releases/download/$TAG/$ASSET"
+          cmp "verify/$ASSET" "dist/$ASSET"
+          python3 packaging/check_release_zip.py "verify/$ASSET"
+          curl -fsSL -o verify/latest.zip "https://github.com/$GH_REPO/releases/latest/download/$ASSET"
+          cmp verify/latest.zip "dist/$ASSET"
+          echo "Public download links OK: releases/download/$TAG/$ASSET and releases/latest/download/$ASSET"

@@ -1,0 +1,275 @@
+{
+  "schema": "AAW_PRODUCT_MVP_V0_2_LIVE_E2E",
+  "platform": "linux",
+  "claude_cli": "2.1.288 (Claude Code)",
+  "providers_step": "2. Narzędzia AI na tym komputerze\n\nAAW potrzebuje co najmniej jednego obsługiwanego CLI AI (Claude CLI lub Codex CLI), zainstalowanego i zalogowanego na Twoim koncie. Instalacja i logowanie odbywają się poza AAW — AAW tylko wykrywa CLI i z niego korzysta.\n\nClaude CLI\nFOUND\nWersja\n2.1.288\nLogowanie\nzalogowano\nModele\n● Claude Sonnet 5 — dostępny\n● Claude Opus 5 — dostępny\n● Claude Fable 5.1 — niedostępny wg katalogu AAW\n● Claude Opus 5.5 — wymaga sprawdzenia przed użyciem\n● Claude Sonnet 5.5 — wymaga sprawdzenia przed użyciem\nCodex CLI\nNOT FOUND\nWersja\n—\nLogowanie\n—\n1. Instalacja: Zainstaluj Codex CLI według instrukcji: https://github.com/openai/codex (np. z Node.js: npm install -g @openai/codex).\n2. Logowanie: Zaloguj się raz: otwórz terminal, wpisz codex login i postępuj zgodnie z instrukcjami. Potem wróć tutaj i kliknij „Wykryj ponownie”.\nSprawdzenie (opcjonalnie): codex login status\nSprawdzono: 10/3/2026, 9:30:58 AM · Git 2.43.0\nGotowe — AAW może pracować z: Claude CLI.\nWykryj ponownie",
+  "models_before_check": "3. Potwierdź zestaw modeli\n\nWybierz trzy proste poziomy. Pod spodem widać, jakie modele faktycznie zostaną użyte — AAW nigdy nie podmienia modelu po cichu. ★ = rekomendacja.\n\nPLANOWANIE\nŚrednia\nSilna\nNajsilniejsza ★\nNajsilniejszy dostępny model do planu początkowego (rekomendacja: Claude Opus 5.5, high).\nPlanowanie początkowe (architekt) Opus / high alternatywa\nOPUS_5_5_HIGH niedostępny na tym komputerze — można go włączyć: „Sprawdź modele” zweryfikuje claude-opus-5-5 na tym komputerze\nIMPLEMENTACJA\nEkonomiczna\nZbalansowana\nSilna\nRekomendowana ★\nRekomendowany zestaw AAW (domyślny).\nImplementacja Sonnet / high alternatywa\nGPT6_LUNA_HIGH niedostępny na tym komputerze — brak CLI\nNaprawa Sonnet / high alternatywa\nGPT6_LUNA_VERY_HIGH niedostępny na tym komputerze — brak CLI\nPozostałe etapy (5)\nREVIEW\nSzybkie\nZbalansowane\nDokładne\nRekomendowane ★\nRekomendowany zestaw AAW (domyślny).\nReview Opus / high alternatywa\nSOL_6_1_LIGHT niedostępny na tym komputerze — brak CLI\nFinal review / planowanie kolejnych iteracji Opus / high alternatywa\nSOL_5_6_LIGHT niedostępny na tym komputerze — brak CLI\nPozostałe etapy (2)\n12 z 12 etapów użyje jawnej alternatywy, bo rekomendowany profil jest niedostępny na tym komputerze (każda alternatywa jest opisana przy swoim etapie).\nSprawdź modele na tym komputerze\n\nNiektóre modele (3) trzeba jeszcze potwierdzić. AAW wyśle po jednym bardzo krótkim zapytaniu do każdego z nich przez Twoje CLI (zużywa minimalną część limitu). Wynik zostaje zapamiętany.\n\nSprawdź modele\nZaawansowane: dokładne profile ról",
+  "probe_seconds": 7.7,
+  "models_after_check": "3. Potwierdź zestaw modeli\n\nWybierz trzy proste poziomy. Pod spodem widać, jakie modele faktycznie zostaną użyte — AAW nigdy nie podmienia modelu po cichu. ★ = rekomendacja.\n\nPLANOWANIE\nŚrednia\nSilna\nNajsilniejsza ★\nNajsilniejszy dostępny model do planu początkowego (rekomendacja: Claude Opus 5.5, high).\nPlanowanie początkowe (architekt) Claude Opus 5.5 / high (exact) rekomendowany\ndokładne mapowanie OPUS_5_5_HIGH → claude-opus-5-5 / high (sprawdzone na tym komputerze)\nIMPLEMENTACJA\nEkonomiczna\nZbalansowana\nSilna\nRekomendowana ★\nRekomendowany zestaw AAW (domyślny).\nImplementacja Sonnet / high alternatywa\nGPT6_LUNA_HIGH niedostępny na tym komputerze — brak CLI\nNaprawa Sonnet / high alternatywa\nGPT6_LUNA_VERY_HIGH niedostępny na tym komputerze — brak CLI\nPozostałe etapy (5)\nREVIEW\nSzybkie\nZbalansowane\nDokładne\nRekomendowane ★\nRekomendowany zestaw AAW (domyślny).\nReview Opus / high alternatywa\nSOL_6_1_LIGHT niedostępny na tym komputerze — brak CLI\nFinal review / planowanie kolejnych iteracji Opus / high alternatywa\nSOL_5_6_LIGHT niedostępny na tym komputerze — brak CLI\nPozostałe etapy (2)\n8 z 12 etapów użyje jawnej alternatywy, bo rekomendowany profil jest niedostępny na tym komputerze (każda alternatywa jest opisana przy swoim etapie).\nZaawansowane: dokładne profile ról",
+  "summary": "7. Podsumowanie i START\n8 z 12 etapów użyje jawnej alternatywy, bo rekomendowany profil jest niedostępny na tym komputerze (każda alternatywa jest opisana przy swoim etapie).\nProjekt\ttextutil-project\nCel\tA tiny Python text utility module with tests\nPierwsza iteracja\tAdd slugify(text) in textutil.py that lowercases, trims and joins words with '-', with unittest tests\nKierunek (roadmapa)\t\nAdd slugify(text) in textutil.py that lowercases, trims and joins words with '-', with unittest tests\n\nPlanowanie\tClaude Opus 5.5 / high (exact)\nImplementacja\tSonnet / high 6 alternatyw\nReview\tOpus / high 2 alternatyw\nLimity\tmaks. 3 iteracji · maks. 2 napraw na iterację\nPraca w izolowanej kopii projektu — Twój folder projektu nie jest modyfikowany.\nBrak automatycznego merge.\nBrak automatycznego push.\nHuman Gate po zakończeniu — decyzja zawsze należy do Ciebie.\nNie zmieniaj plików w głównym folderze repozytorium w trakcie pracy AAW — AAW to wykryje i zatrzyma się.\nZaawansowane\nSTART\nAAW zacznie pracę w tle. Możesz zamknąć to okno — praca trwa dalej.",
+  "launch_to_start_s": 11.6,
+  "gate_text": "Human Gate\nDLACZEGO AAW SIĘ ZATRZYMAŁ\nRoadmapa wyczerpana — wszystkie punkty, które AAW mógł wykonać samodzielnie, są zrobione.\nCO ZROBIONO\nIteracja 1: Add slugify(text) in textutil.py that lowercases, trims and joins words with '-', with unittest tests — PASS\nCO ZOSTAŁO\nNic — roadmapa wyczerpana.\nOSTRZEŻENIA\nUwaga z final review (it. 1): LOW (nieblokujące) [__pycache__/textutil.cpython-311.pyc]: Two compiled bytecode files (__pycache__/*.cpython-311.pyc) from the test run are left untracked and listed in changed_files. The repo has no .gitignore, so a human integrating the change could commit them by accident. Behavior and mandate are unaffected; the human should exclude or delete them at integration.\nUżyto jawnych alternatyw dla 8 etapów (rekomendowane profile były niedostępne): Implementacja → SONNET_HIGH; Implementacja — trudniejsza → SONNET_HIGH; Implementacja — bardzo trudna → OPUS_HIGH; Przygotowanie review → SONNET_HIGH; Review → OPUS_HIGH; Naprawa → SONNET_HIGH; Naprawa — trudna → OPUS_HIGH; Final review / planowanie kolejnych iteracji → OPUS_HIGH\nBIEŻĄCY KANDYDAT\nZmienione pliki\n__pycache__/test_textutil.cpython-311.pyc, __pycache__/textutil.cpython-311.pyc, test_textutil.py, textutil.py\nFolder z wynikiem\n/tmp/aaw_live_zzsceqlw/aaw_home/worktrees/AAW_TASK_20261003_093108_137ae2\nGałąź\naaw/aaw_task_20261003_093108_137ae2\nMożna zaakceptować\ntak\nAAW nie wykonał merge ani push.\nAkceptuj\nAkceptuj = READY_FOR_EXTERNAL_INTEGRATION: wynik jest gotowy, żebyś sam go zintegrował. AAW nie zrobi merge ani push.\nDodaj kierunek\nNowe zadanie z tym samym celem, startujące od tego wyniku.\nKontynuuj z nowym celem\nNowe zadanie z nowym celem, od tego wyniku.\nOdrzuć\nZamyka zadanie; kopia robocza zostaje do wglądu.\nPokaż dowody\nSurowe artefakty silnika.",
+  "accepted": true,
+  "phase_timeline": [
+    {
+      "t_s": 11.7,
+      "banner": "Uruchamianie…"
+    },
+    {
+      "t_s": 13.8,
+      "banner": "Pracuje | Iteracja 1 · Plan"
+    },
+    {
+      "t_s": 35.9,
+      "banner": "Pracuje | Iteracja 1 · Implementacja"
+    },
+    {
+      "t_s": 54.0,
+      "banner": "Pracuje | Iteracja 1 · Review"
+    },
+    {
+      "t_s": 158.3,
+      "banner": "Pracuje | Iteracja 1 · Final review"
+    },
+    {
+      "t_s": 200.5,
+      "banner": "Czeka na Twoją decyzję | Iteracja 1"
+    }
+  ],
+  "run_id": "AAW_TASK_20261003_093108_137ae2",
+  "engine_status": "PROMOTED",
+  "hold": {
+    "reason": "ROADMAP_EXHAUSTED",
+    "detail": "no valid autonomous roadmap item remains; human-gated items: none",
+    "roadmap_exhausted": true,
+    "promotable": true,
+    "candidate_id": "CAND_391837d310a15db6",
+    "candidate_head": "70fc02ef31bed40b4822670ac83701818034fdad",
+    "candidate_fingerprint": {
+      "head": "70fc02ef31bed40b4822670ac83701818034fdad",
+      "diff_sha256": "sha256:cf6b02dd4e556410241cbafa2cdd260c44414cd9480992f8464fad1125f766c5",
+      "changed_files": [
+        "__pycache__/test_textutil.cpython-311.pyc",
+        "__pycache__/textutil.cpython-311.pyc",
+        "test_textutil.py",
+        "textutil.py"
+      ]
+    },
+    "accepted_iterations": [
+      "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    ],
+    "execution_ids": [
+      "EXE_016a1d9b6d3941649be88c8f63b08dca",
+      "EXE_799c5dee3175441a9ca4d9039caf56b4",
+      "EXE_1644b6d87d4847d0acc9e7e88021f1d1",
+      "EXE_ebf1d815f9fa4f3c8babf9d26eac2428",
+      "EXE_2e2d664538b343b78661e239c4c26b4f",
+      "EXE_4a4439b992a743d9b93c96bf8ae91124"
+    ]
+  },
+  "escalation": null,
+  "promotion": {
+    "approval_id": "APR_6bcb6ef005934f7fadfb5381274ecae2",
+    "candidate_id": "CAND_391837d310a15db6",
+    "approved_candidate_fingerprint": {
+      "head": "70fc02ef31bed40b4822670ac83701818034fdad",
+      "diff_sha256": "sha256:cf6b02dd4e556410241cbafa2cdd260c44414cd9480992f8464fad1125f766c5",
+      "changed_files": [
+        "__pycache__/test_textutil.cpython-311.pyc",
+        "__pycache__/textutil.cpython-311.pyc",
+        "test_textutil.py",
+        "textutil.py"
+      ]
+    },
+    "candidate_verified_against_workspace": false,
+    "integration": {
+      "status": "READY_FOR_EXTERNAL_INTEGRATION",
+      "merged": false,
+      "pushed": false
+    },
+    "at": "2026-10-03T09:34:18.013+00:00"
+  },
+  "main_merge_allowed": false,
+  "probes": {
+    "claude|claude-opus-5-5": {
+      "harness": "claude",
+      "model": "claude-opus-5-5",
+      "status": "ACCEPTED",
+      "detail": "CLI przyjęło dokładny identyfikator modelu i model odpowiedział",
+      "probed_at": "2026-10-03T09:31:04+00:00",
+      "cli_version": "2.1.288"
+    },
+    "claude|claude-sonnet-5-5": {
+      "harness": "claude",
+      "model": "claude-sonnet-5-5",
+      "status": "ACCEPTED",
+      "detail": "CLI przyjęło dokładny identyfikator modelu i model odpowiedział",
+      "probed_at": "2026-10-03T09:31:07+00:00",
+      "cli_version": "2.1.288"
+    }
+  },
+  "resolved_slots": {
+    "initial_planner": {
+      "profile_id": "CLAUDE_OPUS_5_5_HIGH",
+      "status": "RECOMMENDED",
+      "exact_mapping_of": "OPUS_5_5_HIGH",
+      "runtime_model_id": "claude-opus-5-5",
+      "effort": "high"
+    },
+    "implementer_default": {
+      "profile_id": "SONNET_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-sonnet-5",
+      "effort": "high"
+    },
+    "implementer_harder": {
+      "profile_id": "SONNET_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-sonnet-5",
+      "effort": "high"
+    },
+    "implementer_hard": {
+      "profile_id": "OPUS_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-opus-5",
+      "effort": "high"
+    },
+    "implementer_capability_escalation": {
+      "profile_id": "CLAUDE_SONNET_5_5_MEDIUM",
+      "status": "RECOMMENDED",
+      "exact_mapping_of": "SONNET_5_5_MEDIUM",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    "review_pretreatment": {
+      "profile_id": "SONNET_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-sonnet-5",
+      "effort": "high"
+    },
+    "primary_reviewer": {
+      "profile_id": "OPUS_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-opus-5",
+      "effort": "high"
+    },
+    "repair_default": {
+      "profile_id": "SONNET_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-sonnet-5",
+      "effort": "high"
+    },
+    "repair_hard": {
+      "profile_id": "OPUS_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-opus-5",
+      "effort": "high"
+    },
+    "final_review_default": {
+      "profile_id": "OPUS_HIGH",
+      "status": "ALTERNATIVE",
+      "exact_mapping_of": null,
+      "runtime_model_id": "claude-opus-5",
+      "effort": "high"
+    },
+    "final_review_hard": {
+      "profile_id": "CLAUDE_SONNET_5_5_MEDIUM",
+      "status": "RECOMMENDED",
+      "exact_mapping_of": "SONNET_5_5_MEDIUM",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    "final_review_critical": {
+      "profile_id": "CLAUDE_OPUS_5_5_MEDIUM",
+      "status": "RECOMMENDED",
+      "exact_mapping_of": "OPUS_5_5_MEDIUM",
+      "runtime_model_id": "claude-opus-5-5",
+      "effort": "medium"
+    }
+  },
+  "executions": [
+    {
+      "execution_id": "EXE_016a1d9b6d3941649be88c8f63b08dca",
+      "role": "initial_planner",
+      "executor": "plan",
+      "profile": "CLAUDE_OPUS_5_5_HIGH",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "phase": "PLAN",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    },
+    {
+      "execution_id": "EXE_799c5dee3175441a9ca4d9039caf56b4",
+      "role": "implementer",
+      "executor": "execute",
+      "profile": "SONNET_HIGH",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "phase": "EXECUTE",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    },
+    {
+      "execution_id": "EXE_1644b6d87d4847d0acc9e7e88021f1d1",
+      "role": "review_prep",
+      "executor": "prepare_packet",
+      "profile": "SONNET_HIGH",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "phase": "AWAITING_REVIEW",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    },
+    {
+      "execution_id": "EXE_ebf1d815f9fa4f3c8babf9d26eac2428",
+      "role": "reviewer",
+      "executor": "review",
+      "profile": "OPUS_HIGH",
+      "model": "claude-opus-5",
+      "effort": "high",
+      "phase": "REVIEW",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    },
+    {
+      "execution_id": "EXE_2e2d664538b343b78661e239c4c26b4f",
+      "role": "review_prep",
+      "executor": "prepare_packet",
+      "profile": "SONNET_HIGH",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "phase": "FINAL_REVIEW",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    },
+    {
+      "execution_id": "EXE_4a4439b992a743d9b93c96bf8ae91124",
+      "role": "final_reviewer",
+      "executor": "final_review",
+      "profile": "CLAUDE_SONNET_5_5_MEDIUM",
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "phase": "FINAL_REVIEW",
+      "iteration_id": "ITER_8cfc7e92674e4c07a1c765eaa1778103"
+    }
+  ],
+  "ledger_closed": {
+    "EXE_016a1d9b6d3941649be88c8f63b08dca": "COMPLETED",
+    "EXE_799c5dee3175441a9ca4d9039caf56b4": "COMPLETED",
+    "EXE_1644b6d87d4847d0acc9e7e88021f1d1": "COMPLETED",
+    "EXE_ebf1d815f9fa4f3c8babf9d26eac2428": "COMPLETED",
+    "EXE_2e2d664538b343b78661e239c4c26b4f": "COMPLETED",
+    "EXE_4a4439b992a743d9b93c96bf8ae91124": "COMPLETED"
+  },
+  "ledger_event_count": 18,
+  "provider_reported_cost_usd_from_results": 1.7338,
+  "git": {
+    "main_unchanged": true,
+    "remote_unchanged": true,
+    "canonical_clean": true
+  },
+  "total_wall_s": 201.0
+}
