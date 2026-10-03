@@ -943,6 +943,7 @@ class AutonomyController:
             "workspace": self.env.describe(),
             "directional_charter": self.state.get("directional_charter"),
             "directional_charter_hash": self.state.get("directional_charter_hash"),
+            "working_roadmap": self.state.get("working_roadmap"),
             "iteration_contract": self.state["mandate"]["iteration_contract"] if index == 1 else None})
         if self.state["status"] != ac.RUNNING:
             return
@@ -984,6 +985,7 @@ class AutonomyController:
             self.journal.append("ROADMAP_ITEM_SKIPPED", phase=ac.PLAN, payload={"item_id": item_id, "reason": reason})
         if verdict["decision"] == ac.ACCEPT_END:
             self._done(outcome="NO_FURTHER_ACTION")
+            self.state["planning"] = None  # no iteration was created; do not show a phantom "planning" row
             self._await_human(ac.HOLD_ROADMAP_EXHAUSTED, "planner found no further justified action; "
                               "every autonomous roadmap item was individually skipped with a reason")
             return
@@ -1006,6 +1008,7 @@ class AutonomyController:
             "started_at": _now(), "finished_at": None,
             "plan_execution_id": plan_execution.get("execution_id")})
         self.state["planning"] = None
+        self._record_working_roadmap(plan, index, iteration_id)
         self.journal.append("ITERATION_PLANNED", iteration_id=iteration_id, phase=ac.PLAN, payload={
             "index": index, "goal": plan["goal"], "roadmap_refs": plan.get("roadmap_refs", []),
             "scope_justification": plan["scope_justification"], "acceptance_criteria": plan["acceptance_criteria"],
@@ -1015,6 +1018,23 @@ class AutonomyController:
         self._done(outcome="PLANNED")
         self._goto(ac.EXECUTE)
         self._save()
+    def _record_working_roadmap(self, plan: Mapping[str, Any], index: int, iteration_id: str) -> None:
+        """Keep the planner's living notes SEPARATE from the frozen mandate.
+
+        The mandate (the human's direction) is hashed and never edited; this is advisory state the
+        planner rewrites each iteration and the operator reads. It grants no scope: `check_plan`
+        still binds every iteration to pending mandate items.
+        """
+        notes, next_step = plan.get("working_roadmap"), plan.get("next_recommended_step")
+        if not (isinstance(notes, str) and notes.strip()) and not (isinstance(next_step, str) and next_step.strip()):
+            return
+        previous = self.state.get("working_roadmap") or {}
+        entry = {"iteration_id": iteration_id, "index": index, "at": _now(),
+                 "notes": notes.strip() if isinstance(notes, str) and notes.strip() else previous.get("notes"),
+                 "next_step": next_step.strip() if isinstance(next_step, str) and next_step.strip() else None}
+        self.state["working_roadmap"] = entry
+        self.state.setdefault("working_roadmap_history", []).append(entry)
+
     # EXECUTE / SELF_VERIFY ---------------------------------------------------
 
     def _do_execute(self) -> None:
@@ -1444,6 +1464,13 @@ class AutonomyController:
         if result["verdict"] == ac.V_PASS:
             it["status"], it["outcome"], it["finished_at"] = "ACCEPTED", "PASS", _now()
             for item_id in it["lineage"]["roadmap_refs"]:
+                row = self.state["roadmap"][item_id]
+                if row.get("recurring") is True:
+                    # A standing item records progress but stays pending: ending it is the planner's
+                    # explicit, reasoned skip (or an execution fuse), never a side effect of one PASS.
+                    row.setdefault("iterations", []).append(it["iteration_id"])
+                    row["last_iteration_id"] = it["iteration_id"]
+                    continue
                 self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
             ac.refresh_dependency_states(self.state["roadmap"])
             self.journal.append("ITERATION_ACCEPTED", iteration_id=it["iteration_id"], phase=ac.FINAL_REVIEW, payload={

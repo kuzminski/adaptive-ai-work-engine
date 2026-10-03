@@ -103,7 +103,9 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "implementation_complexity": {"type": "string", "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
                  "complexity_evidence": _STRS,
                  "semantic_verification_required": {"type": "boolean"},
-                 "semantic_verification_reason": {"type": ["string", "null"]}}},
+                 "semantic_verification_reason": {"type": ["string", "null"]},
+                 "working_roadmap": {"type": ["string", "null"]},
+                 "next_recommended_step": {"type": ["string", "null"]}}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
                 "properties": {"summary": {"type": "string"}, "changed_files": _STRS,
@@ -176,7 +178,15 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "choices with AUTO / AUTO_WITHIN_SCOPE kinds. skipped_items PERMANENTLY removes a roadmap item from this "
              "run: list an item there only with a reason why it should never be done autonomously; never list an item "
              "merely because it is waiting for its dependencies (it stays pending for a later iteration). "
-             "Do not modify any file."),
+             "A roadmap item marked recurring is a standing item: it is not completed by an accepted iteration. "
+             "While user direction items remain pending, prefer them; once only the recurring item remains, "
+             "inspect the repository and choose the next most valuable bounded step toward MANDATE.roadmap_mandate.objective "
+             "(missing functionality, integration, tests, UX, documentation) and reference the recurring item in "
+             "roadmap_refs. Only when no sensible further work remains, return NO_FURTHER_ACTION and list the recurring "
+             "item in skipped_items with the concrete reason. On every ITERATION plan, set working_roadmap to the "
+             "updated working roadmap (Markdown: done, open problems, decisions, next steps) and next_recommended_step "
+             "to the single next step; both are advisory notes for the operator and never change the user's direction "
+             "or grant scope. Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
                 "your changes uncommitted. Do not run Git commands: the controller owns and verifies Git boundaries. "
@@ -276,6 +286,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
+                "WORKING_ROADMAP": ctx.get("working_roadmap"),
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
     if name in ("execute", "repair", "self_verify"):
         it = ctx["iteration"]

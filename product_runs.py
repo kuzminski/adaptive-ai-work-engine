@@ -49,7 +49,14 @@ import run_cancellation as rc
 
 PRODUCT_DIR = "PRODUCT"
 TASK_SCHEMA = "AAW_PRODUCT_TASK_V0.1"
-MAX_DIRECTIONS = 12
+# Free-text fields are never silently truncated. These are safety ceilings
+# against runaway/pasted-by-accident payloads (a whole novel), set far above
+# any realistic prompt or roadmap; exceeding one is a clear error, not a cut.
+MAX_FIELD_CHARS = 200_000        # goal / first iteration, each
+MAX_ROADMAP_CHARS = 500_000      # the whole direction / roadmap text
+MAX_DIRECTION_CHARS = 20_000     # one roadmap point (may span several lines)
+MAX_DIRECTIONS = 200             # roadmap points
+MAX_LIST_ITEM_CHARS = 5_000      # acceptance criteria / evidence / forbidden areas
 BRANCH_PREFIX = "aaw/"
 
 
@@ -245,15 +252,65 @@ def init_git_repo(path: str) -> dict[str, Any]:
 
 # ── task → mandate ───────────────────────────────────────────────────────────
 
-def _clean_list(values: Any, limit: int = MAX_DIRECTIONS) -> list[str]:
+_BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
+def _check_len(text: str, limit: int, label: str) -> str:
+    if len(text) > limit:
+        raise ProductError(f"{label}: tekst ma {len(text)} znaków, a bezpiecznik pozwala na {limit}. "
+                           "Skróć go lub podziel na kilka zadań.")
+    return text
+
+
+def _clean_list(values: Any, limit: int = 20, item_limit: int = MAX_LIST_ITEM_CHARS) -> list[str]:
+    """One entry per non-empty line (or list element); bullets are stripped; nothing is cut."""
     if isinstance(values, str):
         values = values.splitlines()
     rows = []
     for value in values or []:
-        text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", str(value)).strip()
+        text = _BULLET.sub("", str(value)).strip()
         if text:
-            rows.append(text[:400])
-    return rows[:limit]
+            rows.append(_check_len(text, item_limit, "pozycja listy"))
+    if len(rows) > limit:
+        raise ProductError(f"Zbyt wiele pozycji ({len(rows)}); maksimum to {limit}.")
+    return rows
+
+
+def split_directions(values: Any) -> list[str]:
+    """Roadmap text → one entry per point, preserving multi-line points and Markdown.
+
+    A non-indented line starts a new point (a bullet marker is dropped). Indented lines
+    and lines after a point continue it, so a long Markdown roadmap with sub-bullets keeps
+    its structure inside the point. Headings and blank lines separate points but are not
+    points themselves (they remain in the verbatim roadmap text stored with the mandate).
+    A plain list of one-line items behaves exactly as before.
+    """
+    if isinstance(values, (list, tuple)):
+        values = "\n".join(str(v) for v in values)
+    points: list[list[str]] = []
+    current: list[str] | None = None
+    for raw in str(values or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            if current is not None:
+                current.append("")        # paragraph break inside an indented point
+            continue
+        if _HEADING.match(line):
+            current = None                # a heading closes the previous point
+            continue
+        if line[0] in " \t" and current is not None:
+            current.append(line)
+        else:
+            current = [_BULLET.sub("", line, count=1).strip()]
+            points.append(current)
+    rows = ["\n".join(p).strip() for p in points if p]
+    rows = [r for r in rows if r]
+    for r in rows:
+        _check_len(r, MAX_DIRECTION_CHARS, "punkt kierunku")
+    if len(rows) > MAX_DIRECTIONS:
+        raise ProductError(f"Kierunek ma {len(rows)} punktów; maksimum to {MAX_DIRECTIONS}. Połącz je w szersze punkty.")
+    return rows
 
 
 def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
@@ -261,24 +318,42 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
     if len(goal) < 5:
         raise ProductError("Opisz, co chcesz zbudować (pole „Co chcesz zbudować?”).")
     advanced = dict(form.get("advanced") or {})
+    directions_raw = form.get("directions")
+    if isinstance(directions_raw, (list, tuple)):
+        directions_text = "\n".join(str(v) for v in directions_raw)
+    else:
+        directions_text = str(directions_raw or "")
     return {
         "repo": str(form.get("repo") or "").strip().strip('"'),
-        "goal": goal[:2000],
-        "first_iteration": str(form.get("first_iteration") or "").strip()[:2000],
-        "directions": _clean_list(form.get("directions")),
+        "goal": _check_len(goal, MAX_FIELD_CHARS, "Cel"),
+        "first_iteration": _check_len(str(form.get("first_iteration") or "").strip(), MAX_FIELD_CHARS,
+                                      "Pierwsza iteracja"),
+        "directions": split_directions(directions_raw),
+        "directions_text": _check_len(directions_text.strip(), MAX_ROADMAP_CHARS, "Kierunek / roadmapa"),
         "planning": form.get("planning") or None,
         "implementation": form.get("implementation") or None,
         "review": form.get("review") or None,
         "advanced": {
-            "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 20),
-            "required_evidence": _clean_list(advanced.get("required_evidence"), 10),
-            "forbidden_areas": _clean_list(advanced.get("forbidden_areas"), 20),
+            "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 100),
+            "required_evidence": _clean_list(advanced.get("required_evidence"), 50),
+            "forbidden_areas": _clean_list(advanced.get("forbidden_areas"), 100),
             "max_iterations": advanced.get("max_iterations"),
             "max_repair_attempts": advanced.get("max_repair_attempts"),
+            # AAW keeps going while the roadmap offers justified work; False restores "stop when the
+            # listed points are done". Missing key = the autonomous default.
+            "continue_autonomously": advanced.get("continue_autonomously") is not False,
             "profile_overrides": {k: str(v) for k, v in (advanced.get("profile_overrides") or {}).items() if v},
         },
         "base": form.get("base") if isinstance(form.get("base"), dict) else None,
     }
+
+
+CONTINUATION_ITEM_ID = "CONTINUE"
+CONTINUATION_TITLE = (
+    "Continue autonomously toward the objective. After the listed points are done, inspect the real state of the "
+    "repository, the user's direction and the working roadmap, then choose the next most valuable bounded step "
+    "(missing features, integration, tests, UX, documentation). Skip this standing item with a concrete reason only "
+    "when no sensible further work remains.")
 
 
 def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -289,15 +364,23 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
     may skip a later item with an explicit reason.
     """
     first = form["first_iteration"] or form["goal"]
-    items = [{"item_id": "STEP_1", "title": first[:400]}]
+    items = [{"item_id": "STEP_1", "title": first}]
     for index, direction in enumerate(form["directions"], start=2):
         items.append({"item_id": f"STEP_{index}", "title": direction, "depends_on": ["STEP_1"]})
     advanced = form["advanced"]
+    continuous = advanced.get("continue_autonomously", True) is not False
+    if continuous:
+        # A standing item that is never "done": after the listed points the planner keeps choosing the
+        # next justified step until it skips this item with a reason or an execution fuse fires.
+        items.append({"item_id": CONTINUATION_ITEM_ID, "title": CONTINUATION_TITLE,
+                      "depends_on": ["STEP_1"], "recurring": True})
     acceptance = advanced["acceptance_criteria"] or [
-        f"The first iteration is implemented: {first[:400]}",
+        "The first iteration is implemented" + (f": {first}" if len(first) <= 600 else
+                                                " as specified in iteration_contract.goal"),
         "Project checks/tests that passed before this change still pass",
     ]
-    max_iterations = advanced.get("max_iterations") or min(ac.HARD_MAX_ITERATIONS, len(items) + 2)
+    max_iterations = (advanced.get("max_iterations")
+                      or (ac.DEFAULT_MAX_ITERATIONS if continuous else min(ac.HARD_MAX_ITERATIONS, len(items) + 2)))
     max_repairs = advanced.get("max_repair_attempts") or settings.get("max_repair_attempts", 2)
     return {
         "mandate_id": mandate_id,
@@ -317,6 +400,7 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
             "items": items,
             "priorities": [],
             "possible_directions": form["directions"],
+            "direction_text": form.get("directions_text", ""),
             "autonomy_bounds": {
                 "max_iterations": int(max(1, min(ac.HARD_MAX_ITERATIONS, int(max_iterations)))),
                 "max_repair_attempts": int(max(1, min(ac.HARD_MAX_REPAIR_ATTEMPTS, int(max_repairs)))),
@@ -406,7 +490,9 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
                     "branch": repo.get("branch"), "head": repo.get("head"), "base": form["base"]},
         "goal": form["goal"],
         "first_iteration": form["first_iteration"] or form["goal"],
-        "roadmap": [{"item_id": i["item_id"], "title": i["title"]} for i in mandate["roadmap_mandate"]["items"]],
+        "roadmap": [{"item_id": i["item_id"], "title": i["title"], "recurring": i.get("recurring") is True}
+                    for i in mandate["roadmap_mandate"]["items"]],
+        "continuous": any(i.get("recurring") for i in mandate["roadmap_mandate"]["items"]),
         "acceptance_criteria": mandate["iteration_contract"]["acceptance_criteria"],
         "limits": mandate["roadmap_mandate"]["autonomy_bounds"],
         "planner": planner,
@@ -425,6 +511,8 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
             "Brak automatycznego merge.",
             "Brak automatycznego push.",
             "Human Gate po zakończeniu — decyzja zawsze należy do Ciebie.",
+            "STOP SAFELY / STOP NOW możesz użyć w dowolnej chwili; praca kończy się też na bezpiecznikach "
+            "(limit iteracji, eskalacja, błąd Git) lub gdy planista uzasadni brak dalszej pracy.",
             "Nie zmieniaj plików w głównym folderze repozytorium w trakcie pracy AAW — AAW to wykryje i zatrzyma się.",
         ],
         "_form": form, "_resolution": resolution, "_mandate": mandate,

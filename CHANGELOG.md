@@ -1,5 +1,20 @@
 # Changelog — AAW product app
 
+## Unreleased — long-form fields, example presets, count-free autonomy
+
+Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
+
+- Goal / First iteration / Direction fields are no longer cut (was 2000 / 2000 / 12 points × 400 chars);
+  safety ceilings only (200k / 200k / 500k chars, 200 points), refused with a clear message, never truncated.
+- Direction text is split into points preserving multi-line Markdown; the verbatim text is kept in the mandate.
+- New "standing" roadmap item (`recurring: true`, id `CONTINUE`): an accepted iteration never completes it, so
+  PLAN → … → FINAL_REVIEW → ROADMAP_CHECK → PLAN continues until the planner skips it with a reason or a fuse
+  fires. Option `advanced.continue_autonomously` (default on; off = previous behaviour).
+- Iteration cap is a fuse: default 40 (was `len(items)+2`), hard ceiling 200 (was 50).
+- Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
+- UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
+  (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
+
 ## 0.2.0-rc1 — 2026-10-03 — Product MVP V0.2, release candidate 1
 
 Release hardening of the product layer. The autonomy engine is the frozen
