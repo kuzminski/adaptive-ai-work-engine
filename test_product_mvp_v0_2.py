@@ -21,7 +21,6 @@ import pytest
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-import autonomy_contract as ac  # noqa: E402
 import product_home  # noqa: E402
 import product_providers as pp  # noqa: E402
 import product_recommendations as pr  # noqa: E402

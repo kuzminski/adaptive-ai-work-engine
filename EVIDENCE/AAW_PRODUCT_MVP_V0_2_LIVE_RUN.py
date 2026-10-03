@@ -161,7 +161,6 @@ def main() -> int:
                 for item in value:
                     yield from costs(item)
         cost = sum(sum(costs(json.loads(f.read_text()))) for f in (run_dir / "AUTONOMY" / "RESULTS").glob("*.json"))
-        probe_cost = 0.0  # probes print their own JSON; not stored by AAW
         record.update({
             "phase_timeline": timeline, "run_id": run_dir.name,
             "engine_status": state["status"], "hold": state.get("hold"), "escalation": state.get("escalation"),

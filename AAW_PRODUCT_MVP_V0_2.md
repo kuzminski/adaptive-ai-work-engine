@@ -137,6 +137,12 @@ Friction found and fixed during the walkthrough / live smoke:
 7. Codex-only user whose account rejects GPT-6 Luna got a dead-end blocker →
    blocker now names the way out (other level / other CLI).
 8. First dirty file name lost its first character (V0.1 bug) → fixed.
+9. Windows CI (first run): the walkthrough's own console output and the
+   scripted CLI used the Windows code page; with a Polish goal the scripted
+   CLI mangled the engine's UTF-8 handoff and the engine correctly refused
+   it (`MANDATE_EXTENSION_ATTEMPT`). Both test tools now use UTF-8 I/O
+   (reproduced locally with `PYTHONIOENCODING=cp1252`, then 30/30). The app
+   and the engine were not affected — the engine already speaks UTF-8.
 
 Not fixed (low value / out of scope): the generated `__pycache__` files of the
 project's own tests appear in the candidate when the project has no
