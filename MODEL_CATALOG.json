@@ -151,6 +151,27 @@
       "reason": "Available in Claude Code, but the current Pro plan requires usage credits and the installed CLI is below 2.1.255; blocked by NO_EXTRA_PAID_USAGE.",
       "role_hint": "Bardzo ciężka agentic work; current access policy wymaga extra credits.",
       "source_class": ["LOCAL_AUTH_STATE", "OFFICIAL_ANTHROPIC_HELP"]
+    },
+    {
+      "provider": "google",
+      "harness": "antigravity",
+      "model_family": "Google Antigravity (FREE)",
+      "runtime_model_id": "antigravity-free",
+      "supported_efforts": [
+        "default"
+      ],
+      "runtime_available": false,
+      "account_available": false,
+      "access_class": "FREE_EXPERIMENTAL",
+      "automatic_use_allowed": false,
+      "manual_use_allowed": true,
+      "trust_level": "EXPERIMENTAL",
+      "live_integration": "NOT_TESTED",
+      "reason": "Antigravity CLI is not installed/verified here; adapter contract, capability detection and routing exist, live dispatch is NOT_TESTED.",
+      "role_hint": "EXPERIMENTAL: adequate SMALL/MEDIUM work, adapter tests, simple implementations and repairs. Never the sole critical reviewer, never an automatic VERY_LARGE/critical implementer.",
+      "source_class": [
+        "ADAPTER_CONTRACT_ONLY"
+      ]
     }
   ]
 }
