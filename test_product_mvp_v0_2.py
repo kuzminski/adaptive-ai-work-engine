@@ -327,7 +327,7 @@ def test_release_documents_and_version_entry_point():
     spec.loader.exec_module(build)
     sources = {"QUICK_START.md": ROOT / "QUICK_START.md", "README.md": ROOT / "release" / "README.md",
                "CHANGELOG.md": ROOT / "CHANGELOG.md", "LICENSE": ROOT / "LICENSE",
-               "SZYBKI_START.txt": ROOT / "packaging" / "SZYBKI_START.txt",
+               "SZYBKI_START.txt": ROOT / "SZYBKI_START.txt",
                "VERSION.txt": ROOT / "product_version.py"}                # generated from it at build time
     for name in build.REQUIRED_FILES:
         source = sources.get(name) or ROOT / "release" / "examples" / name.split("/", 1)[1]
@@ -342,6 +342,32 @@ def test_release_documents_and_version_entry_point():
                          env={**os.environ, "AAW_PRODUCT_HOME": str(Path(spec.origin).parent.parent / "build" /
                                                                     "version_home")}, timeout=60)
     assert out.returncode == 0 and json.loads(out.stdout)["release"] == product_version.RELEASE
+
+
+def test_release_zip_layout_and_start_guide_paths(tmp_path):
+    """The ZIP a user downloads: one AAW/ folder, AAW.exe next to SZYBKI_START.txt, guides name only real paths."""
+    import importlib.util
+    import zipfile
+    spec = importlib.util.spec_from_file_location("check_release_zip", ROOT / "packaging" / "check_release_zip.py")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    files = {"AAW.exe": b"stub", "_internal/base_library.zip": b"stub", "VERSION.txt": b"stub",
+             "SZYBKI_START.txt": (ROOT / "SZYBKI_START.txt").read_bytes(),
+             "QUICK_START.md": (ROOT / "QUICK_START.md").read_bytes(),
+             "README.md": (ROOT / "release" / "README.md").read_bytes(),
+             "CHANGELOG.md": (ROOT / "CHANGELOG.md").read_bytes(), "LICENSE": (ROOT / "LICENSE").read_bytes()}
+    files.update({f"EXAMPLES/{p.name}": p.read_bytes() for p in (ROOT / "release" / "examples").iterdir()})
+    archive = tmp_path / "AAW-Windows-x64.zip"
+    with zipfile.ZipFile(archive, "w") as zf:                        # same layout as build_portable.py
+        for name, data in files.items():
+            zf.writestr(f"AAW/{name}", data)
+    assert checker.check(str(archive)) == []
+    with zipfile.ZipFile(archive, "a") as zf:
+        zf.writestr("stray.txt", b"x")
+    assert any("exactly one folder" in problem for problem in checker.check(str(archive)))
+    szybki = (ROOT / "SZYBKI_START.txt").read_text(encoding="utf-8")
+    for needle in ("releases/latest", "AAW-Windows-x64.zip", "AAW.exe", "Wyodrębnij", "START"):
+        assert needle in szybki, needle
 
 
 def test_self_test_checks_exact_mapping_consistency(tmp_path):

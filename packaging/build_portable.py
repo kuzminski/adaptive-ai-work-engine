@@ -37,7 +37,7 @@ def main() -> int:
     shutil.copy2(ROOT / "release" / "README.md", app / "README.md")
     shutil.copy2(ROOT / "CHANGELOG.md", app / "CHANGELOG.md")
     shutil.copy2(ROOT / "LICENSE", app / "LICENSE")
-    shutil.copy2(ROOT / "packaging" / "SZYBKI_START.txt", app / "SZYBKI_START.txt")
+    shutil.copy2(ROOT / "SZYBKI_START.txt", app / "SZYBKI_START.txt")
     shutil.copytree(ROOT / "release" / "examples", app / "EXAMPLES", dirs_exist_ok=True)
     (app / "VERSION.txt").write_text(
         f"{product_version.RELEASE_NAME}\nrelease: {product_version.RELEASE}\ndate: {product_version.RELEASE_DATE}\n"

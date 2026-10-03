@@ -1,4 +1,37 @@
-# Adaptive AI Work Engine (AAW)
+# AAW — Adaptive AI Work Engine
+
+## Pobierz dla Windows
+
+### [⬇ POBIERZ AAW DLA WINDOWS — `AAW-Windows-x64.zip`](https://github.com/kuzminski/adaptive-ai-work-engine/releases/latest/download/AAW-Windows-x64.zip)
+
+Gotowa aplikacja (Windows 10/11 x64), bez instalacji. Strona wydania:
+[Releases → najnowsze wydanie](https://github.com/kuzminski/adaptive-ai-work-engine/releases/latest)
+(pobierz plik `AAW-Windows-x64.zip` z sekcji *Assets*, **nie** „Source code”).
+
+1. Pobierz ZIP (przycisk powyżej).
+2. Rozpakuj (prawy przycisk → „Wyodrębnij wszystkie…”).
+3. Otwórz folder `AAW` i uruchom `AAW.exe` — aplikacja otworzy się w przeglądarce.
+4. Wskaż projekt (folder z repozytorium Git).
+5. AAW wykryje Claude/Codex.
+6. Wpisz cel i kliknij **START**.
+
+Wymagania (instalowane osobno, raz):
+- [Git for Windows](https://git-scm.com/downloads);
+- Claude CLI i/lub Codex CLI — zainstalowane i zalogowane na Twoim koncie.
+
+Python, kompilacja ani terminal **nie są potrzebne** do uruchomienia AAW.
+Instrukcja krok po kroku: **[SZYBKI_START.txt](SZYBKI_START.txt)**
+(po angielsku: [QUICK_START.md](QUICK_START.md)).
+
+AAW pracuje w izolowanej kopii projektu, nigdy nie robi merge ani push i na
+końcu każdego zadania czeka na Twoją decyzję (Human Gate).
+
+---
+
+## For developers — technical documentation
+
+Everything below is for contributors working from the source code. Normal
+users do not need it: use the download above.
 
 Adaptive AI Work Engine is a local, evidence-oriented framework for routing a
 bounded task through static AI-assisted workflows. It keeps deterministic
@@ -30,9 +63,11 @@ operator-led workflows, not yet for unattended production automation.
 
 ## Product app (MVP V0.2 — release candidate `0.2.0-rc1`)
 
-For a normal user: download `AAW-Windows-x64.zip` (built by
-`.github/workflows/aaw-portable.yml`), unzip, run `AAW\AAW.exe` — see
-**`QUICK_START.md`** (one page). The app opens in the browser on 127.0.0.1 and
+For a normal user: see **Pobierz dla Windows** at the top — the
+`AAW-Windows-x64.zip` asset of the GitHub Release, unzip, run `AAW\AAW.exe`
+(`SZYBKI_START.txt` / `QUICK_START.md`, one page each). Releases are built by
+`.github/workflows/aaw-release.yml` on a `v*` tag (it reuses the Windows build
+and validation of `.github/workflows/aaw-portable.yml`). The app opens in the browser on 127.0.0.1 and
 a 7-step wizard leads from the project folder through AI-tool detection
 (Claude CLI / Codex CLI — each needs its own login; AAW stores no passwords)
 and model confirmation to the goal and START. You see the active phase, can

@@ -4,7 +4,8 @@ AAW plans and carries out a series of small, reviewed iterations of work on
 your Git project using the AI command-line tools you already have (Claude CLI
 and/or Codex CLI), then stops and asks you to decide.
 
-**Start here:** `QUICK_START.md` (one page). Example tasks: `EXAMPLES\`.
+**Start here:** double-click `AAW.exe` in this folder. One-page guides:
+`SZYBKI_START.txt` (Polish) and `QUICK_START.md` (English). Example tasks: `EXAMPLES\`.
 
 ## What you get
 
@@ -38,7 +39,8 @@ and/or Codex CLI), then stops and asks you to decide.
 |---|---|
 | `AAW.exe` | the app (`--version`, `--self-test`, `--detect` for diagnostics) |
 | `_internal\` | bundled runtime (do not modify) |
-| `QUICK_START.md`, `README.md`, `CHANGELOG.md`, `VERSION.txt`, `LICENSE` | documentation |
+| `SZYBKI_START.txt`, `QUICK_START.md` | one-page start guide (Polish / English) |
+| `README.md`, `CHANGELOG.md`, `VERSION.txt`, `LICENSE` | documentation |
 | `EXAMPLES\` | 2–3 example tasks to paste into the wizard |
 
 Your data (tasks, evidence, isolated copies, settings, logs) lives in

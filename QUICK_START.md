@@ -12,9 +12,9 @@ Release `0.2.0-rc1` · the app UI is in Polish; button names are quoted as they 
 
 **Steps (about 3–5 minutes):**
 
-1. **Download** `AAW-Windows-x64.zip`.
-2. **Unzip** it (right-click → *Extract All…*) to any folder, e.g. `C:\Tools\AAW`. No installation, no Python needed.
-3. **Run** `AAW\AAW.exe`. The app opens in your browser at `http://127.0.0.1:…` (local only).
+1. **Download** `AAW-Windows-x64.zip` from the latest release: <https://github.com/kuzminski/adaptive-ai-work-engine/releases/latest> (section *Assets*; not *Source code*).
+2. **Unzip** it (right-click → *Extract All…* → *Extract*). No installation, no Python, no terminal needed. Do not start the app from inside the ZIP preview.
+3. **Run** it: the extracted location contains one folder, `AAW`. Open it and double-click `AAW.exe` (Explorer may show it as `AAW`, type *Application*). Next to it: `SZYBKI_START.txt` (this guide in Polish), `README.md`, `EXAMPLES` and `_internal` (app files — do not modify). The app opens in your browser at `http://127.0.0.1:…` (local only).
 4. **Windows warning:** the build is not code-signed yet, so SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**.
 5. **Welcome screen** → **„Zaczynamy →"** (Let's start). A 7-step wizard opens.
 6. **Project** — click **„Wybierz…"** (Choose…) and pick your normal project folder (a Git repository). AAW creates its own isolated copy; your folder is not changed. If the folder has uncommitted changes, AAW tells you exactly what to do (commit or stash).

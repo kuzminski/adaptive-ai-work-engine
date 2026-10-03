@@ -2,6 +2,7 @@ name: AAW portable build
 
 on:
   workflow_dispatch:
+  workflow_call:          # reused by aaw-release.yml (tag -> GitHub Release)
   push:
     branches: ["claude/**", "main"]
     paths:
@@ -16,12 +17,14 @@ on:
       - "packaging/**"
       - "release/**"
       - "QUICK_START.md"
+      - "SZYBKI_START.txt"
       - "CHANGELOG.md"
       - "MODEL_RECOMMENDATIONS.json"
       - "MODEL_CATALOG.json"
       - "IMPLEMENTER_PROFILES.json"
       - "AUTONOMY_ROLES.json"
       - ".github/workflows/aaw-portable.yml"
+      - ".github/workflows/aaw-release.yml"
 
 permissions:
   contents: read
@@ -74,10 +77,15 @@ jobs:
         shell: pwsh
         run: |
           Expand-Archive -Path dist\AAW-Windows-x64.zip -DestinationPath build\unzipped -Force
-          foreach ($f in "AAW.exe","QUICK_START.md","README.md","CHANGELOG.md","VERSION.txt","LICENSE","EXAMPLES\01_expense_tracker.md") {
+          $top = @(Get-ChildItem build\unzipped | ForEach-Object Name)
+          if ($top.Count -ne 1 -or $top[0] -ne "AAW") { throw "ZIP root must contain only the AAW folder, found: $top" }
+          foreach ($f in "AAW.exe","SZYBKI_START.txt","QUICK_START.md","README.md","CHANGELOG.md","VERSION.txt","LICENSE","EXAMPLES\01_expense_tracker.md","EXAMPLES\02_tests_and_validation.md","EXAMPLES\03_todo_web_page.md") {
             if (-not (Test-Path "build\unzipped\AAW\$f")) { throw "missing $f in the ZIP" }
           }
+          Get-ChildItem build\unzipped\AAW | ForEach-Object Name
           Get-Content build\unzipped\AAW\VERSION.txt
+          python packaging/check_release_zip.py dist\AAW-Windows-x64.zip
+          if ($LASTEXITCODE -ne 0) { throw "release ZIP layout / start-guide path check failed" }
       - name: First-user walkthrough on the unzipped AAW.exe (real browser, scripted CLIs)
         timeout-minutes: 12
         run: |
