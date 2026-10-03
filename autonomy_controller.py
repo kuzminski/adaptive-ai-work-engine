@@ -44,13 +44,18 @@ import autonomy_contract as ac
 import autonomy_policy as ap
 import autonomy_run_lock as rl
 import execution_contract as xc
+import model_router as mr
 import process_observation
+import repair_escalation as rx
 import run_cancellation
 from aaw_paths import AAW_ROOT, STATS_ROOT
 from execution_ledger import ExecutionLedger, LedgerError, LifecycleRecorder
 
 ROLES_PATH = AAW_ROOT / "AUTONOMY_ROLES.json"
 PROFILES_PATH = AAW_ROOT / "IMPLEMENTER_PROFILES.json"
+
+
+_FAILOVER = object()    # sentinel: the attempt failed softly and the next ranked profile should be tried
 
 
 class ExecutorFailure(RuntimeError):
@@ -62,16 +67,19 @@ class ExecutorFailure(RuntimeError):
     role profile); `dispatched` says whether a provider was contacted.
     """
 
-    def __init__(self, message: str, *, code: str | None = None, dispatched: bool | None = None) -> None:
+    def __init__(self, message: str, *, code: str | None = None, dispatched: bool | None = None,
+                 failure_class: str | None = None, retry_after_minutes: float | None = None) -> None:
         super().__init__(message)
         self.code, self.dispatched = code, dispatched
+        # RATE_LIMIT / TIMEOUT / AUTH / UNAVAILABLE feed provider health (model_router); None = not a provider signal.
+        self.failure_class, self.retry_after_minutes = failure_class, retry_after_minutes
 
 
 class RoleUnavailable(ExecutorFailure):
     """The configured profile for a role is not runnable now. Never substituted."""
 
     def __init__(self, message: str) -> None:
-        super().__init__(message, code=ac.E_ROLE_UNAVAILABLE, dispatched=False)
+        super().__init__(message, code=ac.E_ROLE_UNAVAILABLE, dispatched=False, failure_class=mr.F_UNAVAILABLE)
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
@@ -357,7 +365,9 @@ class AutonomyController:
 
     def __init__(self, run_id: str, *, executors: Mapping[str, Callable[[dict], dict]],
                  env: WorkspaceEnvironment, roles: Mapping[str, Mapping[str, Any]],
-                 stats_root: Path | None = None) -> None:
+                 stats_root: Path | None = None,
+                 quota_source: Callable[[], Mapping[str, Any]] | None = None,
+                 clock: Callable[[], Any] | None = None) -> None:
         missing = [n for n in EXECUTOR_NAMES if n not in executors]
         if missing:
             raise ac.AutonomyError(f"missing executors: {missing}")
@@ -375,6 +385,8 @@ class AutonomyController:
         self.policy_active = bool(self.policy_bindings)
         if self.policy_active:
             ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
+        self.quota_source, self._clock = quota_source, clock
+        self._configure_routing()
         self._recovered: dict[str, Any] | None = None   # adopted result of a reconciled read-only call
         self._retry_of: str | None = None                # execution a replayed read-only call supersedes
         self._adopted_execution_id: str | None = None
@@ -403,7 +415,7 @@ class AutonomyController:
             "planner_invocation_count": 0, "policy_preset": ap.PRESET_ID if self.policy_active else None,
             "in_flight": None, "hold": None, "escalation": None, "human": None, "promotion": None,
             "planning": None, "executions": [], "workspace": self.env.describe(),
-            "workspace_checkpoint": self.env.checkpoint(),
+            "workspace_checkpoint": self.env.checkpoint(), "router_state": mr.empty_state(),
             "started_at": _now(), "updated_at": _now(), "main_merge_allowed": False,
         }
         self.journal.append("MANDATE_FROZEN", payload={
@@ -438,6 +450,8 @@ class AutonomyController:
             self.policy_active = bool(self.policy_bindings)
             if self.policy_active:
                 ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
+            self._configure_routing()
+        self.state.setdefault("router_state", mr.empty_state())
         self.state.setdefault("executions", [])
         self.state.setdefault("planning", None)
         self.journal.append("RUN_RESUMED", phase=self.state["phase"], payload={
@@ -600,17 +614,32 @@ class AutonomyController:
     def _role_audit(self) -> dict[str, Any]:
         return {r: {k: b.get(k) for k in ("role", "profile_id", "runtime_model_id", "effort", "review_independence",
                                           "binding_source")}
-                for r, b in self.roles.items() if r != "policy_profiles"}
+                for r, b in self.roles.items() if r not in ac.NON_ROLE_KEYS}
 
     def _policy_ids(self) -> dict[str, str]:
         return ap.profile_id_map(self.policy_bindings)
 
+    def _configure_routing(self) -> None:
+        """Quota routing and repair escalation come from the frozen role config.
+
+        With neither block present the controller behaves exactly as before,
+        except that a surviving finding now climbs the default repair ladder
+        (derived from the policy profiles when there are any) instead of
+        stopping at the Human Gate after one unchanged repair.
+        """
+        explicit = self.roles.get("repair_escalation")
+        if explicit is None and self.policy_active:
+            explicit = ap.default_repair_escalation(self._policy_ids())
+        self.escalation_cfg = rx.normalize_config(explicit)
+        routing = self.roles.get("routing")
+        self.routing_cfg = dict(routing) if isinstance(routing, Mapping) else None
+
     def _policy_selection(self, name: str, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
-        if not self.policy_active:
-            return None
         supplied = ctx.get("model_selection")
         if isinstance(supplied, Mapping):
             return dict(supplied)
+        if not self.policy_active:
+            return None
         ids = self._policy_ids()
         if name == "plan":
             index = int(ctx.get("iteration_index", len(self.state.get("iterations", [])) + 1))
@@ -726,7 +755,173 @@ class AutonomyController:
                                               if e.get("executor") in ("review", "final_review", "self_verify")][-1:]
         return rel
 
+    # routing ------------------------------------------------------------------
+
+    def _now_dt(self) -> Any:
+        import datetime as dt
+        return self._clock() if self._clock else dt.datetime.now(dt.timezone.utc)
+
+    def _catalog_binding(self, role: str, profile_id: str) -> dict[str, Any]:
+        from model_catalog import CatalogError, load_profiles
+        try:
+            profile = load_profiles().get(profile_id)
+        except CatalogError:
+            profile = None
+        if profile is None:
+            return {"role": role, "profile_id": profile_id, "availability": "KNOWN_BUT_UNAVAILABLE",
+                    "binding_source": "AUTONOMY_ROLES.policy_profiles"}
+        return ac._binding(role, profile_id, profile, "MODEL_ROUTER")
+
+    def _binding_for(self, role: str, selection: Mapping[str, Any] | None) -> dict[str, Any]:
+        if selection:
+            bound = self.policy_bindings.get(selection.get("profile_key"))
+            if isinstance(bound, Mapping) and bound.get("profile_id") == selection.get("profile_id"):
+                binding = dict(bound)
+            else:
+                binding = self._catalog_binding(role, str(selection["profile_id"]))
+            binding["role"] = role
+            return binding
+        role_key = role if role in self.roles else ac.OPTIONAL_ROLE_ALIASES.get(role, role)
+        return dict(self.roles[role_key])
+
+    def _pool_of(self, binding: Mapping[str, Any]) -> str | None:
+        traits = ((self.routing_cfg or {}).get("profiles") or {}).get(binding.get("profile_id")) or {}
+        return traits.get("pool") or binding.get("provider") or binding.get("harness")
+
+    def _task_class(self, ctx: Mapping[str, Any]) -> str:
+        it = self.state["iterations"][-1] if self.state["iterations"] else {}
+        plan = ctx.get("plan") or it.get("plan") or {}
+        size = str(plan.get("task_size") or "").upper()
+        if size in mr.TASK_CLASSES:
+            return size
+        complexity = str(plan.get("implementation_complexity") or "NORMAL").upper()
+        if complexity == "SIGNIFICANTLY_DIFFICULT":
+            return mr.VERY_LARGE
+        if complexity == "HARDER":
+            return mr.LARGE
+        return mr.SMALL if len(plan.get("touched_areas") or []) <= 1 and plan else mr.MEDIUM
+
+    def _telemetry(self) -> Mapping[str, Any]:
+        if self.quota_source is not None:
+            try:
+                return self.quota_source() or {}
+            except Exception:                       # telemetry must never stop a run: UNKNOWN is the honest fallback
+                return {}
+        import provider_adapters
+        path = (self.routing_cfg or {}).get("telemetry_file")
+        merged = {"pools": dict(provider_adapters.collect_telemetry()["pools"])}
+        if path:       # operator/adapter-maintained file wins over an adapter's own (usually UNKNOWN) snapshot
+            merged["pools"].update(mr.load_telemetry(AAW_ROOT / path).get("pools") or {})
+        return merged
+
+    def _route(self, name: str, role: str, ctx: Mapping[str, Any], binding: Mapping[str, Any],
+               selection: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        """Quota/trust/capability routing around the policy's preferred profile. None = router inactive."""
+        cfg = self.routing_cfg
+        if not cfg or not mr.normalize_policy(cfg.get("policy"))["enabled"]:
+            return None
+        traits = cfg.get("profiles") or {}
+        preferred = str((selection or {}).get("profile_id") or binding.get("profile_id"))
+        executor = self.executors[name]
+        preflight = getattr(executor, "preflight", None)
+        # The policy's own choice is preflighted exactly as before. An unrunnable preferred profile fails
+        # closed (ROLE_PROFILE_UNAVAILABLE, no silent substitution) unless the config opts in to
+        # `substitute_unavailable`. Alternatives are not probed up front: one that turns out unrunnable
+        # fails over to the next ranked profile at dispatch and is remembered as unhealthy.
+        preferred_reason = preflight(binding) if callable(preflight) and preferred == binding.get("profile_id") else None
+        if preferred_reason and not cfg.get("substitute_unavailable"):
+            return None
+        candidates = []
+        for pid, row in traits.items():
+            cand_binding = binding if pid == preferred else self._catalog_binding(role, pid)
+            reason = preferred_reason if pid == preferred else (
+                row.get("unavailable_reason") or "declared unavailable" if row.get("available") is False else None)
+            candidates.append({"profile_id": pid, "pool": row.get("pool") or cand_binding.get("provider")
+                               or cand_binding.get("harness"), "runtime_model_id": cand_binding.get("runtime_model_id"),
+                               "trust": row.get("trust"), "capability_class": row.get("capability_class", 0),
+                               "capabilities": row.get("capabilities", []), "cost_weight": row.get("cost_weight", 1.0),
+                               "available": reason is None, "unavailable_reason": reason})
+        critical = bool(self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"].get("critical_scope")) or \
+            str((selection or {}).get("tier", "")).upper() == "CRITICAL"
+        exclude_models: list[str] = []
+        if name in ("review", "final_review") and (self.roles.get("reviewer") or {}).get("review_independence") \
+                == "DIFFERENT_MODEL":
+            exclude_models = sorted({e.get("model") for e in self.state["executions"]
+                                     if e.get("executor") in ("execute", "repair") and e.get("model")})
+        request = {"phase": name, "role": role, "task_class": self._task_class(ctx),
+                   "criticality": mr.CRITICAL if critical else mr.NORMAL_CRITICALITY,
+                   "required_capabilities": (cfg.get("phase_capabilities") or {}).get(name, []),
+                   "min_capability_class": ctx.get("min_capability_class"),
+                   "preferred_profile_id": preferred, "current_pool": self.state.get("last_pool"),
+                   "current_profile_id": ctx.get("current_profile_id"),
+                   "operation_in_progress": bool(ctx.get("operation_in_progress")),
+                   "repo_modifying": name in ("execute", "repair"),
+                   # a human's explicit profile choice (mandate model_policy_overrides, or a caller-supplied
+                   # profile) outranks every routing heuristic when it is technically runnable
+                   "manual_override": ctx.get("manual_override_profile_id") or (
+                       preferred if (selection or {}).get("selection_reason") == "HUMAN_OVERRIDE" else None),
+                   "exclude_models": exclude_models}
+        decision = mr.route(request, candidates, self._telemetry(), self.state.get("router_state"),
+                            policy=cfg.get("policy"), now=self._now_dt())
+        self.state["router_state"] = decision["router_state"]
+        self.journal.append("ROUTING_DECISION", iteration_id=self._iteration_id(), phase=self.state["phase"],
+                            payload={**{k: v for k, v in decision.items() if k != "router_state"},
+                                     "request": request, "executor": name})
+        return decision
+
+    def _routed_selection(self, base: Mapping[str, Any] | None, decision: Mapping[str, Any], pid: str,
+                          name: str) -> dict[str, Any] | None:
+        compact = {"reason_code": decision["reason_code"], "preferred_profile_id": decision["preferred_profile_id"],
+                   "selected_profile_id": pid, "selected_pool": decision.get("selected_pool"),
+                   "quota": decision.get("selected_quota"), "trust": decision.get("selected_trust"),
+                   "task_class": decision["task_class"], "switch_penalty": decision["switch_penalty_applied"],
+                   "alternatives": [{"profile_id": a["profile_id"], "eligible": a["eligible"], "zone": a["zone"],
+                                     "rejected_by": a["rejected_by"][:2]} for a in decision["alternatives"]]}
+        if pid == decision["preferred_profile_id"] and base:
+            return {**dict(base), "routing": compact}
+        sel = dict(base or {})
+        sel.update({"policy_version": sel.get("policy_version") or mr.ROUTER_VERSION,
+                    "profile_key": "routed:" + pid, "profile_id": pid,
+                    "selection_reason": "ROUTED:" + decision["reason_code"], "tier": sel.get("tier", "ROUTED"),
+                    "escalated_from": decision["preferred_profile_id"], "routing": compact})
+        sel.setdefault("complexity_risk_evidence", [])
+        sel.setdefault("previous_attempt", None)
+        return sel
+
     def _call(self, name: str, role: str, ctx: dict[str, Any]) -> Any:
+        """Select (policy → router), then dispatch with bounded provider failover."""
+        phase = self.state["phase"]
+        if self._recovered and self._recovered["phase"] == phase and self._recovered["executor"] == name:
+            return self._call_once(name, role, ctx, None, None, None, failover=False)
+        selection = self._policy_selection(name, ctx)
+        binding = self._binding_for(role, selection)
+        decision = self._route(name, role, ctx, binding, selection)
+        if decision is None:
+            return self._call_once(name, role, ctx, selection, binding, None, failover=False)
+        ranked = list(decision["ranked_profile_ids"])[:1 + int((self.routing_cfg or {}).get("max_failovers", 2))]
+        if decision["selected_profile_id"] is None or not ranked:
+            self._save()
+            self._escalate(ac.E_ROUTING, f"{name}: no adequate profile ({decision['reason_code']}"
+                           f"{': ' + decision['detail'] if decision.get('detail') else ''}); nothing was dispatched",
+                           self._iteration_id())
+            return None
+        for index, pid in enumerate(ranked):
+            chosen = self._routed_selection(selection, decision, pid, name)
+            chosen_binding = self._binding_for(role, chosen) if pid != binding.get("profile_id") else dict(binding)
+            result = self._call_once(name, role, ctx, chosen, chosen_binding, decision,
+                                     failover=index < len(ranked) - 1)
+            if result is not _FAILOVER:
+                return result
+        return None   # unreachable: the last candidate never fails over
+
+    def _failover_safe(self, name: str, before_digest: str | None) -> bool:
+        """A failed attempt may be retried elsewhere only if it provably left the worktree untouched."""
+        if name not in ("execute", "repair"):
+            return True
+        return before_digest is not None and diff_digest(self.env.diff()) == before_digest
+
+    def _call_once(self, name: str, role: str, ctx: dict[str, Any], selection: Mapping[str, Any] | None,
+                   binding: dict[str, Any] | None, route: Mapping[str, Any] | None, *, failover: bool) -> Any:
         """Invoke an executor as one V0.4A execution, with an in-flight marker around it.
 
         Order (each step durable before the next): role preflight → descriptor →
@@ -742,22 +937,22 @@ class AutonomyController:
                                 payload={"execution_id": adopted["execution_id"], "role": role,
                                          "reason": "recorded COMPLETED result reconciled after restart; not re-invoked"})
             return adopted["result"]
-        role_key = role if role in self.roles else ac.OPTIONAL_ROLE_ALIASES.get(role, role)
-        selection = self._policy_selection(name, ctx)
-        if selection:
-            binding = dict(self.policy_bindings.get(selection["profile_key"]) or {
-                "role": role, "profile_id": selection["profile_id"], "availability": "KNOWN_BUT_UNAVAILABLE",
-                "binding_source": "AUTONOMY_ROLES.policy_profiles"})
-            binding["role"] = role
-        else:
-            binding = dict(self.roles[role_key])
+        if binding is None:                  # adopted-result path above returned; otherwise resolve here
+            selection = self._policy_selection(name, ctx)
+            binding = self._binding_for(role, selection)
         executor = self.executors[name]
         preflight = getattr(executor, "preflight", None)
         reason = preflight(binding) if callable(preflight) else None
         if reason:
             # Nothing invoked, so nothing allocated: an execution_id names an invocation.
             self.journal.append("ROLE_UNAVAILABLE", iteration_id=self._iteration_id(), phase=phase,
-                                payload={"role": role, "profile_id": binding.get("profile_id"), "reason": reason})
+                                payload={"role": role, "profile_id": binding.get("profile_id"), "reason": reason,
+                                         "failover": failover})
+            if failover:
+                self.state["router_state"] = mr.record_failure(
+                    self.state.get("router_state"), "profile:" + str(binding.get("profile_id")), mr.F_UNAVAILABLE,
+                    now=self._now_dt(), policy=(self.routing_cfg or {}).get("policy"), detail=reason)
+                return _FAILOVER
             self._escalate(ac.E_ROLE_UNAVAILABLE, f"role {role} profile {binding.get('profile_id')} is not runnable: "
                            f"{reason}; no substitute is chosen by the controller", self._iteration_id())
             return None
@@ -781,6 +976,8 @@ class AutonomyController:
                "harness": binding.get("harness"), "model": binding.get("runtime_model_id"),
                "effort": binding.get("effort"), "descriptor_path": str(descriptor_path),
                "retry_of_execution_id": descriptor.get("retry_of_execution_id")}
+        if selection and selection.get("routing"):
+            ref["routing"] = selection["routing"]
         if selection:
             self.journal.append("MODEL_POLICY_SELECTED", iteration_id=iteration_id, phase=phase, payload={
                 **dict(selection), "role": role, "selected_profile": binding.get("profile_id"),
@@ -788,6 +985,7 @@ class AutonomyController:
         self.state["in_flight"] = {"phase": phase, "executor": name, "role": role, "iteration_id": iteration_id,
                                    "execution_id": execution_id, "execution_ref": ref, "started_at": _now()}
         self._save()
+        diff_before = diff_digest(self.env.diff()) if name in ("execute", "repair") else None
         try:
             self.ledger.record_execution_intent(
                 execution_id=execution_id, node_id=node_id, invocation_kind=descriptor["invocation_kind"],
@@ -796,7 +994,8 @@ class AutonomyController:
                 input_contract_hash=descriptor.get("input_contract_hash"),
                 repository=self.env.describe().get("repo"), worktree=self.env.describe().get("worktree"),
                 extra={"autonomy_iteration_id": iteration_id, "autonomy_role": role,
-                       "model_policy": dict(selection) if selection else None})
+                       "model_policy": dict(selection) if selection else None,
+                       "routing": (selection or {}).get("routing")})
         except LedgerError as exc:
             self.state["in_flight"] = None
             self._escalate(ac.E_LEDGER, f"execution intent for {execution_id} could not be durably recorded; "
@@ -833,6 +1032,19 @@ class AutonomyController:
             self.state["in_flight"] = None
             ref.update(self._execution_observations(descriptor_path, recorder))
             self.state["executions"].append(ref)
+            pool = self._pool_of(binding) or "?"
+            if exc.failure_class:
+                self.state["router_state"] = mr.record_failure(
+                    self.state.get("router_state"), pool, exc.failure_class, now=self._now_dt(),
+                    retry_after_minutes=exc.retry_after_minutes, policy=(self.routing_cfg or {}).get("policy"),
+                    detail=str(exc))
+            if failover and exc.failure_class and self._failover_safe(name, diff_before):
+                self.journal.append("PROVIDER_FAILOVER", iteration_id=iteration_id, phase=phase, payload={
+                    "executor": name, "failed_profile_id": binding.get("profile_id"), "pool": pool,
+                    "failure_class": exc.failure_class, "execution_id": execution_id, "detail": str(exc)[-500:],
+                    "worktree_untouched": True})
+                self._save()
+                return _FAILOVER
             self._escalate(exc.code or ac.E_EXECUTOR, f"{name} executor failed: {exc} (execution {execution_id})",
                            iteration_id)
             return None
@@ -843,6 +1055,9 @@ class AutonomyController:
                        observation_source="IN_PROCESS_ADAPTER_RETURN", outcome="RETURNED",
                        result_refs=[str(result_path)])
         ref.update(self._execution_observations(descriptor_path, recorder))
+        self.state["last_pool"] = self._pool_of(binding)
+        if self.state.get("router_state") is not None and self.state["last_pool"]:
+            self.state["router_state"] = mr.record_success(self.state["router_state"], self.state["last_pool"])
         self._record_execution_ref(ref)
         reused = self._session_reused(ref)
         if reused:
@@ -886,16 +1101,41 @@ class AutonomyController:
         """Stop autonomy. From here only a human can act, and promotion is off the table."""
         from_phase = self.state["phase"]
         self.state["in_flight"] = None
+        self._ledger_dispositions(rx.DISP_HUMAN_GATE, f"{code}: {detail}"[:500])
         self.state["status"] = ac.AWAITING_HUMAN
         self.state["phase"] = ac.AWAITING_HUMAN
         self.state["escalation"] = {"code": code, "detail": detail, "iteration_id": iteration_id, "at": _now(),
                                     "from_phase": from_phase}
         self.state["hold"] = {"reason": ac.HOLD_ESCALATION, "promotable": False, "roadmap_exhausted": False,
-                              "candidate_id": None}
+                              "candidate_id": None, **self._escalation_candidate()}
         self.journal.append("ESCALATED", iteration_id=iteration_id, phase=from_phase,
                             payload={"code": code, "detail": detail})
         self.journal.append("AWAITING_HUMAN", iteration_id=iteration_id, payload={"reason": ac.HOLD_ESCALATION})
         self._save()
+
+    def _escalation_candidate(self) -> dict[str, Any]:
+        """What the worktree holds at an escalation, so the Human Gate never shows an empty candidate.
+
+        `candidate_fingerprint` is the whole iteration's produced state (diff against the baseline);
+        `last_repair` separately says what the *latest* repair changed, so "the last repair changed
+        nothing" is not confused with "the iteration changed nothing".
+        """
+        try:
+            fingerprint = candidate_fingerprint(self.env)
+        except Exception:                       # a missing worktree must not turn an escalation into a crash
+            return {}
+        out: dict[str, Any] = {"candidate_fingerprint": fingerprint, "iteration_changed_files": fingerprint["changed_files"]}
+        if self.state.get("iterations"):
+            repairs = self._it().get("repairs", [])
+            if repairs:
+                last = repairs[-1]
+                out["last_repair"] = {"attempt": last["attempt"], "stage": last.get("stage"),
+                                      "profile_id": last.get("profile_id"), "code_changed": last.get("code_changed"),
+                                      "evidence_changed": last.get("evidence_changed"),
+                                      "reported_changed_files": last.get("changed_files", []),
+                                      "observed_files_delta": last.get("observed_files_delta", []),
+                                      "signals": last.get("signals", [])}
+        return out
 
     def _checks(self) -> dict[str, str]:
         return dict(self._it().get("evidence_state", {}))
@@ -1087,9 +1327,12 @@ class AutonomyController:
             matches = [row for row in checks if target in " ".join(
                 f"{row.get('name', '')} {row.get('summary', '')}".casefold().split()) or
                 " ".join(str(row.get("name", "")).casefold().split()) in target]
-            passed = any(str(row.get("status", "")).upper() == "PASS" for row in matches)
+            classified = [row for row in matches if str(row.get("status", "")).upper() in ac.CLASSIFIED_STATUSES
+                          and row.get("log_ref")]
+            passed = any(str(row.get("status", "")).upper() == "PASS" for row in matches) or bool(classified)
             rows.append({"name": f"required_evidence::{evidence}", "status": "PASS" if passed else "FAIL",
                          "summary": (f"required evidence is backed by {len(matches)} recorded check(s)"
+                                     + (f"; {len(classified)} classified with evidence (not a pass)" if classified else "")
                                      if passed else f"required evidence {evidence!r} has no passing recorded check"),
                          "source_refs": [row.get("log_ref") or row.get("name") for row in matches]})
         try:
@@ -1354,57 +1597,317 @@ class AutonomyController:
     # REPAIR ------------------------------------------------------------------
 
     def _begin_repair(self, origin: str, findings: Sequence[Mapping[str, Any]]) -> None:
-        """Enter REPAIR, or stop: the loop is bounded and refuses to spin."""
+        """Enter REPAIR on the right rung of the bounded escalation ladder, or stop for a human.
+
+        A finding that survives a REPAIR is not, by itself, a reason to stop:
+        the ladder (repair_escalation) first raises effort, then a stronger
+        implementer diagnoses before repairing, then the planner analyses.
+        Only an exhausted ladder or the attempt bounds reach the Human Gate.
+        """
         it = self._it()
-        limit = self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"]["max_repair_attempts"]
+        bounds = self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"]
+        limit = bounds["max_repair_attempts"]
         keys = sorted(f["finding_key"] for f in findings)
-        if it["repair_attempts"] >= limit:
-            self._escalate(ac.E_REPAIR_LIMIT, f"{it['repair_attempts']} repair attempts did not converge "
-                           f"(limit {limit}); open findings: {keys}", it["iteration_id"])
-            return
+        cfg = self.escalation_cfg
         last = it["repairs"][-1] if it["repairs"] else None
-        if last and last.get("addresses") == keys and last.get("origin") == origin:
-            self._escalate(ac.E_NO_PROGRESS, f"repair {it['repair_attempts']} did not change the findings: {keys}",
-                           it["iteration_id"])
-            return
-        it["repair_origin"] = {"origin": origin, "findings": [dict(f) for f in findings]}
+        assessment = None
+        if last is not None:
+            assessment = rx.assess_progress(keys_before=last["addresses"], keys_after=keys,
+                                            attempt_signals=last.get("signals", []))
+            if last.get("outcome") is None:
+                last["outcome"] = {"signals": assessment["signals"], "resolved_keys": assessment["resolved_keys"],
+                                   "remaining_keys": keys, "progressed": assessment["progressed"]}
+                self.journal.append("REPAIR_ASSESSED", iteration_id=it["iteration_id"], phase=self.state["phase"],
+                                    payload={"attempt": last["attempt"], "stage": last.get("stage"),
+                                             "profile_id": last.get("profile_id"), **assessment,
+                                             "code_changed": last.get("code_changed"),
+                                             "evidence_changed": last.get("evidence_changed")})
+                self._ledger_result(last, assessment)
+        if not cfg["enabled"]:
+            if it["repair_attempts"] >= limit:
+                self._escalate(ac.E_REPAIR_LIMIT, f"{it['repair_attempts']} repair attempts did not converge "
+                               f"(limit {limit}); open findings: {keys}", it["iteration_id"])
+                return
+            if last and last.get("addresses") == keys and last.get("origin") == origin:
+                self._escalate(ac.E_NO_PROGRESS, f"repair {it['repair_attempts']} did not change the findings: "
+                               f"{keys}", it["iteration_id"])
+                return
+            step = {"action": "STEP", "stage": rx.STAGE_CURRENT, "profile_id": None, "mode": rx.MODE_REPAIR,
+                    "reason": "ESCALATION_DISABLED", "diagnose_profile_id": None, "role": "repairer", "note": None}
+        else:
+            ladder = it.get("repair_ladder")
+            if ladder is None or (assessment and assessment["fully_new_problem"]):
+                if ladder is not None:
+                    self._ledger_dispositions(rx.DISP_RESOLVED, "previous finding set replaced by a different one")
+                ladder = it["repair_ladder"] = rx.new_ladder(keys)
+                progressed = False
+            else:
+                progressed = bool(assessment and assessment["progressed"])
+            step = rx.next_step(cfg, ladder, progressed=progressed,
+                                last_profile_id=(last or {}).get("profile_id"),
+                                diagnose_available=self.executors.get("diagnose") is not None)
+            if step["action"] == "EXHAUSTED":
+                tried = [f"{r.get('stage')}:{r.get('profile_id')}" for r in it["repairs"]]
+                self._ledger_dispositions(rx.DISP_HUMAN_GATE, "repair ladder exhausted")
+                self._escalate(ac.E_NO_PROGRESS, f"the repair escalation ladder is exhausted after "
+                               f"{it['repair_attempts']} attempt(s) ({', '.join(tried)}); open findings: {keys}",
+                               it["iteration_id"])
+                return
+            standard = sum(1 for r in it["repairs"] if r.get("stage") in (None, rx.STAGE_CURRENT))
+            escalation_cap = limit + len(cfg["stages"]) * cfg["max_attempts_per_stage"]
+            if (step["stage"] == rx.STAGE_CURRENT and standard >= limit) or it["repair_attempts"] >= escalation_cap \
+                    or it["repair_attempts"] >= ac.HARD_MAX_REPAIR_ATTEMPTS + 8:
+                self._ledger_dispositions(rx.DISP_HUMAN_GATE, "repair attempt bound reached")
+                self._escalate(ac.E_REPAIR_LIMIT, f"{it['repair_attempts']} repair attempts did not converge "
+                               f"(limit {limit}); open findings: {keys}", it["iteration_id"])
+                return
+            if step["stage"] != rx.STAGE_CURRENT or step["reason"] == "PROGRESS_RETRY_SAME_STAGE":
+                step["escalation_id"] = self._ledger_escalation(step, last, assessment, keys, origin) \
+                    if step["stage"] != rx.STAGE_CURRENT else None
+        it["repair_origin"] = {"origin": origin, "findings": [dict(f) for f in findings], "step": step}
         self._goto(ac.REPAIR)
         self._save()
+
+    # escalation ledger ----------------------------------------------------------
+
+    def _escalation_ledger_path(self) -> Path:
+        return self.dir / "repair_escalation_ledger.jsonl"
+
+    def _ledger_append(self, entry: Mapping[str, Any]) -> None:
+        path = self._escalation_ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+    def _profile_effort(self, profile_id: str | None) -> dict[str, Any]:
+        if not profile_id:
+            return {"profile_id": None, "model": None, "effort": None}
+        binding = self._catalog_binding("repairer", profile_id)
+        return {"profile_id": profile_id, "model": binding.get("runtime_model_id"), "effort": binding.get("effort")}
+
+    def _ledger_escalation(self, step: Mapping[str, Any], last: Mapping[str, Any] | None,
+                           assessment: Mapping[str, Any] | None, keys: Sequence[str], origin: str) -> str:
+        it = self._it()
+        escalation_id = "ESC_" + uuid.uuid4().hex[:16]
+        previous = {"profile_id": (last or {}).get("profile_id"), "model": (last or {}).get("model"),
+                    "effort": (last or {}).get("effort"), "stage": (last or {}).get("stage")}
+        new_profile = step.get("profile_id") or (last or {}).get("profile_id")
+        new = {**self._profile_effort(new_profile), "stage": step["stage"], "mode": step["mode"],
+               "diagnose_profile_id": step.get("diagnose_profile_id")}
+        entry = rx.ledger_entry(
+            escalation_id=escalation_id, run_id=self.run_id, iteration_id=it["iteration_id"], finding_ids=keys,
+            previous=previous, new=new, reason=str(step["reason"]) + (f" ({step['note']})" if step.get("note") else ""),
+            previous_result={"remaining_finding_keys": list(keys), "origin": origin,
+                             "summary": (last or {}).get("summary"),
+                             "signals": (assessment or {}).get("signals", [])},
+            code_state_changed=(last or {}).get("code_changed"),
+            evidence_state_changed=(last or {}).get("evidence_changed"),
+            signals=(assessment or {}).get("signals", []), at=_now())
+        self._ledger_append(entry)
+        it.setdefault("repair_escalations", []).append({"escalation_id": escalation_id, "stage": step["stage"],
+                                                         "disposition": rx.DISP_PENDING})
+        self.journal.append("REPAIR_ESCALATED", iteration_id=it["iteration_id"], phase=self.state["phase"], payload={
+            "escalation_id": escalation_id, "stage": step["stage"], "from": previous, "to": new,
+            "reason": entry["reason"], "finding_ids": list(keys)})
+        return escalation_id
+
+    def _ledger_result(self, last: Mapping[str, Any], assessment: Mapping[str, Any]) -> None:
+        escalation_id = last.get("escalation_id")
+        if not escalation_id:
+            return
+        self._ledger_append(rx.result_entry(
+            escalation_id=escalation_id,
+            new_result={"remaining_finding_keys": assessment["unchanged_keys"] + assessment["new_keys"],
+                        "resolved_keys": assessment["resolved_keys"], "summary": last.get("summary"),
+                        "profile_id": last.get("profile_id")},
+            code_state_changed=last.get("code_changed"), evidence_state_changed=last.get("evidence_changed"),
+            signals=assessment["signals"], at=_now()))
+
+    def _ledger_dispositions(self, disposition: str, detail: str | None) -> None:
+        if not self.state.get("iterations"):
+            return
+        for row in self._it().get("repair_escalations", []):
+            if row["disposition"] == rx.DISP_PENDING:
+                row["disposition"] = disposition
+                self._ledger_append(rx.disposition_entry(escalation_id=row["escalation_id"],
+                                                         disposition=disposition, detail=detail, at=_now()))
+
+    # REPAIR ------------------------------------------------------------------
+
+    def _repair_packet(self, origin: Mapping[str, Any], step: Mapping[str, Any]) -> dict[str, Any]:
+        it = self._it()
+        mandate = self.state["mandate"]["iteration_contract"]
+        return rx.build_repair_packet(
+            findings=origin["findings"], criteria=list((it.get("plan") or {}).get("acceptance_criteria", [])),
+            checks=it.get("checks", []), evidence_state=self._checks(), changed_files=self.env.changed_files(),
+            diff=self.env.diff(), prior_attempts=it["repairs"], step=step,
+            known_limitations=[*mandate.get("known_limitations", []), *it.get("classified", [])],
+            diagnoses=it.get("diagnoses", []))
+
+    def _diagnose(self, origin: Mapping[str, Any], step: Mapping[str, Any], packet: dict[str, Any],
+                  attempt: int) -> dict[str, Any] | None:
+        """Read-only root-cause analysis by the step's diagnosing profile (optional executor)."""
+        it = self._it()
+        last = it["repairs"][-1] if it["repairs"] else {}
+        selection = ap.select_repair_step({**step, "stage": step["stage"]}, profile_id=step["diagnose_profile_id"],
+                                          previous_profile_id=last.get("profile_id"),
+                                          evidence=[step["reason"]])
+        before = diff_digest(self.env.diff())
+        result = self._call("diagnose", "diagnostician", {
+            "iteration": it, "plan": it["plan"], "findings": origin["findings"], "attempt": attempt,
+            "step": step, "repair_packet": packet, "model_selection": selection})
+        if self.state["status"] != ac.RUNNING:
+            return None
+        if diff_digest(self.env.diff()) != before:
+            self._escalate(ac.E_VERIFY_MUTATION, "the worktree diff changed during DIAGNOSE (a read-only phase)",
+                           it["iteration_id"])
+            return None
+        diagnosis = result.get("diagnosis") if isinstance(result, dict) and isinstance(result.get("diagnosis"), dict) \
+            else result if isinstance(result, dict) and result.get("root_cause") else None
+        execution = self.state["executions"][-1] if self.state.get("executions") else {}
+        self._done(attempt=attempt, diagnose=True)
+        if diagnosis and str(diagnosis.get("root_cause") or "").strip():
+            record = {"by": execution.get("profile"), "attempt": attempt, "root_cause": str(diagnosis["root_cause"]),
+                      "next_actions": list(diagnosis.get("next_actions") or []),
+                      "classification": diagnosis.get("classification"), "execution_id": execution.get("execution_id")}
+            it.setdefault("diagnoses", []).append(record)
+            return record
+        return None
 
     def _do_repair(self) -> None:
         it = self._it()
         origin = it["repair_origin"]
+        step = origin.get("step") or {"stage": rx.STAGE_CURRENT, "profile_id": None, "mode": rx.MODE_REPAIR,
+                                      "reason": "LEGACY", "diagnose_profile_id": None}
         it["repair_attempts"] += 1
+        attempt = it["repair_attempts"]
+        last = it["repairs"][-1] if it["repairs"] else None
+        before_diff, before_files = diff_digest(self.env.diff()), list(self.env.changed_files())
+        before_evidence = dict(self._checks())
+        seen_triples = {rx._h([c.get("name"), str(c.get("status", "")).upper(), c.get("summary")])
+                        for c in it.get("checks", [])}
+        seen_refs = {str(c["log_ref"]) for c in it.get("checks", []) if c.get("log_ref")} | set(it.get("evidence_refs", []))
+        seen_dx = {rx._h(str(d.get("root_cause", "")).strip().casefold()) for d in it.get("diagnoses", [])}
+        # Later attempts get a compact packet instead of the whole iteration context.
+        packet = self._repair_packet(origin, step) if (last is not None or step["stage"] != rx.STAGE_CURRENT) else None
+        if step.get("diagnose_profile_id") and self.executors.get("diagnose") is not None:
+            diagnosis = self._diagnose(origin, step, packet or self._repair_packet(origin, step), attempt)
+            if self.state["status"] != ac.RUNNING:
+                return
+            if packet is not None and diagnosis:
+                packet["PRIOR_DIAGNOSES"] = [*packet.get("PRIOR_DIAGNOSES", []), {
+                    "by": diagnosis["by"], "root_cause": diagnosis["root_cause"],
+                    "next_actions": diagnosis["next_actions"][:5]}]
+            elif packet is None and diagnosis:
+                packet = self._repair_packet(origin, step)
+        ctx: dict[str, Any] = {"iteration": it, "plan": it["plan"], "findings": origin["findings"],
+                               "attempt": attempt, "step": step, "repair_mode": step["mode"],
+                               "repair_packet": packet}
+        if step.get("profile_id"):
+            ctx["model_selection"] = ap.select_repair_step(
+                step, profile_id=step["profile_id"], previous_profile_id=(last or {}).get("profile_id"),
+                evidence=[step["reason"]])
+            ctx["min_capability_class"] = self._capability_class(step["profile_id"])
         # EXACT_ALLOWED_REPAIR_SCOPE: only the findings, never the goal.
-        result = self._call("repair", "repairer", {
-            "iteration": it, "plan": it["plan"], "findings": origin["findings"], "attempt": it["repair_attempts"]})
+        result = self._call("repair", "repairer", ctx)
         if self.state["status"] != ac.RUNNING:
             return
         if not (isinstance(result, dict) and isinstance(result.get("summary"), str)):
             self._escalate(ac.E_EXECUTOR, "repair returned no structured result", it["iteration_id"])
             return
         self._record_checks(result.get("checks"))
-        it["repairs"].append({"attempt": it["repair_attempts"], "origin": origin["origin"],
-                              "addresses": sorted(f["finding_key"] for f in origin["findings"]),
-                              "summary": result["summary"], "changed_files": result.get("changed_files", []),
-                              "at": _now()})
+        accepted, rejected = self._apply_reclassifications(result)
+        found = rx.repair_signals(result, evidence_before=before_evidence, seen_check_triples=seen_triples,
+                                  seen_evidence_refs=seen_refs, seen_diagnosis_hashes=seen_dx)
+        signals = list(dict.fromkeys([*found["signals"], *rx.classification_signals(accepted)]))
+        it.setdefault("evidence_refs", [])
+        it["evidence_refs"] = sorted({*it["evidence_refs"], *found["detail"].get("new_evidence_refs", [])})
+        diagnosis = result.get("diagnosis") if isinstance(result.get("diagnosis"), dict) else None
+        if diagnosis and str(diagnosis.get("root_cause") or "").strip():
+            it.setdefault("diagnoses", []).append({
+                "by": None, "attempt": attempt, "root_cause": str(diagnosis["root_cause"]),
+                "next_actions": list(diagnosis.get("next_actions") or []),
+                "classification": diagnosis.get("classification")})
+        summary_hash = rx._h(result["summary"].strip().casefold())
+        repeated = bool(last) and last.get("summary_hash") == summary_hash and not signals
+        after_files = list(self.env.changed_files())
+        record = {"attempt": attempt, "origin": origin["origin"], "stage": step["stage"], "mode": step["mode"],
+                  "addresses": sorted(f["finding_key"] for f in origin["findings"]),
+                  "summary": result["summary"], "summary_hash": summary_hash,
+                  "changed_files": result.get("changed_files", []),
+                  "observed_files_delta": sorted(set(after_files) ^ set(before_files)),
+                  "code_changed": diff_digest(self.env.diff()) != before_diff,
+                  "evidence_changed": dict(self._checks()) != before_evidence or bool(accepted),
+                  "signals": signals, "signal_detail": found["detail"], "repeated_response": repeated,
+                  "reclassifications": {"accepted": accepted, "rejected": rejected},
+                  "diagnosis_provided": bool(diagnosis and str(diagnosis.get("root_cause") or "").strip()),
+                  "escalation_id": step.get("escalation_id"), "outcome": None, "at": _now()}
+        it["repairs"].append(record)
+        if step["mode"] == rx.MODE_DIAGNOSE_THEN_REPAIR and not record["diagnosis_provided"] \
+                and not it.get("diagnoses"):
+            self.journal.append("REPAIR_DIAGNOSIS_MISSING", iteration_id=it["iteration_id"], phase=ac.REPAIR,
+                                payload={"attempt": attempt, "stage": step["stage"]})
         # Deviations and uncertainties a repair reports join the iteration's record.
         for key in ("deviations", "uncertainties", "unresolved"):
             if result.get(key):
                 it["execution"][key] = list(it["execution"].get(key, [])) + list(result[key])
         repair_execution = self.state["executions"][-1] if self.state.get("executions") else {}
-        it["repairs"][-1].update({"profile_id": repair_execution.get("profile"),
-                                  "execution_id": repair_execution.get("execution_id"),
-                                  "selection": repair_execution.get("selection")})
+        record.update({"profile_id": repair_execution.get("profile"), "model": repair_execution.get("model"),
+                       "effort": repair_execution.get("effort"),
+                       "execution_id": repair_execution.get("execution_id"),
+                       "selection": repair_execution.get("selection")})
         self.journal.append("REPAIR_COMPLETED", iteration_id=it["iteration_id"], phase=ac.REPAIR, payload={
-            "attempt": it["repair_attempts"], "origin": origin["origin"], "addresses": it["repairs"][-1]["addresses"],
+            "attempt": attempt, "origin": origin["origin"], "addresses": record["addresses"],
+            "stage": step["stage"], "mode": step["mode"], "signals": signals,
+            "code_changed": record["code_changed"], "evidence_changed": record["evidence_changed"],
+            "repeated_response": repeated,
             "repaired_by": self._execution_audit(repair_execution.get("execution_id")),
             "execution_id": repair_execution.get("execution_id")})
-        self._done(attempt=it["repair_attempts"])
+        self._done(attempt=attempt)
         # Every repair returns through deterministic/semantic self-verification
         # and the primary review pipeline before a fresh final review.
         self._goto(ac.SELF_VERIFY)
         self._save()
+
+    def _capability_class(self, profile_id: str) -> int | None:
+        row = ((self.routing_cfg or {}).get("profiles") or {}).get(profile_id) or {}
+        value = row.get("capability_class")
+        return value if type(value) is int else None
+
+    def _apply_reclassifications(self, result: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Validate evidence-backed reclassifications and stale-check supersession reported by a repair.
+
+        A failing check can leave the blocking set only through a newer PASS
+        for the same name, or a validated, acceptance-neutral classification
+        with an evidence reference. Everything stays visible to reviewers.
+        """
+        it = self._it()
+        rows = [dict(r) for r in (result.get("reclassifications") or []) if isinstance(r, Mapping)]
+        passing = {str(c.get("name")) for c in (result.get("checks") or [])
+                   if isinstance(c, Mapping) and str(c.get("status", "")).upper() == "PASS"}
+        for check in result.get("checks") or []:
+            if isinstance(check, Mapping) and str(check.get("status", "")).upper() == "PASS":
+                for stale in check.get("supersedes") or []:
+                    rows.append({"check_name": stale, "classification": rx.C_SUPERSEDED, "superseded_by": check.get("name"),
+                                 "evidence_ref": check.get("log_ref") or f"CHECK:{check.get('name')}",
+                                 "explanation": f"re-checked by {check.get('name')!r}: {check.get('summary')}",
+                                 "acceptance_impact": "NONE"})
+        failing = ac.evidence_failures(self._checks())
+        accepted, rejected = rx.validate_reclassifications(rows, failing_names=failing, passing_names=passing)
+        for row in accepted:
+            self._it().setdefault("evidence_state", {})[row["check_name"]] = row["status"]
+            self._it().setdefault("checks", []).append({
+                "name": row["check_name"], "status": row["status"], "log_ref": row["evidence_ref"],
+                "summary": f"{row['classification']}: {row['explanation']}", "classification": row["classification"]})
+            it.setdefault("classified", []).append({"id": row["check_name"], "classification": row["classification"],
+                                                     "description": row["explanation"],
+                                                     "evidence_ref": row["evidence_ref"]})
+        if accepted or rejected:
+            self.journal.append("REPAIR_RECLASSIFIED", iteration_id=it["iteration_id"], phase=ac.REPAIR,
+                                payload={"accepted": accepted, "rejected": rejected})
+        return accepted, rejected
 
     # FINAL_REVIEW ------------------------------------------------------------
 
@@ -1435,7 +1938,9 @@ class AutonomyController:
             for item_id in it["lineage"]["roadmap_refs"]:
                 self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
             ac.refresh_dependency_states(self.state["roadmap"])
+            self._ledger_dispositions(rx.DISP_RESOLVED, "iteration accepted by final review")
             self.journal.append("ITERATION_ACCEPTED", iteration_id=it["iteration_id"], phase=ac.FINAL_REVIEW, payload={
+                "classified_limitations": list(it.get("classified", [])),
                 "roadmap_refs": it["lineage"]["roadmap_refs"], "repair_attempts": it["repair_attempts"],
                 "repaired": [r["addresses"] for r in it["repairs"]], "checks": it["evidence_state"],
                 "final_head": self.env.head(), "diff_sha256": packet["access"]["diff_sha256"]})
