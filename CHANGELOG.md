@@ -8,7 +8,7 @@ states, roles or architecture. Details: `AAW_PRODUCT_MVP_V0_2.md`.
 
 ### Distribution
 - Public download: the GitHub Release `v0.2.0-rc1` carries `AAW-Windows-x64.zip`
-  (built and validated by `.github/workflows/aaw-release.yml` on the tag; no
+  (built, validated and published by `.github/workflows/aaw-portable.yml`; no
   binaries in Git). The root `README.md` starts with the download link;
   `SZYBKI_START.txt` is in the repository root and next to `AAW.exe` in the ZIP.
 - Start guides describe exactly the extracted ZIP (one `AAW` folder); checked by

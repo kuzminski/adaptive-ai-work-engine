@@ -65,9 +65,9 @@ operator-led workflows, not yet for unattended production automation.
 
 For a normal user: see **Pobierz dla Windows** at the top — the
 `AAW-Windows-x64.zip` asset of the GitHub Release, unzip, run `AAW\AAW.exe`
-(`SZYBKI_START.txt` / `QUICK_START.md`, one page each). Releases are built by
-`.github/workflows/aaw-release.yml` on a `v*` tag (it reuses the Windows build
-and validation of `.github/workflows/aaw-portable.yml`). The app opens in the browser on 127.0.0.1 and
+(`SZYBKI_START.txt` / `QUICK_START.md`, one page each). Releases are published by
+`.github/workflows/aaw-portable.yml` on a `v*` tag (or a manual run with
+`release_tag`) after its Windows build and validation pass. The app opens in the browser on 127.0.0.1 and
 a 7-step wizard leads from the project folder through AI-tool detection
 (Claude CLI / Codex CLI — each needs its own login; AAW stores no passwords)
 and model confirmation to the goal and START. You see the active phase, can

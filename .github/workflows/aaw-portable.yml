@@ -1,9 +1,20 @@
 name: AAW portable build
 
+# Every run builds and validates AAW-Windows-x64.zip (workflow artifact).
+# Release: push a tag v<product_version.RELEASE> (e.g. v0.2.0-rc1), or run this workflow
+# manually with release_tag (the tag is then created on the selected commit). After the
+# Windows and Linux jobs pass, the `publish` job attaches the ZIP to that GitHub Release.
+# No binary is ever committed to the repository.
+
 on:
   workflow_dispatch:
-  workflow_call:          # reused by aaw-release.yml (tag -> GitHub Release)
+    inputs:
+      release_tag:
+        description: "Publish a GitHub Release with this tag, e.g. v0.2.0-rc1 (empty = build only)"
+        required: false
+        default: ""
   push:
+    tags: ["v*"]          # path filters are not evaluated for tag pushes
     branches: ["claude/**", "main"]
     paths:
       - "AAW.py"
@@ -24,7 +35,6 @@ on:
       - "IMPLEMENTER_PROFILES.json"
       - "AUTONOMY_ROLES.json"
       - ".github/workflows/aaw-portable.yml"
-      - ".github/workflows/aaw-release.yml"
 
 permissions:
   contents: read
@@ -127,3 +137,52 @@ jobs:
           chmod +x "$RUNNER_TEMP/stub/codex"
           export PATH="$RUNNER_TEMP/stub:$PATH"
           xvfb-run -a python -m pytest -q -p no:cacheprovider $(ls test_*.py | sort)
+
+  publish:
+    name: Publish GitHub Release (AAW-Windows-x64.zip)
+    needs: [windows, linux-regression]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.release_tag || github.ref_name }}
+      ASSET: AAW-Windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: AAW-Windows-x64
+          path: dist
+      - name: Tag matches the product version
+        run: |
+          release=$(python3 -c "import product_version; print(product_version.RELEASE)")
+          echo "RELEASE=$release" >> "$GITHUB_ENV"
+          if [ "$TAG" != "v$release" ]; then echo "tag $TAG does not match product version v$release"; exit 1; fi
+      - name: Release ZIP layout and start-guide paths
+        run: |
+          ls -l "dist/$ASSET"
+          python3 packaging/check_release_zip.py "dist/$ASSET"
+      - name: Create or update the release and upload the ZIP
+        run: |
+          sed "s/@RELEASE@/$RELEASE/g" release/RELEASE_NOTES.md > "$RUNNER_TEMP/notes.md"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "dist/$ASSET" --clobber
+            gh release edit "$TAG" --title "AAW $RELEASE" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest
+          else
+            gh release create "$TAG" "dist/$ASSET" --target "$GITHUB_SHA" --title "AAW $RELEASE" \
+              --notes-file "$RUNNER_TEMP/notes.md" --latest
+          fi
+      - name: Verify the uploaded asset (download it back as a user would)
+        run: |
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets \
+            --jq '{url, isDraft, isPrerelease, assets: [.assets[] | {name, size, state}]}'
+          mkdir verify
+          curl -fsSL -o "verify/$ASSET" "https://github.com/$GH_REPO/releases/download/$TAG/$ASSET"
+          cmp "verify/$ASSET" "dist/$ASSET"
+          python3 packaging/check_release_zip.py "verify/$ASSET"
+          curl -fsSL -o verify/latest.zip "https://github.com/$GH_REPO/releases/latest/download/$ASSET"
+          cmp verify/latest.zip "dist/$ASSET"
+          echo "Public download links OK: releases/download/$TAG/$ASSET and releases/latest/download/$ASSET"
