@@ -1,5 +1,16 @@
 # Changelog — AAW product app
 
+## Unreleased — adaptive model routing + bounded repair escalation
+
+Details: `AAW_QUOTA_ROUTING_AND_REPAIR_ESCALATION_V0_1.md`. Lifecycle unchanged.
+- Quota/trust/capability routing around the policy's preferred profile (`model_router.py`), provider failover,
+  audited `ROUTING_DECISION`s. Antigravity FREE: EXPERIMENTAL, adapter contract only (live NOT_TESTED).
+- A finding that survives one REPAIR no longer goes straight to the Human Gate: bounded ladder (effort up →
+  difficult implementer with diagnosis → planner diagnosis), evidence-based progress, escalation ledger,
+  compact repair packet. `REPAIR_NO_PROGRESS` now means the ladder is exhausted.
+- Fixed: Human Gate after an escalation showed an empty "Zmienione pliki" (no candidate fingerprint was stored).
+- Fixed: a stale failing check could never be superseded by a re-run under another name.
+
 ## 0.2.0-rc1 — 2026-10-03 — Product MVP V0.2, release candidate 1
 
 Release hardening of the product layer. The autonomy engine is the frozen
