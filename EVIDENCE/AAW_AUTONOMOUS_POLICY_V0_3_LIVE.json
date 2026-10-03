@@ -1,0 +1,167 @@
+{
+  "schema_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3_LIVE_EVIDENCE",
+  "recorded_at": "2026-10-02T20:14:02.024289+00:00",
+  "run_id": "LIVE_V03_6240421793c8",
+  "temporary_workspace": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_yxn77z1x",
+  "git_repo": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_yxn77z1x\\workspace\\repo",
+  "git_worktree": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_yxn77z1x\\workspace\\wt",
+  "provider_roles_scheduled_for_live_validation": [
+    "implementer",
+    "review_prep",
+    "reviewer",
+    "final_reviewer"
+  ],
+  "initial_architect": {
+    "profile_id": "OPUS_5_5_HIGH",
+    "scripted_for_mixed_validation": true,
+    "policy_invocation_count": 1,
+    "live_provider_invocations": 0,
+    "preflight_unavailable_reason": "No exact Claude Opus 5.5 runtime mapping is present in MODEL_CATALOG; no substitution is allowed."
+  },
+  "status": "AWAITING_HUMAN",
+  "hold": {
+    "reason": "ESCALATION",
+    "promotable": false,
+    "roadmap_exhausted": false,
+    "candidate_id": null
+  },
+  "escalation": {
+    "code": "EXECUTOR_FAILED",
+    "detail": "review executor failed: review: provider process exited rc=1 (execution EXE_a08dce8699af45c6a2e0110edc530dba)",
+    "iteration_id": "ITER_55675056e14d4750ade4e3f73c1da6a7",
+    "at": "2026-10-02T22:14:01.986+02:00",
+    "from_phase": "REVIEW"
+  },
+  "controller_error": null,
+  "changed_files": [
+    "src/greeting.py"
+  ],
+  "executions": [
+    {
+      "execution_id": "EXE_6b9498eda35d43d9b55084240d50c477",
+      "iteration_id": "ITER_55675056e14d4750ade4e3f73c1da6a7",
+      "role": "initial_planner",
+      "executor": "plan",
+      "profile_id": "OPUS_5_5_HIGH",
+      "runtime_model_id": null,
+      "effort": "high",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "initial_planner",
+        "profile_id": "OPUS_5_5_HIGH",
+        "selection_reason": "INITIAL_ARCHITECT",
+        "tier": "INITIAL",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": null,
+      "live_provider_call": false,
+      "ledger_state": "CLOSED",
+      "started": false,
+      "close_reason": "COMPLETED",
+      "usage": null,
+      "cost_usd": null
+    },
+    {
+      "execution_id": "EXE_768e2805f17c47cea1f4a08aab7da1a8",
+      "iteration_id": "ITER_55675056e14d4750ade4e3f73c1da6a7",
+      "role": "implementer",
+      "executor": "execute",
+      "profile_id": "GPT6_LUNA_HIGH",
+      "runtime_model_id": "gpt-6-luna",
+      "effort": "high",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "implementer_default",
+        "profile_id": "GPT6_LUNA_HIGH",
+        "selection_reason": "DEFAULT_IMPLEMENTATION",
+        "tier": "NORMAL",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fe3d-c08d-77d3-99ed-63c99f313e73",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 295267,
+        "cached_input_tokens": 256768,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 3500,
+        "reasoning_output_tokens": 1556
+      },
+      "cost_usd": null
+    },
+    {
+      "execution_id": "EXE_e5a2d13947b0425b851d4d328753f9da",
+      "iteration_id": "ITER_55675056e14d4750ade4e3f73c1da6a7",
+      "role": "review_prep",
+      "executor": "prepare_packet",
+      "profile_id": "GPT6_LUNA_VERY_HIGH",
+      "runtime_model_id": "gpt-6-luna",
+      "effort": "xhigh",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "review_pretreatment",
+        "profile_id": "GPT6_LUNA_VERY_HIGH",
+        "selection_reason": "REVIEW_PRETREATMENT",
+        "tier": "VERY_HIGH",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fe40-0486-7292-9df3-6ec14f14c737",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 21779,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 854,
+        "reasoning_output_tokens": 348
+      },
+      "cost_usd": null
+    },
+    {
+      "execution_id": "EXE_a08dce8699af45c6a2e0110edc530dba",
+      "iteration_id": "ITER_55675056e14d4750ade4e3f73c1da6a7",
+      "role": "reviewer",
+      "executor": "review",
+      "profile_id": "SOL_6_1_LIGHT",
+      "runtime_model_id": "gpt-6.1-sol",
+      "effort": "low",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "primary_reviewer",
+        "profile_id": "SOL_6_1_LIGHT",
+        "selection_reason": "PRIMARY_REVIEW",
+        "tier": "LIGHT",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fe40-72c2-7ff2-a8b4-637708cde320",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "FAILED",
+      "usage": {},
+      "cost_usd": null,
+      "provider_error": "invalid_json_schema: Invalid schema for response_format 'codex_output_schema'; nested finding objects omitted finding_code from required."
+    }
+  ],
+  "provider_roles_actually_invoked": [
+    "implementer",
+    "review_prep",
+    "reviewer"
+  ],
+  "live_provider_call_count": 3,
+  "total_cost_usd": null,
+  "cost_visibility": "not provided by the Codex CLI artifacts",
+  "post_run_schema_fix": "Output schemas now recursively require every declared property; verified by test_autonomy_policy_v0_3.py. The captured live attempt remains unchanged and was not retried after this fix."
+}

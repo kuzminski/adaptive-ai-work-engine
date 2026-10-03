@@ -60,7 +60,8 @@ def run_id() -> str:
 
 def run_process(argv: Sequence[str], *, cwd: Path | None = None, stdin: str | None = None,
                 timeout: int | None = None, provider: str | None = None,
-                adapter: str | None = None, dispatch: bool = False) -> tuple[int, str, str]:
+                adapter: str | None = None, dispatch: bool = False,
+                env_remove: Sequence[str] = ()) -> tuple[int, str, str]:
     """Spawn one child process, reporting the spawn only when it is a dispatch.
 
     ``Popen`` replaces ``subprocess.run`` so that V0.4B can record
@@ -76,6 +77,8 @@ def run_process(argv: Sequence[str], *, cwd: Path | None = None, stdin: str | No
     """
     environment = dict(os.environ)
     environment.pop("TERM", None)
+    for name in env_remove:  # e.g. an inherited provider session id that must not leak into a fresh call
+        environment.pop(name, None)
     token = run_cancellation.current_token() if dispatch else None
     if token is not None:
         token.raise_if_requested(f"before_spawn:{argv[0]}")

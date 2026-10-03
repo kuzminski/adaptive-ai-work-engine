@@ -52,3 +52,7 @@ worktrees/
 # Local editor files
 .DS_Store
 Thumbs.db
+
+# Portable build output
+build/
+dist/

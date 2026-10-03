@@ -1,0 +1,464 @@
+{
+  "schema_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3_LIVE_EVIDENCE",
+  "recorded_at": "2026-10-02T22:10:40.954199+00:00",
+  "run_id": "LIVE_V03_e64ad0fd3535",
+  "temporary_workspace": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_axp53pal",
+  "git_repo": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_axp53pal\\workspace\\repo",
+  "git_worktree": "C:\\Users\\obywa\\AppData\\Local\\Temp\\aaw_v03_live_axp53pal\\workspace\\wt",
+  "provider_roles_scheduled_for_live_validation": [
+    "implementer",
+    "review_prep",
+    "reviewer",
+    "final_reviewer"
+  ],
+  "initial_architect": {
+    "profile_id": "OPUS_5_5_HIGH",
+    "scripted_for_mixed_validation": true,
+    "policy_invocation_count": 1,
+    "live_provider_invocations": 0,
+    "preflight_unavailable_reason": "No exact Claude Opus 5.5 runtime mapping is present in MODEL_CATALOG; no substitution is allowed."
+  },
+  "status": "AWAITING_HUMAN",
+  "hold": {
+    "reason": "ROADMAP_EXHAUSTED",
+    "detail": "no valid autonomous roadmap item remains; human-gated items: none",
+    "roadmap_exhausted": true,
+    "promotable": true,
+    "candidate_id": "CAND_8ee4caf89ee151ae",
+    "candidate_head": "30e057a52f98a4297ba7a462f41856e4cb75e6d3",
+    "candidate_fingerprint": {
+      "head": "30e057a52f98a4297ba7a462f41856e4cb75e6d3",
+      "diff_sha256": "sha256:ad440d617df3b777dd072ae4d8aa9de0adfbc6fde1f9179aab2015a89fdfa9f6",
+      "changed_files": [
+        "src/greeting.py"
+      ]
+    },
+    "accepted_iterations": [
+      "ITER_17f3fb3ffd6440f096e5cd49a35812d5"
+    ],
+    "execution_ids": [
+      "EXE_542472d38dba4b5bbe98a4a371b579a3",
+      "EXE_fa138256799945c1a06fac8be59778f1",
+      "EXE_22e08a98199f44389a9b18aa23fc30d4",
+      "EXE_0d0d63a1e0e84a4d8998aba4114f2260",
+      "EXE_d4fe0f6d343c451c97caf75dd82e8c44",
+      "EXE_e8b19e2231594e36b65dd19da94280f2",
+      "EXE_878b6fc45b7b4854b95ed7b4135aaf1b",
+      "EXE_7e0ece4f07bb4921ba5e74f952b3f564"
+    ]
+  },
+  "escalation": null,
+  "controller_error": null,
+  "changed_files": [
+    "src/greeting.py"
+  ],
+  "executions": [
+    {
+      "execution_id": "EXE_542472d38dba4b5bbe98a4a371b579a3",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "initial_planner",
+      "executor": "plan",
+      "profile_id": "OPUS_5_5_HIGH",
+      "runtime_model_id": null,
+      "effort": "high",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "initial_planner",
+        "profile_id": "OPUS_5_5_HIGH",
+        "selection_reason": "INITIAL_ARCHITECT",
+        "tier": "INITIAL",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": null,
+      "live_provider_call": false,
+      "ledger_state": "CLOSED",
+      "started": false,
+      "close_reason": "COMPLETED",
+      "usage": null,
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_fa138256799945c1a06fac8be59778f1",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "implementer",
+      "executor": "execute",
+      "profile_id": "GPT6_LUNA_HIGH",
+      "runtime_model_id": "gpt-6-luna",
+      "effort": "high",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "implementer_default",
+        "profile_id": "GPT6_LUNA_HIGH",
+        "selection_reason": "DEFAULT_IMPLEMENTATION",
+        "tier": "NORMAL",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fea7-19e8-7fe0-9f18-985e1c035996",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 273869,
+        "cached_input_tokens": 250368,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 2493,
+        "reasoning_output_tokens": 712
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_22e08a98199f44389a9b18aa23fc30d4",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "review_prep",
+      "executor": "prepare_packet",
+      "profile_id": "GPT6_LUNA_VERY_HIGH",
+      "runtime_model_id": "gpt-6-luna",
+      "effort": "xhigh",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "review_pretreatment",
+        "profile_id": "GPT6_LUNA_VERY_HIGH",
+        "selection_reason": "REVIEW_PRETREATMENT",
+        "tier": "VERY_HIGH",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fea9-3bfa-7fa2-943c-a06a8e185ea1",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 21830,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 765,
+        "reasoning_output_tokens": 361
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_0d0d63a1e0e84a4d8998aba4114f2260",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "reviewer",
+      "executor": "review",
+      "profile_id": "SOL_6_1_LIGHT",
+      "runtime_model_id": "gpt-6.1-sol",
+      "effort": "low",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "primary_reviewer",
+        "profile_id": "SOL_6_1_LIGHT",
+        "selection_reason": "PRIMARY_REVIEW",
+        "tier": "LIGHT",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0fea9-bd91-7060-92f6-5a85784cdaff",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 25107,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 261,
+        "reasoning_output_tokens": 28
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_d4fe0f6d343c451c97caf75dd82e8c44",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "reviewer",
+      "executor": "review",
+      "profile_id": "SOL_6_1_LIGHT",
+      "runtime_model_id": "gpt-6.1-sol",
+      "effort": "low",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "primary_reviewer",
+        "profile_id": "SOL_6_1_LIGHT",
+        "selection_reason": "PRIMARY_REVIEW",
+        "tier": "LIGHT",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0feaa-0795-7480-bb0a-ab6f756f762d",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 26128,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 115,
+        "reasoning_output_tokens": 31
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_e8b19e2231594e36b65dd19da94280f2",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "review_prep",
+      "executor": "prepare_packet",
+      "profile_id": "GPT6_LUNA_VERY_HIGH",
+      "runtime_model_id": "gpt-6-luna",
+      "effort": "xhigh",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "review_pretreatment",
+        "profile_id": "GPT6_LUNA_VERY_HIGH",
+        "selection_reason": "REVIEW_PRETREATMENT",
+        "tier": "VERY_HIGH",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null
+      },
+      "provider_session_id": "01a0feaa-3fa2-7080-8540-9938351ade78",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 21829,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 1437,
+        "reasoning_output_tokens": 748
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_878b6fc45b7b4854b95ed7b4135aaf1b",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "final_reviewer",
+      "executor": "final_review",
+      "profile_id": "SOL_5_6_LIGHT",
+      "runtime_model_id": "gpt-5.6-sol",
+      "effort": "low",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "final_review_default",
+        "profile_id": "SOL_5_6_LIGHT",
+        "selection_reason": "DEFAULT_FINAL_REVIEW",
+        "tier": "DEFAULT",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null,
+        "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5"
+      },
+      "provider_session_id": "01a0feaa-cc82-7a81-8ec9-44cd174639e2",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 25003,
+        "cached_input_tokens": 19200,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 467,
+        "reasoning_output_tokens": 145
+      },
+      "cost_usd": null,
+      "provider_error": null
+    },
+    {
+      "execution_id": "EXE_7e0ece4f07bb4921ba5e74f952b3f564",
+      "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+      "role": "final_reviewer",
+      "executor": "final_review",
+      "profile_id": "SOL_5_6_LIGHT",
+      "runtime_model_id": "gpt-5.6-sol",
+      "effort": "low",
+      "selection": {
+        "policy_version": "AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3",
+        "profile_key": "final_review_default",
+        "profile_id": "SOL_5_6_LIGHT",
+        "selection_reason": "DEFAULT_FINAL_REVIEW",
+        "tier": "DEFAULT",
+        "complexity_risk_evidence": [],
+        "previous_attempt": null,
+        "escalated_from": null,
+        "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5"
+      },
+      "provider_session_id": "01a0feab-1eb9-72f1-bf9c-9fa5ab7d14f3",
+      "live_provider_call": true,
+      "ledger_state": "CLOSED",
+      "started": true,
+      "close_reason": "COMPLETED",
+      "usage": {
+        "input_tokens": 26359,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 308,
+        "reasoning_output_tokens": 196
+      },
+      "cost_usd": null,
+      "provider_error": null
+    }
+  ],
+  "provider_roles_actually_invoked": [
+    "final_reviewer",
+    "implementer",
+    "review_prep",
+    "reviewer"
+  ],
+  "live_provider_call_count": 7,
+  "total_cost_usd": null,
+  "cost_visibility": "not provided by the Codex CLI artifacts",
+  "summary": {
+    "final_state": "AWAITING_HUMAN",
+    "hold_reason": "ROADMAP_EXHAUSTED",
+    "roadmap_exhausted": true,
+    "roadmap_status": {
+      "GREETING": {
+        "status": "DONE",
+        "iteration_id": "ITER_17f3fb3ffd6440f096e5cd49a35812d5",
+        "reason": null
+      }
+    },
+    "human_gate": "AWAITING_HUMAN",
+    "promotable": true,
+    "review_verdicts": [
+      "PASS",
+      "PASS"
+    ],
+    "planner_invocation_count": 1,
+    "main_merge_allowed": false,
+    "fresh_sessions_unique": true,
+    "executions": [
+      {
+        "execution_id": "EXE_542472d38dba4b5bbe98a4a371b579a3",
+        "role": "initial_planner",
+        "profile_id": "OPUS_5_5_HIGH",
+        "runtime_model_id": null,
+        "selection_reason": "INITIAL_ARCHITECT",
+        "provider_session_id": null,
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_CLOSED"
+        ],
+        "live": false
+      },
+      {
+        "execution_id": "EXE_fa138256799945c1a06fac8be59778f1",
+        "role": "implementer",
+        "profile_id": "GPT6_LUNA_HIGH",
+        "runtime_model_id": "gpt-6-luna",
+        "selection_reason": "DEFAULT_IMPLEMENTATION",
+        "provider_session_id": "01a0fea7-19e8-7fe0-9f18-985e1c035996",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_22e08a98199f44389a9b18aa23fc30d4",
+        "role": "review_prep",
+        "profile_id": "GPT6_LUNA_VERY_HIGH",
+        "runtime_model_id": "gpt-6-luna",
+        "selection_reason": "REVIEW_PRETREATMENT",
+        "provider_session_id": "01a0fea9-3bfa-7fa2-943c-a06a8e185ea1",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_0d0d63a1e0e84a4d8998aba4114f2260",
+        "role": "reviewer",
+        "profile_id": "SOL_6_1_LIGHT",
+        "runtime_model_id": "gpt-6.1-sol",
+        "selection_reason": "PRIMARY_REVIEW",
+        "provider_session_id": "01a0fea9-bd91-7060-92f6-5a85784cdaff",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_d4fe0f6d343c451c97caf75dd82e8c44",
+        "role": "reviewer",
+        "profile_id": "SOL_6_1_LIGHT",
+        "runtime_model_id": "gpt-6.1-sol",
+        "selection_reason": "PRIMARY_REVIEW",
+        "provider_session_id": "01a0feaa-0795-7480-bb0a-ab6f756f762d",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_e8b19e2231594e36b65dd19da94280f2",
+        "role": "review_prep",
+        "profile_id": "GPT6_LUNA_VERY_HIGH",
+        "runtime_model_id": "gpt-6-luna",
+        "selection_reason": "REVIEW_PRETREATMENT",
+        "provider_session_id": "01a0feaa-3fa2-7080-8540-9938351ade78",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_878b6fc45b7b4854b95ed7b4135aaf1b",
+        "role": "final_reviewer",
+        "profile_id": "SOL_5_6_LIGHT",
+        "runtime_model_id": "gpt-5.6-sol",
+        "selection_reason": "DEFAULT_FINAL_REVIEW",
+        "provider_session_id": "01a0feaa-cc82-7a81-8ec9-44cd174639e2",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      },
+      {
+        "execution_id": "EXE_7e0ece4f07bb4921ba5e74f952b3f564",
+        "role": "final_reviewer",
+        "profile_id": "SOL_5_6_LIGHT",
+        "runtime_model_id": "gpt-5.6-sol",
+        "selection_reason": "DEFAULT_FINAL_REVIEW",
+        "provider_session_id": "01a0feab-1eb9-72f1-bf9c-9fa5ab7d14f3",
+        "ledger_events": [
+          "EXECUTION_INTENT",
+          "EXECUTION_STARTED",
+          "EXECUTION_CLOSED"
+        ],
+        "live": true
+      }
+    ],
+    "initial_planner": "scripted fixture only because exact Opus 5.5 = PROFILE_UNAVAILABLE; INTENT+CLOSED recorded, no fabricated STARTED",
+    "merge_performed": false,
+    "push_performed": false,
+    "push_basis": "fixture remote.git contains only the base commit (checked after the run)"
+  }
+}
