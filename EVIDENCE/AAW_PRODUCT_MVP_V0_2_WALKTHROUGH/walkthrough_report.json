@@ -1,0 +1,307 @@
+{
+  "schema": "AAW_FIRST_USER_WALKTHROUGH_V1",
+  "app": "/tmp/claude-0/zipcheck/AAW/AAW",
+  "providers": "claude,codex",
+  "platform": "linux",
+  "launch_to_start_s": 3.25,
+  "launch_to_start_user_interactions": 13,
+  "steps": [
+    {
+      "step": "app launched (AAW.exe → UI served)",
+      "t_s": 0.28,
+      "user_interactions": 1,
+      "note": "double-click AAW.exe; browser opens automatically"
+    },
+    {
+      "step": "welcome read → Zaczynamy",
+      "t_s": 1.2,
+      "user_interactions": 1,
+      "note": ""
+    },
+    {
+      "step": "1 project selected",
+      "t_s": 1.67,
+      "user_interactions": 3,
+      "note": "Wybierz… opens a native folder dialog; here the path is typed"
+    },
+    {
+      "step": "2 AI tools detected",
+      "t_s": 1.76,
+      "user_interactions": 1,
+      "note": ""
+    },
+    {
+      "step": "3 model setup confirmed",
+      "t_s": 2.75,
+      "user_interactions": 2,
+      "note": ""
+    },
+    {
+      "step": "4–6 goal, first iteration, direction (example used)",
+      "t_s": 3.05,
+      "user_interactions": 4,
+      "note": "a real user types 1–3 sentences here instead of using an example"
+    },
+    {
+      "step": "START pressed",
+      "t_s": 3.25,
+      "user_interactions": 1,
+      "note": ""
+    },
+    {
+      "step": "STOP SAFELY pressed during implementation",
+      "t_s": 4.98,
+      "user_interactions": 1,
+      "note": ""
+    },
+    {
+      "step": "RESUME pressed on Home",
+      "t_s": 8.53,
+      "user_interactions": 2,
+      "note": ""
+    },
+    {
+      "step": "Accept pressed (confirmed)",
+      "t_s": 25.35,
+      "user_interactions": 2,
+      "note": ""
+    },
+    {
+      "step": "STOP NOW → RESUME → Human Gate",
+      "t_s": 28.83,
+      "user_interactions": 3,
+      "note": ""
+    }
+  ],
+  "phases_seen": [
+    {
+      "t_s": 3.33,
+      "banner": "Uruchamianie…"
+    },
+    {
+      "t_s": 4.86,
+      "banner": "Pracuje | Iteracja 1 · Implementacja"
+    },
+    {
+      "t_s": 5.59,
+      "banner": "Zatrzymywanie… | Iteracja 1 · Implementacja"
+    },
+    {
+      "t_s": 8.33,
+      "banner": "Wstrzymane | Iteracja 1 · Weryfikacja"
+    },
+    {
+      "t_s": 8.84,
+      "banner": "Pracuje | Iteracja 1 · Weryfikacja"
+    },
+    {
+      "t_s": 10.07,
+      "banner": "Pracuje | Iteracja 1 · Naprawa"
+    },
+    {
+      "t_s": 11.68,
+      "banner": "Pracuje | Iteracja 1 · Review"
+    },
+    {
+      "t_s": 13.21,
+      "banner": "Pracuje | Iteracja 2 · Implementacja"
+    },
+    {
+      "t_s": 14.74,
+      "banner": "Pracuje | Iteracja 2 · Review"
+    },
+    {
+      "t_s": 16.27,
+      "banner": "Pracuje | Iteracja 3 · Implementacja"
+    },
+    {
+      "t_s": 19.34,
+      "banner": "Pracuje | Iteracja 3 · Review"
+    },
+    {
+      "t_s": 20.87,
+      "banner": "Pracuje | Iteracja 4 · Implementacja"
+    },
+    {
+      "t_s": 22.4,
+      "banner": "Pracuje | Iteracja 4 · Review"
+    },
+    {
+      "t_s": 23.93,
+      "banner": "Czeka na Twoją decyzję | Iteracja 4"
+    }
+  ],
+  "checks": [
+    {
+      "check": "first launch opens the welcome screen automatically",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "project check explains isolation (no worktree knowledge needed)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "provider detection shows FOUND/NOT FOUND, version and login",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "actual models are shown under the simple levels",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "active phase visible and changing (banner)",
+      "ok": true,
+      "detail": "Uruchamianie… → Pracuje\nIteracja 1 · Implementacja → Zatrzymywanie…\nIteracja 1 · Implementacja → Wstrzymane\nIteracja 1 · Weryfikacja"
+    },
+    {
+      "check": "STOP SAFELY during implementation pauses after the step",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "paused run offers RESUME with an explanation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Home lists the paused run under WSTRZYMANE with RESUME",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "repair phase was visible",
+      "ok": true,
+      "detail": "Pracuje\nIteracja 1 · Weryfikacja → Pracuje\nIteracja 1 · Naprawa → Pracuje\nIteracja 1 · Review → Pracuje\nIteracja 2 · Implementacja → Pracuje\nIteracja 2 · Review → Pracuje\nIteracja 3 · Implementacja → Pracuje\nIteracja 3 · Review → Pracuje\nIteracja 4 · Implementacja → Pracuje\nIteracja 4 · Review → Czeka na Twoją decyzję\nIteracja 4"
+    },
+    {
+      "check": "run reached the Human Gate",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate shows: Dlaczego AAW się zatrzymał",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate shows: Co zrobiono",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate shows: Co zostało",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate shows: Ostrzeżenia",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate shows: Bieżący kandydat",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Human Gate explains roadmap exhaustion",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "iteration 1 timeline shows REPAIR → PASS",
+      "ok": true,
+      "detail": "REPAIR → PASS"
+    },
+    {
+      "check": "brief field: Zadanie etapu",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "brief field: Co zrobiono",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "brief field: Testy / checki",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "brief field: Problemy / niepewności",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "brief field: Przekazano dalej",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "View raw evidence opens the engine artifacts",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "Accept = READY_FOR_EXTERNAL_INTEGRATION",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "STOP NOW stops a running implementation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "interrupted implementation is NOT replayed: Human Gate explains the uncertain effect",
+      "ok": true,
+      "detail": "Human Gate\nDLACZEGO AAW SIĘ ZATRZYMAŁ\nEtap zmieniający pliki został przerwany — jego skutki w kopii roboczej są niepewne, więc AAW nie powtórzył go automatycznie.\nCO ZROBIONO\nŻadna iteracja nie została zaakceptowana.\nCO ZOSTAŁO\nSlow task used to try STOP NOW — do zrobienia\nOSTRZEŻENIA\nSzczegóły eska"
+    },
+    {
+      "check": "implementation call was not re-run after STOP NOW",
+      "ok": true,
+      "detail": "implementer calls in this task: 1"
+    },
+    {
+      "check": "canonical main unchanged (no merge)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "remote unchanged (no push)",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "canonical checkout clean (not modified)",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "screenshots": [
+    "01_welcome.png",
+    "02_step1_project.png",
+    "03_step2_providers.png",
+    "04_step3_models_before_check.png",
+    "05_step3_models.png",
+    "06_step4_goal.png",
+    "07_step6_direction.png",
+    "08_step7_summary.png",
+    "09_process_implementation.png",
+    "10_paused.png",
+    "11_home_paused.png",
+    "12_process_repair.png",
+    "13_human_gate.png",
+    "14_raw_evidence.png",
+    "15_accepted.png",
+    "16_stop_now_paused.png",
+    "17_stop_now_gate.png"
+  ],
+  "passed": true,
+  "note": "Automated user: times exclude human reading/typing. The AI model is scripted (fake CLI); app, worker, engine, Git, ledger and lock are real."
+}

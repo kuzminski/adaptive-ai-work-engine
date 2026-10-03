@@ -614,7 +614,12 @@ async function renderRun(runId) {
 }
 function bindRun(runId, v) {
   const act = async (path, body, msg) => {
-    try { const r = await api(`/api/runs/${runId}/${path}`, body); if (msg) toast(msg); return r; }
+    try {
+      const r = await api(`/api/runs/${runId}/${path}`, body);
+      if (msg) toast(msg);
+      if (path !== "continue") setTimeout(() => { if (location.hash === `#/runs/${runId}`) route(); }, 300);
+      return r;
+    }
     catch (e) { toast(e.message, 8000); }
   };
   on("btn-stop", () => act("stop", {force: false}, "STOP SAFELY: AAW nie zacznie kolejnego etapu."));

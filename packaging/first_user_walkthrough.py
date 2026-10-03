@@ -306,7 +306,7 @@ def run(args: argparse.Namespace) -> int:
             report.shot(page, "raw_evidence")
             page.click("#modal-close")
             page.click("#g-accept")
-            wait_text(page, ".panel.gate", lambda t: "READY_FOR_EXTERNAL_INTEGRATION" in t and "ACCEPTED" in t, 30)
+            wait_text(page, ".panel.gate", lambda t: "Decyzja: ACCEPTED" in t and "READY_FOR_EXTERNAL_INTEGRATION" in t, 30)
             report.shot(page, "accepted")
             report.step("Accept pressed (confirmed)", 2)
             report.check("Accept = READY_FOR_EXTERNAL_INTEGRATION", True)

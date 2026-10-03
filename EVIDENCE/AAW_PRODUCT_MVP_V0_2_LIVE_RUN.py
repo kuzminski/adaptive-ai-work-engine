@@ -135,7 +135,7 @@ def main() -> int:
             record["gate_text"] = page.inner_text(".panel.gate")
             if page.locator("#g-accept").count():
                 page.click("#g-accept")
-                wait_text(page, ".panel.gate", lambda t: "READY_FOR_EXTERNAL_INTEGRATION" in t, 60)
+                wait_text(page, ".panel.gate", lambda t: "Decyzja: ACCEPTED" in t, 60)
                 page.screenshot(path=str(SHOTS / "live_21_accepted.png"), full_page=True)
                 record["accepted"] = True
             browser.close()
