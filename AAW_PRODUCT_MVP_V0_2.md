@@ -76,7 +76,7 @@ Opus 5.5 — hence the minimal form).
 | Baseline before V0.2 (V0.1 `aa117c3`, Python 3.12, codex stub on PATH, Xvfb, root `test_*.py`) | 413 passed |
 | Full regression after V0.2 (same setup) | **431 passed, 0 failed** (413 + 18 new in `test_product_mvp_v0_2.py`) |
 | GitHub Actions — Linux full regression (`ubuntu-latest`, Python 3.12) | green |
-| GitHub Actions — Windows (`windows-latest`): safe-stop + both product suites with real worker processes and `.cmd` fake CLIs; PyInstaller build; frozen `--version`, `--self-test`, `--detect`; UI on loopback; ZIP contents; **browser walkthrough on the unzipped `AAW.exe`** incl. STOP NOW; `AAW-Windows-x64.zip` uploaded | see "Windows validation" |
+| GitHub Actions — Windows (`windows-latest`): safe-stop + both product suites with real worker processes and `.cmd` fake CLIs; PyInstaller build; frozen `--version`, `--self-test`, `--detect`; UI on loopback; ZIP contents; **browser walkthrough on the unzipped `AAW.exe`** incl. STOP NOW; `AAW-Windows-x64.zip` uploaded | **green** — run 37114649825 (commit `8096c0d`); artifacts `AAW-Windows-x64` (ZIP, 12.5 MB) and `AAW-Windows-walkthrough` (30/30 checks, screenshots) |
 | Deterministic first-user walkthrough, Linux portable build (unzipped frozen binary, Chromium, scripted CLIs) | 30/30 checks — `EVIDENCE/AAW_PRODUCT_MVP_V0_2_WALKTHROUGH/` |
 | Live smoke, **real Claude CLI** (Linux, source app, real browser): wizard → real probes → START → 1 iteration PASS → Human Gate → Accept | PROMOTED / `READY_FOR_EXTERNAL_INTEGRATION`, merged=false, pushed=false; main, remote, checkout unchanged; 6 executions all `CLOSED/COMPLETED`; ≈ 1.73 USD — `EVIDENCE/AAW_PRODUCT_MVP_V0_2_LIVE_E2E.json` |
 
