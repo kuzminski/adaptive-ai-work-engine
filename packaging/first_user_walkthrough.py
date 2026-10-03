@@ -370,6 +370,11 @@ def stop_now_flow(page, report: Report, sandbox: dict, scenario: Path) -> None:
     page.wait_for_selector("#start:not([disabled])", timeout=30000)
     page.click("#start")
     wait_text(page, ".banner", lambda t: "Implementacja" in t, 90)
+    # press STOP NOW only once the provider process is really running (it logs its start)
+    deadline = time.time() + 60
+    while time.time() < deadline and sum(1 for line in calls_file.read_text().splitlines()
+                                         if json.loads(line).get("role") == "IMPLEMENTER") == before:
+        time.sleep(0.2)
     page.click("#btn-force")
     wait_text(page, ".banner", lambda t: "Wstrzymane" in t or "Przerwane" in t, 60)
     report.shot(page, "stop_now_paused")

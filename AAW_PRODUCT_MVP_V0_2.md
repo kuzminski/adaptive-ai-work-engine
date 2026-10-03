@@ -143,6 +143,10 @@ Friction found and fixed during the walkthrough / live smoke:
    it (`MANDATE_EXTENSION_ATTEMPT`). Both test tools now use UTF-8 I/O
    (reproduced locally with `PYTHONIOENCODING=cp1252`, then 30/30). The app
    and the engine were not affected — the engine already speaks UTF-8.
+10. Windows CI (second run): 29/30 — STOP NOW was pressed before the scripted
+    CLI had started on the slower Windows runner, so "implementation ran
+    exactly once" saw zero calls. The walkthrough now presses STOP NOW only
+    after the provider process has started (it really kills a running call).
 
 Not fixed (low value / out of scope): the generated `__pycache__` files of the
 project's own tests appear in the candidate when the project has no
