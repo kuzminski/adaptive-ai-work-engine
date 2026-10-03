@@ -62,9 +62,11 @@ class ExecutorFailure(RuntimeError):
     role profile); `dispatched` says whether a provider was contacted.
     """
 
-    def __init__(self, message: str, *, code: str | None = None, dispatched: bool | None = None) -> None:
+    def __init__(self, message: str, *, code: str | None = None, dispatched: bool | None = None,
+                 retryable: bool = False) -> None:
         super().__init__(message)
         self.code, self.dispatched = code, dispatched
+        self.retryable = bool(retryable)
 
 
 class RoleUnavailable(ExecutorFailure):
@@ -735,6 +737,7 @@ class AutonomyController:
         EXECUTION_CLOSED → state.
         """
         phase = self.state["phase"]
+        base_ctx = dict(ctx)
         if self._recovered and self._recovered["phase"] == phase and self._recovered["executor"] == name:
             adopted, self._recovered = self._recovered, None
             self._adopted_execution_id = adopted["execution_id"]
@@ -833,6 +836,14 @@ class AutonomyController:
             self.state["in_flight"] = None
             ref.update(self._execution_observations(descriptor_path, recorder))
             self.state["executions"].append(ref)
+            if exc.retryable and descriptor.get("retry_of_execution_id") is None:
+                self.state["in_flight"] = None
+                self._retry_of = execution_id
+                self.journal.append("EXECUTOR_RETRY_SCHEDULED", iteration_id=iteration_id, phase=phase,
+                                    payload={"execution_id": execution_id, "executor": name,
+                                             "reason": str(exc), "retry_limit": 1})
+                self._save()
+                return self._call(name, role, base_ctx)
             self._escalate(exc.code or ac.E_EXECUTOR, f"{name} executor failed: {exc} (execution {execution_id})",
                            iteration_id)
             return None

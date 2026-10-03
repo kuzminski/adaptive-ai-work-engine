@@ -55,6 +55,7 @@ ESCALATION_TEXT = {
     ac.E_NO_PROGRESS: "Naprawa nie zmieniła wyników review — AAW przerwał pętlę.",
     ac.E_GIT: "Wykryto zmianę poza izolowaną kopią roboczą (np. ktoś edytował pliki w głównym folderze projektu albo gałąź main się zmieniła). AAW zatrzymał się, żeby niczego nie nadpisać.",
     ac.E_EXECUTOR: "Wywołanie modelu nie powiodło się (błąd CLI, limit czasu lub nieprawidłowa odpowiedź).",
+    ac.E_EXECUTOR_TIMEOUT: "Wywołanie modelu przekroczyło limit czasu. AAW zachował logi, wynik procesu i zmiany w izolowanej kopii.",
     ac.E_PLANNER: "Planista uznał, że dalsza praca wymaga decyzji człowieka.",
     ac.E_SCOPE: "Plan wychodził poza zakres zadania.",
     ac.E_EXTENSION: "Planista próbował zmienić lub rozszerzyć zadanie — to wymaga decyzji człowieka.",
@@ -490,6 +491,14 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         elif close.get("close_reason") == "CANCELLED" and close.get("effect_certainty") == "UNKNOWN":
             warnings.append(f"Wywołanie {execution_id} zostało przerwane przez STOP — skutek po stronie providera "
                             "niepewny.")
+        elif close.get("close_reason") == "TIMEOUT":
+            result = _result(run_id, execution_id)
+            elapsed = result.get("wall_time_s")
+            limit = result.get("timeout_s") or (task.get("executor_limits") or {}).get("timeout_s")
+            retained = "Kompletny wynik strukturalny został zachowany." if result.get("result") else \
+                       "Zachowano log procesu i zmiany w worktree; brak kompletnego wyniku strukturalnego."
+            warnings.append(f"Wywołanie {execution_id} przekroczyło limit {limit}s"
+                            + (f" po {elapsed}s. " if elapsed else ". ") + retained)
     alternatives = [s for s in (task.get("resolution") or {}).get("slots", {}).values()
                     if s.get("status") == "ALTERNATIVE"]
     if alternatives:
@@ -499,6 +508,12 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         warnings.insert(0, f"Szczegóły eskalacji [{escalation.get('code')}]: {escalation.get('detail')}")
     fingerprint = hold.get("candidate_fingerprint") or {}
     workspace = task.get("workspace") or {}
+    changed_files = fingerprint.get("changed_files", [])
+    if not changed_files and workspace.get("worktree"):
+        try:
+            changed_files = (prun.inspect_repo(str(workspace["worktree"])).get("dirty_files") or [])
+        except Exception:
+            changed_files = []
     decision = product_home.read_json(prun.product_dir(run_id) / "decision.json")
     awaiting = state.get("status") == ac.AWAITING_HUMAN
     return {
@@ -506,7 +521,7 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         "done": done, "remaining": remaining, "warnings": warnings,
         "candidate": {"candidate_id": hold.get("candidate_id"), "head": fingerprint.get("head"),
                       "diff_sha256": fingerprint.get("diff_sha256"),
-                      "changed_files": fingerprint.get("changed_files", []),
+                      "changed_files": changed_files,
                       "branch": workspace.get("branch"), "worktree": workspace.get("worktree"),
                       "base_commit": workspace.get("base_commit"), "promotable": bool(hold.get("promotable")),
                       "roadmap_exhausted": bool(hold.get("roadmap_exhausted"))},

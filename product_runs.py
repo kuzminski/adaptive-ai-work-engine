@@ -499,7 +499,7 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
         "resolution": {k: resolution[k] for k in ("choices", "catalog_version", "catalog_source", "slots",
                                                    "warnings")},
         "roles_config": resolution["roles_config"],
-        "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 1800)), "max_turns": 30},
+        "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 3600)), "max_turns": 30},
         "authority_note": "Product input record. The engine state (AUTONOMY/autonomy_state.json), its journal and "
                           "the ledger are the only run authority; this file is never read by the engine.",
     }
@@ -622,7 +622,7 @@ def _human_identity() -> str:
 
 def _executors(limits: Mapping[str, Any]) -> dict[str, Any]:
     import autonomy_adapters as aa
-    return aa.build_direct_executors(timeout=int(limits.get("timeout_s", 1800)),
+    return aa.build_direct_executors(timeout=int(limits.get("timeout_s", 3600)),
                                      max_turns=int(limits.get("max_turns", 30)))
 
 

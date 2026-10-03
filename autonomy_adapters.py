@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import workflow_runner as wr
+import autonomy_contract as ac
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
 from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
@@ -43,6 +44,8 @@ from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
 SUPPORTED_HARNESSES = ("codex", "claude")
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 3600
+MIN_SIDE_EFFECT_TIMEOUT_SECONDS = 3600
 # Provider-session variables a parent Claude Code session exports. Inherited by
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
@@ -341,7 +344,8 @@ class DirectRoleExecutor:
 
     fixture_class = "REAL_PROVIDER_DIRECT_CLI"
 
-    def __init__(self, name: str, *, timeout: int = 1800, max_turns: int = 30) -> None:
+    def __init__(self, name: str, *, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+                 max_turns: int = 30) -> None:
         self.name, self.timeout, self.max_turns = name, timeout, max_turns
 
     def preflight(self, binding: Mapping[str, Any]) -> str | None:
@@ -375,24 +379,31 @@ class DirectRoleExecutor:
                 raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started) from exc
             session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
         elapsed = round(time.monotonic() - started, 3)
+        valid = isinstance(raw, dict)
+        timeout_result = rc == 124 and valid
         update_execution(descriptor_path, execution["execution_id"],
                          provider_session_id=str(session) if session else None,
-                         status="COMPLETED" if rc == 0 else "FAILED")
+                         status="COMPLETED" if rc == 0 or timeout_result else "FAILED")
         result_path = Path(execution["result_path"])
         _write_once(result_path, {
             "execution_id": execution["execution_id"], "role": ctx["role"], "executor": self.name,
             "recorded_by": ADAPTER_ID, "result": raw, "exit_code": rc, "provider_session_id": session,
             "harness": runtime["harness"], "model": runtime["model"], "effort": runtime["effort"],
-            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "usage": usage, "provider_meta": provider_meta,
+            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "timeout_s": self.timeout,
+            "result_recovered_after_timeout": timeout_result,
+            "usage": usage, "provider_meta": provider_meta,
             "stderr_tail": (stderr or "")[-4000:], "stdout_tail": (stdout or "")[-4000:] if raw is None else None})
         close = wr._close_from_returncode(rc, provider_session_id=session)
-        valid = rc == 0 and isinstance(raw, dict)
+        valid = (rc == 0 or rc == 124) and isinstance(raw, dict)
         if rc == 0 and not valid:
             close["effect_certainty"] = "PARTIAL"  # process exited cleanly; only the structured result is untrusted
         recorder.close(outcome="RESULT_RECEIVED" if valid else ("INVALID" if rc == 0 else "BLOCKED"),
                        result_refs=[str(result_path)], detail=None if valid else (stderr or stdout)[-2000:], **close)
-        if rc != 0:
-            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True)
+        if rc != 0 and not timeout_result:
+            retryable = rc == 124 and self.name in READ_ONLY_EXECUTORS and ctx.get("role") != "initial_planner"
+            code = ac.E_EXECUTOR_TIMEOUT if rc == 124 else None
+            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", code=code,
+                                  dispatched=True, retryable=retryable)
         if not valid and self.name not in ("review", "final_review"):
             raise ExecutorFailure(f"{self.name}: provider returned no structured result", dispatched=True)
         # An invalid reviewer result is handed back as-is: `normalize_review`
@@ -404,7 +415,7 @@ class DirectRoleExecutor:
         if harness == "codex":
             _, session, usage = wr.parse_codex_events(stdout)
             raw = None
-            if rc == 0 and final_path.is_file():
+            if final_path.is_file():
                 try:
                     raw = json.loads(final_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
@@ -428,8 +439,13 @@ class DirectRoleExecutor:
         return envelope.get("session_id"), dict(envelope.get("usage") or {}), raw, meta
 
 
-def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30) -> dict[str, DirectRoleExecutor]:
+def build_direct_executors(*, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+                           max_turns: int = 30) -> dict[str, DirectRoleExecutor]:
     """The production executor set for `AutonomyController` (no `prepare_packet`:
     the deterministic packet is used as-is)."""
-    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns)
+    return {name: DirectRoleExecutor(
+                name,
+                timeout=max(int(timeout), MIN_SIDE_EFFECT_TIMEOUT_SECONDS)
+                if name in ("execute", "repair") else int(timeout),
+                max_turns=max_turns)
             for name in ("plan", "execute", "self_verify", "prepare_packet", "review", "repair", "final_review")}
