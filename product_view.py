@@ -526,7 +526,7 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
 def run_view(run_id: str) -> dict[str, Any]:
     task = prun.load_task(run_id)
     state = _state(run_id)
-    status = classify(run_id, state)
+    status = classify(run_id, state or {})  # one read: status and gate always describe the same state
     form = task.get("form") or {}
     base = {"run_id": run_id, "status": status["status"], "status_label": STATUS_LABEL[status["status"]],
             "section": HOME_SECTION[status["status"]], "project": (task.get("workspace") or {}).get("project_name"),

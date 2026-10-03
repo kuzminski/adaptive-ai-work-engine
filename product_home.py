@@ -54,10 +54,17 @@ def is_frozen() -> bool:
 
 
 def read_json(path: Path, default: Any = None) -> Any:
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    for attempt in range(20):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except PermissionError:  # Windows: the file is being atomically replaced right now
+            if attempt == 19:
+                return default
+            import time
+            time.sleep(0.05)
+        except (OSError, json.JSONDecodeError):
+            return default
+    return default
 
 
 def write_json(path: Path, value: Any) -> None:

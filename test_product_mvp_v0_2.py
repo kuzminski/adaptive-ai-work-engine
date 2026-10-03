@@ -318,6 +318,23 @@ def test_wizard_endpoints(env):
         thread.join(10)
 
 
+def test_read_json_survives_a_concurrent_atomic_replace(tmp_path, monkeypatch):
+    """Windows: reading while the writer replaces the file raises PermissionError for a moment."""
+    target = tmp_path / "autonomy_state.json"
+    product_home.write_json(target, {"status": "AWAITING_HUMAN"})
+    real_read_text, failures = Path.read_text, []
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self == target and len(failures) < 3:
+            failures.append(1)
+            raise PermissionError(13, "The process cannot access the file")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+    assert product_home.read_json(target) == {"status": "AWAITING_HUMAN"} and len(failures) == 3
+    assert product_home.read_json(tmp_path / "missing.json", "fallback") == "fallback"
+
+
 # ── release package and entry point ─────────────────────────────────────────
 
 def test_release_documents_and_version_entry_point():
