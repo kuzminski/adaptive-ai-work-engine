@@ -17,7 +17,7 @@ hidden = ["aaw_paths", "autonomy_adapters", "autonomy_contract", "autonomy_contr
           "autonomy_run_lock", "execution_contract", "execution_ledger", "local_preprocess", "model_catalog",
           "process_observation", "routing_contract", "run_cancellation", "run_recovery", "workflow_runner",
           "workflow_schema", "product_home", "product_providers", "product_recommendations", "product_runs",
-          "product_server", "product_view", "tkinter", "tkinter.filedialog"]
+          "product_server", "product_view", "product_version", "tkinter", "tkinter.filedialog"]
 
 a = Analysis([str(ROOT / "AAW.py")], pathex=[str(ROOT)], datas=datas, hiddenimports=hidden,
              excludes=["pytest", "playwright", "test_autonomy", "product_fake_cli", "aaw_autonomy_fake_cli"],

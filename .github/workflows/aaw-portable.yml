@@ -9,11 +9,18 @@ on:
       - "product_*.py"
       - "autonomy_*.py"
       - "run_cancellation.py"
-      - "test_product_mvp.py"
-      - "test_autonomy_safe_stop.py"
+      - "workflow_runner.py"
+      - "model_catalog.py"
+      - "test_*.py"
       - "PRODUCT_UI/**"
       - "packaging/**"
+      - "release/**"
+      - "QUICK_START.md"
+      - "CHANGELOG.md"
       - "MODEL_RECOMMENDATIONS.json"
+      - "MODEL_CATALOG.json"
+      - "IMPLEMENTER_PROFILES.json"
+      - "AUTONOMY_ROLES.json"
       - ".github/workflows/aaw-portable.yml"
 
 permissions:
@@ -21,30 +28,33 @@ permissions:
 
 jobs:
   windows:
+    name: Windows x64 — product tests, build, frozen-exe validation
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install build tools
-        run: python -m pip install pyinstaller==6.22.3
-      - name: Engine safe-stop + product checks that need no provider run
-        run: |
-          python -m pip install pytest
-          python -m pytest -q -p no:cacheprovider test_autonomy_safe_stop.py test_product_mvp.py -k "catalog_recommended_equals or unavailable_recommended or login_parsers or update_newer or no_cli or server_requires"
-      - name: Full product suite on Windows (real worker processes, fake CLIs via .cmd wrappers)
-        timeout-minutes: 10
-        run: python -m pytest -q -p no:cacheprovider -rf test_product_mvp.py
-      - name: Build portable app
+      - name: Install build and test tools
+        run: python -m pip install pyinstaller==6.22.3 pytest playwright
+      - name: Engine safe-stop + product suites (real worker processes, fake CLIs via .cmd wrappers)
+        timeout-minutes: 15
+        run: python -m pytest -q -p no:cacheprovider -rf test_autonomy_safe_stop.py test_product_mvp.py test_product_mvp_v0_2.py
+      - name: Build portable app (includes frozen --self-test and --version)
         timeout-minutes: 10
         run: python packaging/build_portable.py
-      - name: Launch smoke test (frozen exe detects providers and serves the UI on loopback)
+      - name: Frozen exe — version, self-test, provider detection, UI on loopback
         timeout-minutes: 3
         shell: pwsh
         run: |
           $env:AAW_PRODUCT_HOME = "$PWD\build\smoke_home"
+          $v = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--version","--report-file","$PWD\build\version.json" -PassThru -Wait
+          Get-Content "$PWD\build\version.json"
+          if ($v.ExitCode -ne 0) { throw "--version failed" }
+          $s = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--self-test","--report-file","$PWD\build\selftest.json" -PassThru -Wait
+          Get-Content "$PWD\build\selftest.json"
+          if ($s.ExitCode -ne 0) { throw "--self-test failed" }
           $d = Start-Process -FilePath "dist\AAW\AAW.exe" -ArgumentList "--detect","--report-file","$PWD\build\detect.json" -PassThru -Wait
           Get-Content "$PWD\build\detect.json"
           if ($d.ExitCode -ne 0) { throw "--detect failed" }
@@ -60,12 +70,52 @@ jobs:
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           if (-not $ok) { throw "UI did not load" }
           Write-Output "UI served by the frozen AAW.exe"
+      - name: Unzip the release ZIP and check its contents
+        shell: pwsh
+        run: |
+          Expand-Archive -Path dist\AAW-Windows-x64.zip -DestinationPath build\unzipped -Force
+          foreach ($f in "AAW.exe","QUICK_START.md","README.md","CHANGELOG.md","VERSION.txt","LICENSE","EXAMPLES\01_expense_tracker.md") {
+            if (-not (Test-Path "build\unzipped\AAW\$f")) { throw "missing $f in the ZIP" }
+          }
+          Get-Content build\unzipped\AAW\VERSION.txt
+      - name: First-user walkthrough on the unzipped AAW.exe (real browser, scripted CLIs)
+        timeout-minutes: 12
+        run: |
+          python -m playwright install chromium
+          python packaging/first_user_walkthrough.py --exe build\unzipped\AAW\AAW.exe --stop-now --out build\walkthrough
       - name: AAW logs
         if: always()
         shell: pwsh
-        run: Get-ChildItem -Recurse build -Filter aaw.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "== $_"; Get-Content $_ -Tail 80 }
+        run: Get-ChildItem -Recurse build -Include aaw.log,worker.log -ErrorAction SilentlyContinue | ForEach-Object { Write-Output "== $_"; Get-Content $_ -Tail 60 }
       - uses: actions/upload-artifact@v4
         with:
           name: AAW-Windows-x64
           path: dist/AAW-Windows-x64.zip
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AAW-Windows-walkthrough
+          path: build/walkthrough
+          if-no-files-found: warn
+
+  linux-regression:
+    name: Linux — full regression (engine + product)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test tools
+        run: |
+          python -m pip install pytest
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb python3-tk > /dev/null
+      - name: Full root regression (same setup as the frozen baseline: codex stub on PATH, Xvfb)
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          printf '#!/bin/sh\necho "codex-cli 0.0.0-stub"\n' > "$RUNNER_TEMP/stub/codex"
+          chmod +x "$RUNNER_TEMP/stub/codex"
+          export PATH="$RUNNER_TEMP/stub:$PATH"
+          xvfb-run -a python -m pytest -q -p no:cacheprovider $(ls test_*.py | sort)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW PRODUCT MVP V0.1 — local app server (loopback HTTP + static UI).
+"""AAW PRODUCT MVP V0.2 — local app server (loopback HTTP + static UI).
 
 Transport only, stdlib only (same reasoning as `aaw_bridge_server`): every
 route is a thin call into `product_runs` / `product_view` /
@@ -35,10 +35,11 @@ import product_home
 import product_providers as pp
 import product_recommendations as pr
 import product_runs as prun
+import product_version
 import product_view as pv
 
 UI_ROOT = Path(__file__).resolve().with_name("PRODUCT_UI")
-APP_VERSION = "AAW Product MVP V0.1"
+APP_VERSION = f"AAW {product_version.RELEASE}"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
                 ".ico": "image/x-icon"}
@@ -53,9 +54,12 @@ class App:
     def bootstrap(self, _q: dict[str, Any]) -> dict[str, Any]:
         detection = product_home.read_json(product_home.home() / "providers.json")
         catalog = pr.effective_catalog()
-        return {"version": APP_VERSION, "settings": product_home.load_settings(),
+        if isinstance(detection, dict) and "providers" in detection:
+            detection = pp.apply_states(detection)
+        return {"version": APP_VERSION, "release": product_version.describe(), "settings": product_home.load_settings(),
                 "choices": pr.choice_options(catalog), "providers": detection,
-                "notice": pp.PROVIDER_NOTICE,
+                "notice": pp.PROVIDER_NOTICE, "setup_notice": pp.SETUP_NOTICE,
+                "has_runs": bool(prun.list_run_ids()), "recent_repos": prun.recent_repos(),
                 "catalog": {"version": catalog["catalog_version"], "source": catalog["_source"],
                             "last_updated": catalog.get("last_updated")},
                 "data_home": str(product_home.home()), "frozen": product_home.is_frozen(),
@@ -74,6 +78,19 @@ class App:
     # POST --------------------------------------------------------------------
     def detect(self, _body: dict[str, Any]) -> dict[str, Any]:
         return prun.detection_snapshot(refresh=True)
+
+    def verify_models(self, body: dict[str, Any]) -> dict[str, Any]:
+        ids = body.get("profile_ids")
+        if not ids:
+            setup = prun.resolve_setup(body.get("choices") or {})
+            ids = sorted({p for g in setup["groups"].values() for p in g["checkable"]})
+        if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+            raise prun.ProductError("profile_ids must be a list of profile IDs")
+        result = prun.verify_models(ids)
+        return {**result, "setup": prun.resolve_setup(body.get("choices") or {})}
+
+    def first_run_done(self, _body: dict[str, Any]) -> dict[str, Any]:
+        return product_home.save_settings({"first_run_completed": True})
 
     def pick_folder(self, _body: dict[str, Any]) -> dict[str, Any]:
         """Native folder dialog on the user's machine (the browser cannot reveal paths)."""
@@ -136,9 +153,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/settings": lambda q: product_home.load_settings(),
         "/api/recommendations": app.recommendations,
         "/api/ping": lambda q: {"ok": True, "version": APP_VERSION},
+        "/api/version": lambda q: product_version.describe(),
     }
     post_routes: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/providers/detect": app.detect,
+        "/api/models/verify": app.verify_models,
+        "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {}),
+        "/api/first-run/done": app.first_run_done,
         "/api/repo/inspect": lambda b: prun.inspect_repo(str(b.get("path") or "")),
         "/api/repo/init": lambda b: prun.init_git_repo(str(b.get("path") or "")),
         "/api/pick-folder": app.pick_folder,
@@ -153,7 +174,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue)$")
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "AAW/0.1"
+        server_version = "AAW/0.2"
 
         def log_message(self, fmt: str, *args: Any) -> None:  # keep the console/log quiet
             return

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW PRODUCT MVP V0.1 — task creation, run control and the Human Gate surface.
+"""AAW PRODUCT MVP V0.2 — task creation, run control and the Human Gate surface.
 
 This is a thin product layer over the frozen V0.3 autonomy engine. It owns
 no execution logic and no run state of its own:
@@ -92,9 +92,22 @@ def list_run_ids() -> list[str]:
     return sorted(rows, reverse=True)
 
 
+def recent_repos(limit: int = 5) -> list[str]:
+    """Project folders of earlier tasks (newest first) — quick picks in the wizard."""
+    seen: list[str] = []
+    for run_id in list_run_ids():
+        task = product_home.read_json(product_dir(run_id) / "task.json") or {}
+        repo = (task.get("workspace") or {}).get("repo")
+        if repo and repo not in seen and Path(repo).is_dir():
+            seen.append(repo)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
 # ── git helpers (plain argv, never a shell) ──────────────────────────────────
 
-def _git(path: Path | str, *args: str, check: bool = True, identity: bool = False) -> str:
+def _git(path: Path | str, *args: str, check: bool = True, identity: bool = False, strip: bool = True) -> str:
     argv = ["git"]
     if identity:
         argv += ["-c", "user.name=AAW", "-c", "user.email=aaw@localhost"]
@@ -102,56 +115,115 @@ def _git(path: Path | str, *args: str, check: bool = True, identity: bool = Fals
     kwargs: dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          stdin=subprocess.DEVNULL, **kwargs)
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, **kwargs)
+    except FileNotFoundError as exc:
+        raise ProductError("Git nie jest zainstalowany (https://git-scm.com/downloads).") from exc
     if check and done.returncode != 0:
         raise ProductError(f"git {' '.join(args[:2])} nie powiodło się: {(done.stderr or done.stdout).strip()[:400]}")
-    return (done.stdout or "").strip()
+    return (done.stdout or "").strip() if strip else (done.stdout or "").rstrip("\n")
 
 
 def _has_identity(path: Path) -> bool:
     return bool(_git(path, "config", "user.email", check=False)) and bool(_git(path, "config", "user.name", check=False))
 
 
+def _git_available() -> bool:
+    import shutil
+    return shutil.which("git") is not None
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def inspect_repo(path: str) -> dict[str, Any]:
-    """Plain-language readiness of a folder for an isolated AAW run."""
+    """Plain-language readiness of a folder for an isolated AAW run.
+
+    Read-only: never changes the folder. Every refusal says why and what the
+    user can do; the user's own checkout is never cleaned or committed here.
+    """
     raw = (path or "").strip().strip('"')
-    out: dict[str, Any] = {"path": raw, "exists": False, "is_git": False, "ready": False, "message": None}
+    out: dict[str, Any] = {"path": raw, "exists": False, "is_git": False, "ready": False, "message": None,
+                           "action": None}
     if not raw:
         out["message"] = "Wskaż folder projektu."
         return out
     folder = Path(raw).expanduser()
     if not folder.is_dir():
-        out["message"] = "Ten folder nie istnieje."
+        out["message"] = "Ten folder nie istnieje. Sprawdź ścieżkę albo użyj przycisku „Wybierz…”."
         return out
     out["exists"] = True
     out["name"] = folder.resolve().name
+    if not _git_available():
+        out["message"] = ("Git nie jest zainstalowany. AAW używa Gita, żeby pracować w osobnej kopii projektu i "
+                          "nigdy nie zmieniać Twoich plików. Zainstaluj Git (https://git-scm.com/downloads), "
+                          "uruchom ponownie AAW i spróbuj jeszcze raz.")
+        out["action"] = "INSTALL_GIT"
+        return out
+    if _inside(folder, product_home.home()):
+        out["message"] = ("To jest folder roboczy AAW, a nie Twój projekt. Wybierz swój zwykły folder projektu — "
+                          "AAW sam przygotuje izolowaną kopię.")
+        return out
+    if _git(folder, "rev-parse", "--is-bare-repository", check=False) == "true":
+        out["message"] = ("To jest „gołe” repozytorium Git (bez plików roboczych). Wybierz folder, w którym "
+                          "normalnie pracujesz nad projektem (z plikami).")
+        return out
     top = _git(folder, "rev-parse", "--show-toplevel", check=False)
     if not top:
-        out["message"] = ("Ten folder nie jest repozytorium Git. AAW potrzebuje Gita, aby pracować w izolowanej "
-                          "kopii (worktree) i nigdy nie zmieniać Twoich plików. Możesz utworzyć repozytorium "
-                          "przyciskiem „Utwórz repozytorium Git”.")
+        out["message"] = ("Ten folder nie jest jeszcze repozytorium Git. AAW potrzebuje Gita, aby pracować w "
+                          "osobnej kopii i nigdy nie zmieniać Twoich plików. Możesz utworzyć repozytorium "
+                          "przyciskiem „Utwórz repozytorium Git” — obecne pliki zostaną zapisane jako pierwszy "
+                          "commit (nic nie zostanie usunięte).")
         out["can_init_git"] = True
+        out["action"] = "INIT_GIT"
         return out
-    out.update(is_git=True, top=str(Path(top)), name=Path(top).name)
+    top_path = Path(top)
+    out.update(is_git=True, top=str(top_path), name=top_path.name)
+    if folder.resolve() != top_path.resolve():
+        out["subfolder_note"] = (f"Wybrano podfolder — AAW użyje całego repozytorium: {top_path}")
     head = _git(top, "rev-parse", "--verify", "-q", "HEAD", check=False)
     if not head:
-        out["message"] = "Repozytorium nie ma jeszcze żadnego commita. Zrób pierwszy commit (lub użyj „Utwórz repozytorium Git”)."
+        out["message"] = ("Repozytorium nie ma jeszcze żadnego commita, więc AAW nie ma od czego zacząć. "
+                          "Zrób pierwszy commit albo użyj „Utwórz repozytorium Git” (zapisze obecne pliki jako "
+                          "pierwszy commit).")
         out["can_init_git"] = True
+        out["action"] = "FIRST_COMMIT"
         return out
     out["head"] = head
     out["branch"] = _git(top, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-    status = _git(top, "status", "--porcelain=v1", "--untracked-files=all", check=False)
-    dirty = [line[3:] for line in status.splitlines() if line.strip()]
+    out["detached"] = out["branch"] == "HEAD"
+    for marker, label in (("MERGE_HEAD", "scalanie (merge)"), ("rebase-merge", "rebase"), ("rebase-apply", "rebase"),
+                          ("CHERRY_PICK_HEAD", "cherry-pick"), ("REVERT_HEAD", "revert")):
+        git_path = _git(top, "rev-parse", "--git-path", marker, check=False)
+        if git_path and (Path(top) / git_path if not Path(git_path).is_absolute() else Path(git_path)).exists():
+            out["message"] = (f"W repozytorium trwa niedokończona operacja Git: {label}. Dokończ ją albo przerwij "
+                              "(np. w swoim narzędziu Git), potem spróbuj ponownie.")
+            out["action"] = "FINISH_GIT_OPERATION"
+            return out
+    status = _git(top, "status", "--porcelain=v1", "--untracked-files=all", check=False, strip=False)
+    lines = [line for line in status.splitlines() if line.strip()]
+    dirty = [line[3:] for line in lines]
     out["dirty_files"] = dirty[:20]
     out["dirty_count"] = len(dirty)
+    out["untracked_count"] = sum(1 for line in lines if line.startswith("??"))
     if dirty:
-        out["message"] = (f"Repozytorium ma niezatwierdzone zmiany ({len(dirty)} plików). AAW startuje z ostatniego "
-                          "commita i wymaga czystego katalogu głównego — zrób commit lub stash, potem spróbuj ponownie.")
+        out["message"] = (f"W folderze projektu są zmiany niezapisane w Gicie (plików: {len(dirty)}, w tym nowych, "
+                          f"nieśledzonych: {out['untracked_count']}). AAW zaczyna od ostatniego commita i pilnuje, żeby "
+                          "Twój folder pozostał nietknięty — dlatego musi on być „czysty”. Zrób commit tych zmian "
+                          "albo odłóż je (git stash -u). Pliki, których nie chcesz w repozytorium (np. wyniki "
+                          "budowania), dopisz do .gitignore. AAW niczego tu nie zmieni samo.")
+        out["action"] = "COMMIT_OR_STASH"
         return out
     out["ready"] = True
-    out["message"] = (f"Gotowe. AAW utworzy izolowany worktree z {out['branch']} @ {head[:10]}; "
-                      "Twój folder nie zostanie zmieniony.")
+    where = "odłączony HEAD" if out["detached"] else out["branch"]
+    out["message"] = (f"Gotowe. AAW zacznie od {where} @ {head[:10]} i będzie pracować w osobnej, izolowanej "
+                      "kopii projektu. Twój folder nie zostanie zmieniony; nic nie zostanie zmergowane ani wypchnięte.")
     return out
 
 
@@ -256,12 +328,35 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
 
 
 def detection_snapshot(refresh: bool = False) -> dict[str, Any]:
+    """Last provider detection (re-detected on request); availability always reflects current probe evidence."""
     cache = product_home.home() / "providers.json"
     data = None if refresh else product_home.read_json(cache)
     if not isinstance(data, dict) or "providers" not in data:
         data = pp.detect_all()
         product_home.write_json(cache, data)
-    return data
+    return pp.apply_states(data)
+
+
+def verify_models(profile_ids: Sequence[str] | None = None) -> dict[str, Any]:
+    """Explicit user action: probe the exact models behind these profiles through the installed CLIs."""
+    detection = detection_snapshot()
+    result = pp.verify_models(detection, profile_ids)
+    detection = detection_snapshot()
+    product_home.write_json(product_home.home() / "providers.json", detection)
+    return {**result, "providers": detection}
+
+
+def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The three simple levels → the actual models (wizard step 'model setup'); no goal needed."""
+    settings = product_home.load_settings()
+    detection = detection or detection_snapshot()
+    picked = {g: (choices or {}).get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
+    states = pp.profile_states(detection)
+    resolution = pr.resolve_choices(picked, runnable=pp.runnable_profiles(detection), detection=detection,
+                                    states=states)
+    return {"choices": resolution["choices"], "groups": pr.group_summary(resolution),
+            "blockers": resolution["blockers"], "warnings": resolution["warnings"],
+            "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]}}
 
 
 def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -272,7 +367,8 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
     repo = inspect_repo(form["repo"])
     choices = {g: form[g] or settings.get(g) for g in pr.CHOICE_GROUPS}
     resolution = pr.resolve_choices(choices, runnable=pp.runnable_profiles(detection),
-                                    overrides=form["advanced"]["profile_overrides"], detection=detection)
+                                    overrides=form["advanced"]["profile_overrides"], detection=detection,
+                                    states=pp.profile_states(detection))
     mandate = build_mandate(form, "PREVIEW", settings)
     try:
         ac.validate_mandate(mandate)
@@ -320,11 +416,12 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
         "review_policy": {k: resolution["slots"][k] for k in (
             "primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")},
         "choices": resolution["choices"],
+        "groups": pr.group_summary(resolution),
         "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]},
         "providers": [{"display_name": p["display_name"], "status": p["status"], "version": p["version"],
                        "login": p["login"]} for p in detection.get("providers", [])],
         "safety": [
-            "Izolowany worktree — Twój folder projektu nie jest modyfikowany.",
+            "Praca w izolowanej kopii projektu — Twój folder projektu nie jest modyfikowany.",
             "Brak automatycznego merge.",
             "Brak automatycznego push.",
             "Human Gate po zakończeniu — decyzja zawsze należy do Ciebie.",
@@ -628,9 +725,11 @@ def accept(run_id: str, *, early_end: bool = False, note: str | None = None) -> 
     workspace = task["workspace"]
     decision = {"decision": "ACCEPTED", "at": now(), "by": approver, "candidate_id": hold["candidate_id"],
                 "integration": state["promotion"]["integration"],
-                "next_steps": [f"Zmiany są na gałęzi {workspace['branch']} w folderze {workspace['worktree']}.",
-                               "AAW niczego nie zmergował ani nie wypchnął. Zintegruj je sam, gdy będziesz gotowy "
-                               f"(np. git merge {workspace['branch']} po zatwierdzeniu zmian w worktree)."]}
+                "next_steps": [f"Wynik czeka w folderze {workspace['worktree']} (gałąź {workspace['branch']}); "
+                               "zmiany nie są jeszcze zatwierdzone (commit).",
+                               "AAW niczego nie zmergował ani nie wypchnął. Gdy zechcesz przejąć wynik: otwórz ten "
+                               "folder, przejrzyj zmiany, zrób commit, a potem w swoim projekcie scal gałąź "
+                               f"{workspace['branch']} (np. git merge {workspace['branch']})."]}
     product_home.write_json(product_dir(run_id) / "decision.json", decision)
     return decision
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW PRODUCT MVP V0.1 — read-only projections for the user.
+"""AAW PRODUCT MVP V0.2 — read-only projections for the user.
 
 Every value here is computed on read from the engine's own artifacts:
 `AUTONOMY/autonomy_state.json`, `AUTONOMY/autonomy_events.jsonl`, the V0.4B
@@ -39,21 +39,21 @@ S_STARTING, S_START_FAILED = "STARTING", "START_FAILED"
 S_GATE, S_ATTENTION = "READY_FOR_DECISION", "NEEDS_ATTENTION"
 S_ACCEPTED, S_REJECTED = "ACCEPTED", "REJECTED"
 HOME_SECTION = {S_RUNNING: "running", S_STOPPING: "running", S_STARTING: "running",
-                S_PAUSED: "paused", S_INTERRUPTED: "attention", S_START_FAILED: "attention",
+                S_PAUSED: "paused", S_INTERRUPTED: "paused", S_START_FAILED: "attention",
                 S_GATE: "attention", S_ATTENTION: "attention", S_ACCEPTED: "completed", S_REJECTED: "completed"}
 STATUS_LABEL = {S_RUNNING: "Pracuje", S_STOPPING: "Zatrzymywanie…", S_STARTING: "Uruchamianie…",
-                S_PAUSED: "Wstrzymane", S_INTERRUPTED: "Przerwane — wymaga wznowienia",
+                S_PAUSED: "Wstrzymane", S_INTERRUPTED: "Przerwane — można bezpiecznie wznowić",
                 S_START_FAILED: "Nie wystartowało", S_GATE: "Czeka na Twoją decyzję",
                 S_ATTENTION: "Wymaga uwagi", S_ACCEPTED: "Zaakceptowane", S_REJECTED: "Odrzucone"}
 
 ESCALATION_TEXT = {
     ac.E_ROLE_UNAVAILABLE: "Model wymagany na tym etapie jest niedostępny na tym komputerze (AAW nigdy nie podmienia go po cichu).",
-    ac.E_INTERRUPTED: "Etap zmieniający pliki został przerwany — jego skutki w worktree są niepewne, więc AAW nie powtórzył go automatycznie.",
+    ac.E_INTERRUPTED: "Etap zmieniający pliki został przerwany — jego skutki w kopii roboczej są niepewne, więc AAW nie powtórzył go automatycznie.",
     ac.E_REVIEW: "Reviewer nie mógł potwierdzić poprawności i przekazał decyzję człowiekowi.",
     ac.E_REVIEW_INVALID: "Reviewer zwrócił nieprawidłową odpowiedź — AAW nie traktuje tego jako PASS.",
     ac.E_REPAIR_LIMIT: "Kolejne naprawy nie doprowadziły do akceptacji w dozwolonym limicie.",
     ac.E_NO_PROGRESS: "Naprawa nie zmieniła wyników review — AAW przerwał pętlę.",
-    ac.E_GIT: "Wykryto zmianę poza izolowanym worktree (np. w głównym repozytorium lub na gałęzi main).",
+    ac.E_GIT: "Wykryto zmianę poza izolowaną kopią roboczą (np. ktoś edytował pliki w głównym folderze projektu albo gałąź main się zmieniła). AAW zatrzymał się, żeby niczego nie nadpisać.",
     ac.E_EXECUTOR: "Wywołanie modelu nie powiodło się (błąd CLI, limit czasu lub nieprawidłowa odpowiedź).",
     ac.E_PLANNER: "Planista uznał, że dalsza praca wymaga decyzji człowieka.",
     ac.E_SCOPE: "Plan wychodził poza zakres zadania.",
@@ -231,8 +231,13 @@ def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any
             activity = "Zatrzymywanie…"
     roadmap = state.get("roadmap") or {}
     done = sum(1 for r in roadmap.values() if r.get("status") == ac.R_DONE)
+    current = next((n for n in nodes if n["state"] in ("active", "stopped", "failed")), None)
+    phase_started = next((e.get("occurred_at") for e in reversed(events)
+                          if e.get("event_type") == "PHASE_STARTED" and e.get("phase") == phase), None)
     return {
         "iteration": index, "iteration_id": iteration_id, "nodes": nodes, "phase": phase,
+        "phase_label": current["label"] if current else None,
+        "phase_elapsed_s": _seconds_between(phase_started) if running and phase_started else None,
         "activity": activity if state.get("status") == ac.RUNNING else None,
         "model": _profile_label(ref.get("profile"), ref.get("model"), ref.get("effort")) if flight else None,
         "role": flight.get("role"),
@@ -334,7 +339,7 @@ def build_briefs(run_id: str, state: Mapping[str, Any], events: list[dict[str, A
                            checks=_checks(result.get("checks")),
                            problems=[*(f"Odstępstwo: {d}" for d in result.get("deviations", [])),
                                      *(f"Niepewność: {u}" for u in result.get("uncertainties", []))],
-                           handed=["Zmiany w worktree → weryfikacja"], at=at, evidence=[payload.get("execution_id")])
+                           handed=["Zmiany w kopii roboczej → weryfikacja"], at=at, evidence=[payload.get("execution_id")])
         elif kind == "PHASE_COMPLETED" and event.get("phase") == "SELF_VERIFY":
             index = nth(iteration_id or "", "self_verify")
             entry = (it.get("self_verify") or [{}])[index] if index < len(it.get("self_verify") or []) else {}
@@ -394,7 +399,7 @@ def build_briefs(run_id: str, state: Mapping[str, Any], events: list[dict[str, A
             effect = _exec_meta(state, ledger, payload.get("execution_id"))
             problems = []
             if payload.get("side_effect_phase"):
-                problems.append("Przerwano etap zmieniający pliki — skutki w worktree NIEPEWNE; "
+                problems.append("Przerwano etap zmieniający pliki — skutki w kopii roboczej NIEPEWNE; "
                                 "po wznowieniu AAW nie powtórzy go automatycznie i poprosi o decyzję.")
             else:
                 problems.append("Przerwano etap tylko do odczytu; po wznowieniu zostanie powtórzony "
@@ -511,8 +516,10 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
                     "new_goal": awaiting or state.get("status") in (ac.HUMAN_APPROVED, ac.PROMOTED),
                     "reject": awaiting, "evidence": True},
         "decision": decision, "human": state.get("human"), "promotion": state.get("promotion"),
-        "merge_push": "AAW nie wykonał merge ani push. main_merge_allowed = "
-                      f"{str(state.get('main_merge_allowed', False)).lower()}",
+        "accept_meaning": ("Akceptuj = READY_FOR_EXTERNAL_INTEGRATION: wynik jest gotowy, żebyś sam go zintegrował. "
+                           "AAW nie zrobi merge ani push."),
+        "merge_push": "AAW nie wykonał merge ani push.",
+        "main_merge_allowed": bool(state.get("main_merge_allowed", False)),
     }
 
 
@@ -555,9 +562,13 @@ def home_view() -> dict[str, Any]:
                                           "goal": str(exc)[:200]})
             continue
         process = view.get("process") or {}
-        card = {"run_id": run_id, "project": view["project"], "goal": view["goal"], "status": view["status"],
+        goal = view["goal"] or ""
+        card = {"run_id": run_id, "project": view["project"], "goal": goal,
+                "short_goal": goal if len(goal) <= 110 else goal[:107].rstrip() + "…", "status": view["status"],
+                "can_resume": view["controls"]["resume"], "lock_token": view["controls"]["lock_token"],
                 "status_label": view["status_label"], "iteration": process.get("iteration"),
-                "phase": next((n["label"] for n in process.get("nodes", []) if n["state"] in ("active", "stopped")),
+                "phase": next((n["label"] for n in process.get("nodes", []) if n["state"] in ("active", "stopped",
+                                                                                                  "failed")),
                               None) if process else None,
                 "activity": process.get("activity"), "last_activity": view.get("last_activity"),
                 "roadmap": process.get("roadmap")}

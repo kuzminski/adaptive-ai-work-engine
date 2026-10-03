@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW PRODUCT MVP V0.1 — per-user data location and product settings.
+"""AAW PRODUCT MVP V0.2 — per-user data location and product settings.
 
 Everything the product writes lives under one user-writable folder
 (`AAW_HOME`), never inside the portable application folder:
@@ -11,6 +11,7 @@ Everything the product writes lives under one user-writable folder
   worktrees/     isolated Git worktrees, one per run
   settings.json  product defaults (no credentials; AAW stores none)
   providers.json last provider detection (a cache; re-detect any time)
+  model_probes.json  which exact model IDs the installed CLIs accepted/rejected (explicit "Verify models")
   MODEL_RECOMMENDATIONS.downloaded.json   optional online catalog update
 """
 
@@ -89,6 +90,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "online_recommendation_updates": False,
     "max_repair_attempts": 2,
     "provider_timeout_s": 1800,
+    "first_run_completed": False,
 }
 
 

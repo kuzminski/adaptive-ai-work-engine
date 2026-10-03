@@ -3,6 +3,7 @@
 
     AAW                       start the local app and open it in the browser
     AAW --no-browser          start without opening a browser (prints the URL)
+    AAW --version             print the release identifier and exit
     AAW --detect              print provider detection as JSON and exit
     AAW --self-test           quick packaging self-test (imports, data files) and exit
     AAW --run-worker RUN_ID --mode start|resume [--reconcile-lock TOKEN]
@@ -58,13 +59,25 @@ def _extend_windows_path() -> None:
 def self_test(report_file: Path | None = None) -> int:
     import autonomy_adapters  # noqa: F401  (engine importable)
     import autonomy_controller  # noqa: F401
+    import product_providers as pp
     import product_recommendations as pr
     import product_server
+    import product_version
     import workflow_runner as wr
     profiles = wr.load_implementer_profiles()
     catalog = pr.builtin_catalog()
-    ui = product_server.UI_ROOT / "index.html"
-    report = {"status": "PASS" if profiles and catalog and ui.is_file() else "FAIL",
+    ui_files = [product_server.UI_ROOT / name for name in ("index.html", "app.js", "app.css", "icon.svg")]
+    ui = ui_files[0]
+    # the model-availability layer must agree with the frozen catalog on every exact mapping
+    mappings = pr.exact_mappings(catalog)
+    mapping_ok = all(target in profiles and profiles[target].get("exact_runtime_mapping_of") == source
+                     for source, target in mappings.items())
+    checks = {"profiles": bool(profiles), "catalog": bool(catalog), "ui": all(f.is_file() for f in ui_files),
+              "exact_mappings": mapping_ok, "probe_classifier": pp.classify_probe("claude", 0, '{"is_error": false, '
+                                                                                   f'"result": "{pp.PROBE_TOKEN}"}}',
+                                                                                   "")[0] == pp.PROBE_ACCEPTED}
+    report = {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks,
+              "release": product_version.RELEASE, "release_name": product_version.RELEASE_NAME,
               "profiles": len(profiles), "recommendations_catalog": catalog["catalog_version"],
               "ui": str(ui), "frozen": bool(getattr(sys, "frozen", False)),
               "data_home": os.environ.get("AAW_STATS_ROOT")}
@@ -98,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", choices=("start", "resume"), default="start")
     parser.add_argument("--reconcile-lock")
     parser.add_argument("--detect", action="store_true")
+    parser.add_argument("--version", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=0)
@@ -107,6 +121,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_worker:
         import product_runs
         return product_runs.worker_main(args.run_worker, args.mode, reconcile_lock=args.reconcile_lock)
+    if args.version:
+        import product_version
+        text = json.dumps(product_version.describe(), ensure_ascii=False)
+        print(text)
+        if args.report_file:
+            args.report_file.write_text(text + "\n", encoding="utf-8")
+        return 0
     if args.detect:
         import product_providers
         text = json.dumps(product_providers.detect_all(), indent=2, ensure_ascii=False)

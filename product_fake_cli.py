@@ -15,6 +15,9 @@ Environment:
                       Missing roles use built-in "happy path" answers.
   AAW_FAKE_LOGGED_IN  "0" → login status reports not logged in (default "1")
   AAW_FAKE_VERSION    version string (default 9.9.9)
+  AAW_FAKE_REJECT_MODELS  comma list of model IDs a model probe rejects (like an
+                      unknown / not-entitled model in the real CLI)
+  AAW_FAKE_OFFLINE    "1" → a model probe fails with a connection error
 
 Step keys: output (dict, with $MANDATE_HASH / $ITERATION_CRITERIA / $CHARTER /
 $CHARTER_HASH / $NEXT_ITEM substitution), write_files, exit_code, sleep.
@@ -118,6 +121,33 @@ def substitute(value, handoff):
     return value
 
 
+def model_probe(harness: str, argv: list[str]) -> int:
+    model = argv[argv.index("--model") + 1] if "--model" in argv else ""
+    log = os.environ.get("AAW_FAKE_CALLS")
+    if log:
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"role": "MODEL_PROBE", "harness": harness, "argv": argv, "model": model,
+                                     "cwd": os.getcwd(), "pid": os.getpid()}) + "\n")
+    if os.environ.get("AAW_FAKE_OFFLINE") == "1":
+        sys.stderr.write("API Error: Connection error (getaddrinfo ENOTFOUND)\n")
+        return 1
+    rejected = {m.strip() for m in os.environ.get("AAW_FAKE_REJECT_MODELS", "").split(",") if m.strip()}
+    if harness == "codex":
+        if model in rejected:
+            sys.stderr.write(f"ERROR: The model `{model}` does not exist or you do not have access to it.\n")
+            return 1
+        print("AAW_MODEL_OK")
+        return 0
+    if model in rejected:
+        print(f"[claude-code:unrecognized_model] {{\"model\":\"{model}\"}}", file=sys.stderr)
+        print(json.dumps({"type": "result", "is_error": True, "api_error_status": 404,
+                          "result": f"There's an issue with the selected model ({model}). It may not exist or "
+                                    "you may not have access to it."}))
+        return 1
+    print(json.dumps({"type": "result", "is_error": False, "result": "AAW_MODEL_OK", "total_cost_usd": 0.0}))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     harness = "claude"
     if argv[:1] == ["--as"]:
@@ -135,6 +165,9 @@ def main(argv: list[str]) -> int:
             return 0
         print("Not logged in", file=sys.stderr)
         return 1
+    probe = next((a for a in argv if "AAW_MODEL_OK" in a), None)
+    if probe:
+        return model_probe(harness, argv)
     prompt = sys.stdin.read()
     role = next((r for r in ROLES if f"You are the AAW {r}" in prompt or f"independent AAW {r}" in prompt), "UNKNOWN")
     handoff = json.loads(prompt.split("HANDOFF:\n", 1)[1]) if "HANDOFF:\n" in prompt else {}

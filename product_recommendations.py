@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AAW PRODUCT MVP V0.1 — model recommendations and simple-choice resolution.
+"""AAW PRODUCT MVP V0.2 — model recommendations and simple-choice resolution.
 
 Three layers, none of which scrapes benchmarks:
 
@@ -20,6 +20,13 @@ for the RECOMMENDED options that is exactly the frozen V0.3 profile) or
 ALTERNATIVE. A required slot with no runnable candidate blocks START; an
 optional (escalation-only) slot keeps its first candidate and the engine stops
 with ROLE_PROFILE_UNAVAILABLE if that escalation is ever needed.
+
+V0.2 — exact runtime mappings: a frozen V0.3 profile with no runtime ID in the
+frozen catalog (OPUS_5_5_HIGH, …) may be served by the catalog's
+`exact_runtime_mappings` profile (same model and effort, exact runtime ID) —
+but only when `product_providers` reports that profile runnable, i.e. a local
+probe saw the installed CLI accept the exact model ID. The slot is then shown
+as RECOMMENDED with `exact_mapping_of`; it is never a different model.
 """
 
 from __future__ import annotations
@@ -110,7 +117,15 @@ def validate_catalog(data: Any) -> dict[str, Any]:
     missing_slots = set(ap.PROFILE_KEYS) - covered
     if missing_slots:
         raise CatalogInvalid(f"catalog does not cover policy slots {sorted(missing_slots)}")
+    mappings = data.get("exact_runtime_mappings", {})
+    if not isinstance(mappings, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                 for k, v in mappings.items()):
+        raise CatalogInvalid("exact_runtime_mappings must map profile IDs to profile IDs")
     return data
+
+
+def exact_mappings(catalog: Mapping[str, Any]) -> dict[str, str]:
+    return {k: v for k, v in (catalog.get("exact_runtime_mappings") or {}).items() if not k.startswith("_")}
 
 
 def builtin_catalog() -> dict[str, Any]:
@@ -148,7 +163,7 @@ def update_catalog(url: str | None = None, *, timeout: float = 8.0,
     try:
         if fetch is None:
             context = ssl.create_default_context()
-            request = urllib.request.Request(url, headers={"User-Agent": "AAW-Product/0.1"})
+            request = urllib.request.Request(url, headers={"User-Agent": "AAW-Product/0.2"})
             with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
                 raw = response.read(2_000_000)
         else:
@@ -190,10 +205,13 @@ def profile_display(profile_id: str | None, profiles: Mapping[str, Mapping[str, 
 
 def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: Mapping[str, Any] | None = None,
                     overrides: Mapping[str, str] | None = None,
-                    detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    detection: Mapping[str, Any] | None = None,
+                    states: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Map the three simple levels onto every V0.3 policy slot for one new run."""
     catalog = catalog or effective_catalog()
     profiles = _profiles()
+    mappings = exact_mappings(catalog)
+    states = states or {}
     overrides = dict(overrides or {})
     picked: dict[str, str] = {}
     for group in CHOICE_GROUPS:
@@ -223,7 +241,7 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
     for slot in order:
         candidates = list(slot_candidates[slot])
         recommended = candidates[0]
-        status, chosen, reason = None, None, None
+        status, chosen, reason, mapped_from = None, None, None, None
         if slot in overrides:
             chosen, status = overrides[slot], "OVERRIDE"
             if chosen not in profiles:
@@ -232,20 +250,34 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
                 (blockers if slot in required else warnings).append(
                     f"{SLOT_LABELS[slot]}: wybrany ręcznie profil {chosen} nie jest teraz dostępny")
         else:
-            usable = [c for c in candidates if c in runnable]
+            # Each candidate is served by itself or, when the frozen catalog cannot run it, by its exact
+            # runtime mapping (same model and effort) once the local probe confirmed that mapping.
+            served = []
+            for candidate in candidates:
+                if candidate in runnable:
+                    served.append((candidate, candidate))
+                elif mappings.get(candidate) in runnable:
+                    served.append((mappings[candidate], candidate))
             if slot in ("primary_reviewer", "final_review_default") and implementer_model:
-                independent = [c for c in usable if runtime(c) != implementer_model]
-                usable = independent or usable
-            if usable:
-                chosen = usable[0]
-                status = "RECOMMENDED" if chosen == recommended else "ALTERNATIVE"
+                independent = [pair for pair in served if runtime(pair[0]) != implementer_model]
+                served = independent or served
+            if served:
+                chosen, source = served[0]
+                status = "RECOMMENDED" if source == recommended else "ALTERNATIVE"
+                if chosen != source:
+                    mapped_from = source
+                    reason = (f"dokładne mapowanie {source} → {runtime(chosen)} / "
+                              f"{(profiles.get(chosen) or {}).get('effort')} (sprawdzone na tym komputerze)")
                 if status == "ALTERNATIVE":
-                    reason = f"{recommended} niedostępny na tym komputerze"
+                    why = _why_unavailable(recommended, mappings, states)
+                    reason = f"{recommended} niedostępny na tym komputerze" + (f" — {why}" if why else "") + \
+                        (f"; {reason}" if reason else "")
             else:
                 chosen, status = recommended, "UNAVAILABLE"
                 if slot in required:
                     blockers.append(f"{SLOT_LABELS[slot]}: żaden rekomendowany profil nie jest dostępny "
-                                    f"({', '.join(candidates)})")
+                                    f"({', '.join(candidates)}) — wybierz inny poziom w kroku „Modele” albo "
+                                    "zainstaluj i zaloguj inne CLI")
                 else:
                     warnings.append(f"{SLOT_LABELS[slot]}: profil {recommended} niedostępny — jeśli ta "
                                     "eskalacja będzie potrzebna, AAW zatrzyma się i poprosi o decyzję")
@@ -257,8 +289,14 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
             if compare_versions(versions[harness], minimum) is False:
                 warnings.append(f"{SLOT_LABELS[slot]}: {chosen} wymaga {harness} CLI ≥ {minimum} "
                                 f"(wykryto {versions[harness]})")
+        mapping = mappings.get(recommended)
+        can_enable = bool(mapping and mapping != chosen and (states.get(mapping) or {}).get("state") in
+                          ("NEEDS_CHECK", "NOT_VERIFIED"))
         slots[slot] = {"slot": slot, "label": SLOT_LABELS[slot], "profile_id": chosen,
                        "display": profile_display(chosen, profiles), "recommended_profile_id": recommended,
+                       "exact_mapping_of": mapped_from,
+                       "availability": (states.get(chosen) or {}).get("state"),
+                       "recommended_check_available": can_enable, "recommended_check_profile": mapping if can_enable else None,
                        "status": status, "reason": reason, "required": slot in required,
                        "harness": harness, "runtime_model_id": runtime(chosen),
                        "effort": (profiles.get(chosen) or {}).get("effort"),
@@ -266,10 +304,15 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
                        "speed_class": row_meta.get("speed_class"), "cost_class": row_meta.get("cost_class")}
         if slot == "implementer_default":
             implementer_model = runtime(chosen)
+    unverified = sorted({s["display"] for s in slots.values() if s["required"] and s["availability"] == "NOT_VERIFIED"})
+    if unverified:
+        warnings.append("Jeszcze nie sprawdzono na tym komputerze: " + ", ".join(unverified) +
+                        ". Katalog AAW uznaje je za dostępne; „Sprawdź modele” potwierdzi to jednym krótkim "
+                        "zapytaniem na model. Jeśli konto nie ma dostępu, AAW zatrzyma się zamiast podmienić model.")
     alternatives = [s for s in slots.values() if s["status"] == "ALTERNATIVE"]
     if alternatives:
         warnings.insert(0, f"{len(alternatives)} z {len(slots)} etapów użyje jawnej alternatywy, bo rekomendowany "
-                        "profil jest niedostępny na tym komputerze (szczegóły w tabeli poniżej).")
+                        "profil jest niedostępny na tym komputerze (każda alternatywa jest opisana przy swoim etapie).")
     roles = {role: {"profile_id": slots[slot]["profile_id"]} for role, slot in ROLE_SLOTS.items()}
     same_model = runtime(roles["reviewer"]["profile_id"]) == runtime(roles["implementer"]["profile_id"])
     if same_model:
@@ -287,6 +330,45 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
             "catalog_source": catalog.get("_source", "BUILTIN"), "slots": slots,
             "roles_config": config, "roles_valid": validated is not None,
             "blockers": blockers, "warnings": warnings}
+
+
+def _why_unavailable(profile_id: str, mappings: Mapping[str, str], states: Mapping[str, Mapping[str, Any]]) -> str | None:
+    own = states.get(profile_id) or {}
+    mapped = states.get(mappings.get(profile_id) or "") or {}
+    if mapped.get("state") == "NEEDS_CHECK":
+        return f"można go włączyć: „Sprawdź modele” zweryfikuje {mapped.get('runtime_model_id')} na tym komputerze"
+    if mapped.get("state") == "REJECTED_HERE":
+        return f"CLI odrzuciło {mapped.get('runtime_model_id')} na tym komputerze"
+    if own.get("state") in ("CLI_NOT_FOUND", "NOT_LOGGED_IN", "REJECTED_HERE"):
+        return own.get("label")
+    return None
+
+
+GROUP_SLOTS = {"planning": ("initial_planner",),
+               "implementation": ("implementer_default", "repair_default", "review_pretreatment",
+                                  "implementer_harder", "implementer_hard", "repair_hard",
+                                  "implementer_capability_escalation"),
+               "review": ("primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")}
+GROUP_MAIN_SLOTS = {"planning": ("initial_planner",),
+                    "implementation": ("implementer_default", "repair_default"),
+                    "review": ("primary_reviewer", "final_review_default")}
+
+
+def group_summary(resolution: Mapping[str, Any]) -> dict[str, Any]:
+    """Per simple level: the actual models that will run (main slots) — shown under the three choices."""
+    out = {}
+    for group, slots in GROUP_SLOTS.items():
+        rows = [resolution["slots"][s] for s in slots]
+        main = [resolution["slots"][s] for s in GROUP_MAIN_SLOTS[group]]
+        out[group] = {"choice": resolution["choices"][group],
+                      "models": list(dict.fromkeys(f"{s['display']}" for s in main)),
+                      "main": main, "all": rows,
+                      "alternatives": [s for s in rows if s["status"] == "ALTERNATIVE"],
+                      "unavailable": [s for s in rows if s["status"] == "UNAVAILABLE"],
+                      "checkable": sorted({s["recommended_check_profile"] for s in rows
+                                           if s.get("recommended_check_profile")} |
+                                          {s["profile_id"] for s in rows if s.get("availability") == "NOT_VERIFIED"})}
+    return out
 
 
 def choice_options(catalog: Mapping[str, Any] | None = None) -> dict[str, Any]:

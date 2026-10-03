@@ -448,6 +448,54 @@
       "availability": "KNOWN_BUT_UNAVAILABLE",
       "unavailable_reason": "No exact Claude Opus 5.5 runtime mapping is present in MODEL_CATALOG; no substitution is allowed.",
       "curated": false
+    },
+    {
+      "profile_id": "CLAUDE_OPUS_5_5_HIGH",
+      "display_name": "Claude Opus 5.5 / high (exact)",
+      "suitable_for": [
+        "PLAN"
+      ],
+      "description": "Exact runtime mapping of OPUS_5_5_HIGH (V0.3 initial architect).",
+      "harness": "claude",
+      "runtime_model_id": "claude-opus-5-5",
+      "effort": "high",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "exact_runtime_mapping_of": "OPUS_5_5_HIGH",
+      "curated": true
+    },
+    {
+      "profile_id": "CLAUDE_OPUS_5_5_MEDIUM",
+      "display_name": "Claude Opus 5.5 / medium (exact)",
+      "suitable_for": [
+        "REVIEW",
+        "PLAN"
+      ],
+      "description": "Exact runtime mapping of OPUS_5_5_MEDIUM (V0.3 critical final review).",
+      "harness": "claude",
+      "runtime_model_id": "claude-opus-5-5",
+      "effort": "medium",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "exact_runtime_mapping_of": "OPUS_5_5_MEDIUM",
+      "curated": true
+    },
+    {
+      "profile_id": "CLAUDE_SONNET_5_5_MEDIUM",
+      "display_name": "Claude Sonnet 5.5 / medium (exact)",
+      "suitable_for": [
+        "IMPLEMENT",
+        "REVIEW",
+        "REPAIR"
+      ],
+      "description": "Exact runtime mapping of SONNET_5_5_MEDIUM (V0.3 capability escalation / hard final review).",
+      "harness": "claude",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "effort": "medium",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "exact_runtime_mapping_of": "SONNET_5_5_MEDIUM",
+      "curated": true
     }
   ]
 }

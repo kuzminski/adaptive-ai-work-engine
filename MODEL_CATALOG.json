@@ -294,6 +294,56 @@
         "HOST_MODEL_CATALOG",
         "LOCAL_RUNTIME_PROBE_PENDING"
       ]
+    },
+    {
+      "provider": "anthropic",
+      "harness": "claude",
+      "model_family": "Claude Opus 5.5",
+      "runtime_model_id": "claude-opus-5-5",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "runtime_available": true,
+      "runtime_available_policy": "DYNAMIC_PREFLIGHT",
+      "account_available": true,
+      "access_class": "ACCOUNT_DEPENDENT",
+      "automatic_use_allowed": true,
+      "manual_use_allowed": true,
+      "product_activation": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "role_hint": "Exact runtime mapping for the V0.3 Claude 5.5 policy tiers. Used by AAW Product only after a local probe through the installed Claude CLI accepted this exact model ID.",
+      "source_class": [
+        "CURRENT_CLAUDE_CLI_ACCEPTS_MODEL_ID",
+        "AAW_PRODUCT_RUNTIME_PROBE"
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "harness": "claude",
+      "model_family": "Claude Sonnet 5.5",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "runtime_available": true,
+      "runtime_available_policy": "DYNAMIC_PREFLIGHT",
+      "account_available": true,
+      "access_class": "ACCOUNT_DEPENDENT",
+      "automatic_use_allowed": true,
+      "manual_use_allowed": true,
+      "product_activation": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "role_hint": "Exact runtime mapping for the V0.3 Claude 5.5 policy tiers. Used by AAW Product only after a local probe through the installed Claude CLI accepted this exact model ID.",
+      "source_class": [
+        "CURRENT_CLAUDE_CLI_ACCEPTS_MODEL_ID",
+        "AAW_PRODUCT_RUNTIME_PROBE"
+      ]
     }
   ]
 }
