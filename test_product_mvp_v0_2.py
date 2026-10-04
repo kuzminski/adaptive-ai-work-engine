@@ -436,11 +436,11 @@ def test_user_can_pick_any_single_model_as_the_whole_implementer(env):
     run_id = start(env, directions=[], implementer_chain=["TERRA_HIGH"])
     view = wait_for(run_id, settled)
     assert view["status"] == pv.S_GATE
-    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text())
+    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text(encoding="utf-8"))
     assert [b["profile_id"] for b in state["roles"]["implementer_chain"]] == ["TERRA_HIGH"]   # frozen with the run
     impl = [e for e in state["executions"] if e["executor"] in ("execute", "self_verify")]
     assert impl and {e["profile"] for e in impl} == {"TERRA_HIGH"}
-    assert json.loads((prun.product_dir(run_id) / "task.json").read_text())["form"]["implementer_chain"] == ["TERRA_HIGH"]
+    assert json.loads((prun.product_dir(run_id) / "task.json").read_text(encoding="utf-8"))["form"]["implementer_chain"] == ["TERRA_HIGH"]
     implementer_call = next(c for c in env.calls() if c["role"] == "IMPLEMENTER")
     assert "gpt-5.6-terra" in implementer_call["argv"]                 # the CLI really got the chosen exact model
     assert_no_merge_push(env)
@@ -451,7 +451,7 @@ def test_default_run_freezes_the_system_chain_and_starts_on_its_first_step(env):
     run_id = start(env, directions=[])
     view = wait_for(run_id, settled)
     assert view["status"] == pv.S_GATE
-    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text())
+    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text(encoding="utf-8"))
     chain = [b["profile_id"] for b in state["roles"]["implementer_chain"]]
     assert chain[:6] == ["GPT6_LUNA_HIGH", "GPT6_LUNA_VERY_HIGH", "GPT6_LUNA_MAX", "TERRA_HIGH", "TERRA_VERY_HIGH",
                          "TERRA_MAX"]
