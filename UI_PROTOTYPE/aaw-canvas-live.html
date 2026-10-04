@@ -127,6 +127,8 @@ body[data-mode=run] #palette{display:none}
 .wire[data-s=repair]{stroke:var(--repair);stroke-width:2.4}
 .wire[data-s=held]{stroke:var(--hold);stroke-width:1.5;stroke-dasharray:2 5;opacity:.55}
 .wire[data-s=template]{stroke:var(--edge);stroke-dasharray:1 6}
+.wire[data-s=proposed]{stroke:rgba(87,160,245,.6);stroke-width:1.6;stroke-dasharray:1.5 4}
+.wire[data-s=detach]{stroke:rgba(212,89,76,.5);stroke-width:1.6;stroke-dasharray:1.5 4}
 .wire[data-pick=true]{stroke:var(--live);stroke-width:2.6}
 .wire[data-bad=true]{stroke:var(--halt);stroke-width:2.4;stroke-dasharray:4 3}
 .wire.ghost{stroke:var(--live);stroke-width:2;stroke-dasharray:5 5;opacity:.85}
@@ -141,6 +143,8 @@ body[data-mode=run] #palette{display:none}
 .wlabel[data-s=held]{border-color:var(--edge);color:var(--ink-4)}
 .wlabel[data-pick=true]{border-color:var(--live);color:#cfe1fb}
 .wlabel[data-bad=true]{border-color:rgba(212,89,76,.6);color:#f0c4be}
+.wlabel[data-s=proposed]{border-color:rgba(87,160,245,.4);color:#9dbde3}
+.wlabel[data-s=detach]{border-color:rgba(212,89,76,.4);color:#d8a49c}
 
 /* ── node ── */
 .node{position:absolute;width:216px;height:88px;background:var(--panel);border:1px solid var(--edge-2);
@@ -166,6 +170,15 @@ body[data-mode=run] #palette{display:none}
 .node[data-minted=true]{border-color:rgba(201,147,64,.55)}
 .node[data-bad=true]{border-color:var(--halt);opacity:1;box-shadow:0 0 0 3px rgba(212,89,76,.12)}
 .node[data-reset=true]{outline:1.5px dashed rgba(201,147,64,.6);outline-offset:3px}
+/* AAW PLANNER PROPOSAL PIPELINE V0.1 — proposed, not executable. Dotted (no
+   other state is dotted), desaturated, and badged PROPOSED, so it can never be
+   read as an idle, waiting, repair, minted or merge node. */
+.node[data-proposed=true]{border-style:dotted;border-color:rgba(87,160,245,.55);
+  opacity:.62;background:repeating-linear-gradient(135deg,var(--panel),var(--panel) 7px,var(--panel-2) 7px,var(--panel-2) 14px)}
+.node[data-proposed=true]::before{background:rgba(87,160,245,.45)}
+.node[data-proposed=true] .port{display:none}
+.node[data-detach=true]{outline:1.5px dotted rgba(212,89,76,.55);outline-offset:3px}
+.nbadge[data-v=PROPOSED]{border-color:rgba(87,160,245,.5);color:#cfe1fb}
 .nhead{display:flex;align-items:baseline;gap:7px}
 .nid{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:.02em}
 .ntype{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--ink-4);text-transform:uppercase}
@@ -270,6 +283,19 @@ body[data-mode=build] #tape{display:none}
 #warn p{margin:0;font-size:11.5px;color:var(--ink-2)}
 #warn .row{margin-top:7px}
 
+/* the proposal strip: same geometry and weight as the partial-work banner,
+   because it answers the same kind of question — here is a fact, decide. */
+#prop{position:absolute;left:50%;transform:translateX(-50%);top:10px;z-index:34;max-width:660px;
+  background:rgba(20,24,26,.96);border:1px solid rgba(87,160,245,.45);border-radius:8px;
+  padding:9px 12px;display:none}
+#prop[data-open=true]{display:block}
+#prop[data-k=bad]{border-color:rgba(212,89,76,.5)}
+#prop h5{margin:0 0 3px;font-family:var(--mono);font-size:10px;letter-spacing:.11em;color:#cfe1fb}
+#prop[data-k=bad] h5{color:#f0c4be}
+#prop p{margin:0;font-size:11.5px;color:var(--ink-2)}
+#prop .meta{margin-top:4px;font-family:var(--mono);font-size:10px;color:var(--ink-4)}
+#prop .row{margin-top:7px}
+
 #menu{position:absolute;z-index:45;background:var(--panel);border:1px solid var(--edge-2);border-radius:7px;
   padding:5px;display:none;flex-direction:column;gap:2px;box-shadow:0 8px 26px rgba(0,0,0,.55)}
 #menu[data-open=true]{display:flex}
@@ -332,6 +358,16 @@ body[data-mode=build] #tape{display:none}
       <div class="row">
         <button class="btn sm" id="warnInspect">Inspect what remains</button>
         <button class="btn sm" id="warnClose">Dismiss</button>
+      </div>
+    </div>
+
+    <div id="prop" data-open="false">
+      <h5 id="propTitle">PROPOSAL</h5>
+      <p id="propText"></p>
+      <div class="meta" id="propMeta"></div>
+      <div class="row">
+        <button class="btn sm ok" id="propAccept">Accept</button>
+        <button class="btn sm danger" id="propReject">Reject</button>
       </div>
     </div>
 
@@ -412,6 +448,10 @@ const S = {
   nodeState: {}, edgeState: {}, minted: {}, decisions: {},
   resetCone: [],                          // node ids Reset downstream marked
   selected: null, selectedEdge: null,
+  // AAW PLANNER PROPOSAL PIPELINE V0.1. A proposal is held beside the draft,
+  // never inside it: nothing here can reach `S.draft` except `acceptProposal`,
+  // which does it once, through the bridge, as a single history transaction.
+  proposal: null, proposalLayout: {},
   view: { x: 190, y: 120, k: 1 },
 };
 const draftHistory = new DraftHistory(100);
@@ -480,6 +520,7 @@ async function openWorkflow(id) {
   S.nodeState = {}; S.edgeState = {}; S.minted = {}; S.decisions = {}; S.resetCone = [];
   S.run = null; S.runnerStatus = null; S.lastSequence = 0;
   S.selected = null; S.selectedEdge = null;
+  clearProposal();
   draftHistory.reset(historyState());
   if (S.layout.viewport) S.view = Object.assign({}, S.view, S.layout.viewport);
   setMode("build");
@@ -497,6 +538,7 @@ async function openWorkflow(id) {
   closeInspector();
   markDirty();
   render();
+  reattachProposals();
 }
 
 function describeGraph() {
@@ -745,6 +787,193 @@ function diagnosticForEdge(edgeId) {
   return S.diagnostics.find((d) => d.edge_id === edgeId) || null;
 }
 
+/* ───────────────────── AAW PLANNER PROPOSAL PIPELINE V0.1 ─────────────────────
+   The canvas asks for a proposal, draws it as a ghost, and offers two
+   decisions. It never applies one itself: `acceptProposal` posts to the
+   bridge, which revalidates against this very draft, refuses a stale or
+   invalid proposal, and returns the whole mutated candidate. Only then does
+   the draft move — once, as a single history entry, so one Undo takes the
+   entire accepted subgraph back out. */
+function clearProposal() {
+  S.proposal = null;
+  S.proposalLayout = {};
+  const panel = $("#prop");
+  if (panel) { panel.dataset.open = "false"; panel.dataset.k = ""; }
+}
+
+function ghostLayout(frame) {
+  // Positions for proposed nodes, computed here and stored nowhere: a
+  // proposal must not write into the layout store any more than into the
+  // workflow. On Accept these become part of the same draft transaction.
+  const layout = {};
+  const anchor = positionOf(frame.anchor_node_id) || { x: 0, y: 0 };
+  // A lane of its own, below the anchor's row: a ghost must not land on top of
+  // a real node, and the existing graph's row is where the real nodes are.
+  (frame.added_node_ids || []).forEach((id, index) => {
+    layout[id] = { x: Math.round(anchor.x + COLUMN * index),
+                   y: Math.round(anchor.y + BRANCH_ROW) };
+  });
+  return layout;
+}
+
+function paintProposal() {
+  const panel = $("#prop");
+  const frame = S.proposal;
+  if (!frame || S.mode !== "build") { panel.dataset.open = "false"; return; }
+  const status = frame.status || "PROPOSAL_INVALID";
+  const ready = status === "PROPOSAL_READY";
+  const summary = frame.summary || {};
+  panel.dataset.k = ready ? "" : "bad";
+  $("#propTitle").textContent = status + " · anchor " + (frame.anchor_node_id || "?");
+  $("#propText").innerHTML = ready
+    ? esc(summary.intent || "(no intent stated)")
+    : (frame.diagnostics || []).map((d) =>
+        `${esc(d.code || "")} ${esc(d.node_id || d.edge_id || "")} — ${esc(d.message || "")}`)
+        .join("<br>") || esc((frame.errors || []).join("; "));
+  const bits = [];
+  if (ready) {
+    bits.push(`${(frame.added_node_ids || []).length} node(s)`,
+              `${(frame.added_edge_ids || []).length} edge(s)`);
+    if ((frame.detached_edge_ids || []).length)
+      bits.push(`detaches ${frame.detached_edge_ids.join(", ")}`);
+    bits.push(`proposal ${String(summary.proposal_hash || "").slice(0, 10)}`);
+    bits.push(`base ${String(frame.base_semantic_hash || "").slice(0, 10)}`);
+    if ((summary.assumptions || []).length) bits.push(`assumes: ${summary.assumptions.join(" · ")}`);
+    if ((summary.warnings || []).length) bits.push(`warns: ${summary.warnings.join(" · ")}`);
+  }
+  const planner = frame.planner || {};
+  if (planner.model) bits.push(`planner ${planner.model}/${planner.effort || "?"}`);
+  $("#propMeta").textContent = bits.join("  ·  ");
+  $("#propAccept").disabled = !ready;
+  $("#propAccept").classList.toggle("ok", ready);
+  panel.dataset.open = "true";
+}
+
+async function planFromNode(nodeId, instruction, note) {
+  if (note) { note.dataset.k = ""; note.textContent = "planning…"; }
+  let frame;
+  try {
+    frame = await api("/api/planner/plan", { method: "POST",
+      body: JSON.stringify({ workflow_id: S.workflowId, anchor_node_id: nodeId,
+                             instruction: instruction || "", candidate: S.draft }) });
+  } catch (error) {
+    const payload = error.payload || {};
+    if (note) {
+      note.dataset.k = "bad";
+      note.textContent = `REFUSED (${payload.error || "?"}) · ${payload.message || error.message}`;
+    }
+    return;
+  }
+  S.proposal = frame;
+  S.proposalLayout = frame.status === "PROPOSAL_READY" ? ghostLayout(frame) : {};
+  if (note) {
+    const unchanged = frame.base_semantic_hash === frame.base_semantic_hash_after;
+    note.dataset.k = frame.status === "PROPOSAL_READY" ? "ok" : "bad";
+    note.textContent = `${frame.status}\nworkflow semantics unchanged by planning: ` +
+      `${unchanged ? "yes" : "NO"} (${String(frame.base_semantic_hash).slice(0, 10)}…)\n` +
+      `nothing is executable until you Accept.`;
+  }
+  paintProposal();
+  render();
+}
+
+async function acceptProposal() {
+  const frame = S.proposal;
+  if (!frame || !frame.proposal) return;
+  let report;
+  try {
+    report = await api("/api/planner/accept", { method: "POST",
+      body: JSON.stringify({ proposal_id: frame.proposal.proposal_id,
+                             candidate: S.draft, persist: false }) });
+  } catch (error) {
+    const payload = error.payload || {};
+    S.proposal = Object.assign({}, frame, {
+      status: payload.error === "PROPOSAL_STALE" ? "PROPOSAL_STALE" : "PROPOSAL_INVALID",
+      diagnostics: (payload.diagnostics || []).length ? payload.diagnostics
+        : [{ code: payload.error || "?", message: payload.message || error.message }],
+    });
+    S.proposalLayout = {};
+    paintProposal(); render();
+    setStatus("halt", `<b>accept refused</b> (${esc(payload.error || "?")}) — ` +
+      esc(payload.message || error.message) + " · the workflow is unchanged");
+    return;
+  }
+  // One transaction: the candidate the bridge returned replaces the draft, the
+  // ghost positions become real layout, and `touch` records exactly one undo
+  // step for the whole accepted subgraph.
+  const ghosts = S.proposalLayout;
+  S.draft = clone(report.candidate);
+  Object.keys(ghosts).forEach((id) => { S.layout.nodes[id] = ghosts[id]; });
+  clearProposal();
+  S.selected = null; S.selectedEdge = null;
+  closeInspector();
+  touch(report.undo_label || "accept planner proposal");
+  setStatus("pass", `<b>proposal accepted</b> · ` +
+    `<code>${esc(String(report.previous_semantic_hash).slice(0, 10))}…</code> → ` +
+    `<code>${esc(String(report.semantic_hash).slice(0, 10))}…</code> · ` +
+    `+${(report.added_node_ids || []).length} nodes, +${(report.added_edge_ids || []).length} edges · ` +
+    `one Undo reverts all of it · not saved until you press Save`);
+}
+
+async function rejectProposal() {
+  const frame = S.proposal;
+  const id = frame && frame.proposal && frame.proposal.proposal_id;
+  clearProposal();
+  render();
+  if (!id) return;
+  try {
+    const report = await api("/api/planner/reject", { method: "POST",
+      body: JSON.stringify({ proposal_id: id, reason: "rejected on the canvas" }) });
+    setStatus(null, `<b>proposal rejected</b> · workflow semantics unchanged ` +
+      `<code>${esc(String(report.semantic_hash || S.savedHash).slice(0, 10))}…</code>`);
+  } catch (error) {
+    setStatus(null, "<b>proposal discarded</b> · workflow semantics unchanged");
+  }
+}
+
+async function reattachProposals() {
+  // A browser refresh loses this canvas's reference to a proposal, not the
+  // proposal: the bridge still holds it, and still knows whether the graph has
+  // moved underneath it since. Re-attaching is a read.
+  try {
+    const listing = await api("/api/planner/proposals?workflow_id=" +
+      encodeURIComponent(S.workflowId));
+    const open = (listing.proposals || []).filter((row) =>
+      row.status === "PROPOSAL_READY" && row.stale === false);
+    if (!open.length) return;
+    const full = await api("/api/planner/proposal?proposal_id=" +
+      encodeURIComponent(open[open.length - 1].proposal_id));
+    S.proposal = { status: full.status, proposal: full.proposal, summary: full.summary,
+                   preview: full.preview, planner: full.planner,
+                   anchor_node_id: full.proposal.anchor_node_id,
+                   base_semantic_hash: full.proposal.base_semantic_hash,
+                   added_node_ids: full.validation.added_node_ids,
+                   added_edge_ids: full.validation.added_edge_ids,
+                   detached_edge_ids: full.validation.detached_edge_ids,
+                   diagnostics: full.validation.diagnostics, errors: full.validation.errors };
+    S.proposalLayout = ghostLayout(S.proposal);
+    paintProposal();
+    render();
+  } catch (_) { /* no planner proposals to re-attach */ }
+}
+
+function plannerControls(nodeId) {
+  return section("Planner (BUILD)", `
+    <div class="fld"><label>planning instruction (optional)</label>
+      <input type="text" id="plInstr" placeholder="what should follow this node?"></div>
+    <div class="row"><button class="btn sm" id="plGo">Plan from here</button></div>
+    <div class="note" id="plNote">A proposal is not executable. It changes nothing until you Accept.</div>`);
+}
+
+function wirePlannerControls(nodeId) {
+  const go = $("#plGo");
+  if (!go) return;
+  const note = $("#plNote"), field = $("#plInstr");
+  const fire = () => planFromNode(nodeId, field.value, note);
+  go.addEventListener("click", fire);
+  field.addEventListener("keydown", (ev) => { if (ev.key === "Enter") fire(); });
+}
+
 /* ─────────────────────────── save ─────────────────────────── */
 async function saveWorkflow() {
   if (!S.dirty) return;
@@ -806,6 +1035,8 @@ async function newWorkflow(id) {
 
 /* ─────────────────────────── geometry ─────────────────────────── */
 function positionOf(nodeId) {
+  const ghost = S.proposalLayout[nodeId];
+  if (ghost) return ghost;                 // layout only; never persisted
   const minted = S.minted[nodeId];
   if (minted && minted.__pos) return minted.__pos;
   const stored = S.layout.nodes[nodeId];
@@ -858,7 +1089,38 @@ function allNodes() {
                 role: row.role, instructions: row.instructions, acceptance: row.acceptance,
                 carry_forward: row.carry_forward, lineage: row.lineage, minted: true });
   });
+  // Proposed nodes come from the bridge's own preview projection of the
+  // applied graph. They are appended to the drawn set and to nothing else:
+  // `S.draft` does not contain them, so they cannot be saved, run, wired,
+  // edited or reached by any authoring path until Accept.
+  proposalNodes().forEach((row) => rows.push(Object.assign({}, row, { proposed: true })));
   return rows;
+}
+
+function proposalPreview() {
+  const p = S.proposal;
+  if (!p || S.mode !== "build") return null;
+  if (p.status !== "PROPOSAL_READY" || !p.preview || !p.preview.projection) return null;
+  return p;
+}
+
+function proposalNodes() {
+  const p = proposalPreview();
+  if (!p) return [];
+  const added = new Set(p.added_node_ids || []);
+  return (p.preview.projection.nodes || []).filter((n) => added.has(n.node_id));
+}
+
+function proposalEdges() {
+  const p = proposalPreview();
+  if (!p) return [];
+  const added = new Set(p.added_edge_ids || []);
+  return (p.preview.projection.edges || []).filter((e) => added.has(e.edge_id));
+}
+
+function detachedEdgeIds() {
+  const p = proposalPreview();
+  return new Set((p && p.detached_edge_ids) || []);
 }
 
 function allEdges() {
@@ -879,6 +1141,7 @@ function allEdges() {
     rows.push({ edge_id: "lineage:" + id, from: lineage.origin_node_id, to: id,
                 kind: "REPAIR", label: "REPAIR · " + id, lineage: true });
   });
+  proposalEdges().forEach((edge) => rows.push(Object.assign({}, edge, { proposed: true })));
   return rows;
 }
 
@@ -939,10 +1202,12 @@ function render() {
     if (S.resetCone.includes(node.node_id)) el.dataset.reset = "true";
     if (node.is_repair_template) el.dataset.tmpl = "true";
     if (node.minted) el.dataset.minted = "true";
+    if (node.proposed) el.dataset.proposed = "true";
     if (wiring && wiring.over === node.node_id) el.dataset.drop = "true";
     el.style.left = pos.x + "px"; el.style.top = pos.y + "px";
-    const title = node.is_repair_template ? "REPAIR template — never entered"
-      : (node.minted ? "minted repair branch" : (node.role || node.node_type));
+    const title = node.proposed ? "proposed — not executable until accepted"
+      : (node.is_repair_template ? "REPAIR template — never entered"
+      : (node.minted ? "minted repair branch" : (node.role || node.node_type)));
     el.innerHTML =
       `<div class="nhead"><span class="nid">${esc(node.node_id)}</span>` +
       `<span class="ntype">${esc(node.node_type)}</span><span class="ndot"></span></div>` +
@@ -950,6 +1215,7 @@ function render() {
       `<div class="ndesc">${esc(firstLine(node.instructions))}</div>` +
       (runtime.verdict ? `<span class="nbadge" data-v="${esc(runtime.verdict)}">${esc(runtime.verdict)}</span>` : "") +
       (runtime.state === "inherited" ? `<span class="nbadge">INHERITED</span>` : "") +
+      (node.proposed ? `<span class="nbadge" data-v="PROPOSED">PROPOSED</span>` : "") +
       (S.draft.start_node === node.node_id && !node.minted ? `<span class="nstart">START</span>` : "") +
       `<span class="port in"></span><span class="port out" data-port="${esc(node.node_id)}"></span>` +
       (errors.length ? `<div class="nerr">${errors.map((e) => esc(e.message)).join("<br>")}</div>` : "");
@@ -982,6 +1248,8 @@ function edgeLabel(edge) {
 
 function edgeVisual(edge, byId) {
   const record = S.edgeState[edge.edge_id];
+  if (edge.proposed) return "proposed";
+  if (detachedEdgeIds().has(edge.edge_id)) return "detach";
   if (edge.lineage) return "repair";
   if (record && record.state === "selected") {
     const target = S.nodeState[edge.to];
@@ -1349,7 +1617,10 @@ async function openInspector(nodeId, options) {
   if (S.mode === "run" && S.run && !minted) parts.push(runControls(nodeId));
 
   /* ── BUILD editor ── */
-  if (S.mode === "build" && !minted) parts.push(nodeEditor(nodeId));
+  if (S.mode === "build" && !minted && !node.proposed) {
+    parts.push(plannerControls(nodeId));
+    parts.push(nodeEditor(nodeId));
+  }
 
   /* ── SECONDARY, collapsed ── */
   parts.push(secondarySection(node, secondary, detail));
@@ -1364,6 +1635,7 @@ async function openInspector(nodeId, options) {
     S.draft.start_node = nodeId; touch("change start node"); openInspector(nodeId);
   });
   wireNodeEditor(nodeId);
+  wirePlannerControls(nodeId);
   wireRunControls(nodeId);
   insp.dataset.open = "true";
   $("#iBody").scrollTop = scroll;
@@ -1707,6 +1979,10 @@ function setMode(mode) {
   $("#mBuild").setAttribute("aria-pressed", String(mode === "build"));
   $("#mRun").setAttribute("aria-pressed", String(mode === "run"));
   updateHistoryButtons();
+  // A proposal is BUILD authoring state. Entering RUN hides the ghost and the
+  // strip rather than carrying them into a runtime view, where a proposed node
+  // could be mistaken for one that is about to execute.
+  if (S.proposal) paintProposal();
 }
 $("#mBuild").addEventListener("click", () => { setMode("build"); reopen(); });
 $("#mRun").addEventListener("click", () => { setMode("run"); reopen(); });
@@ -1726,6 +2002,8 @@ $("#wfNew").addEventListener("keydown", (ev) => {
   if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); cancelNewWorkflow(); }
 });
 $("#warnClose").addEventListener("click", closeWarn);
+$("#propAccept").addEventListener("click", acceptProposal);
+$("#propReject").addEventListener("click", rejectProposal);
 function renderWorktreeInspector(worktree) {
   const modified = worktree.modified_files || [];
   const untracked = worktree.untracked_files || [];
@@ -1799,7 +2077,11 @@ $("#btnReconnect").addEventListener("click", () => {
   openStream(S.lastSequence);
   syncRunButton();
 });
-Array.from(document.querySelectorAll("#palette button")).forEach((button) => {
+// Scoped to `[data-t]`: `#btnUndo`/`#btnRedo`/`#btnDiscardDraft` also live inside
+// `#palette` and a bare `#palette button` selector used to catch them too,
+// minting a spurious untyped node (and a corrupting second `touch("create
+// node")`) on every history click.
+Array.from(document.querySelectorAll("#palette button[data-t]")).forEach((button) => {
   button.addEventListener("click", () => {
     const center = centerOfView();
     const spot = freeSpot(center.x, center.y);
@@ -1811,8 +2093,11 @@ let drag = null, pan = null, wiring = null;
 
 stage.addEventListener("pointerdown", (ev) => {
   if (menu.dataset.open === "true" && !ev.target.closest("#menu")) menu.dataset.open = "false";
+  // Overlays own their own clicks. Without this the pan branch below takes
+  // pointer capture and the overlay's buttons never receive a `click` at all.
   if (ev.target.closest("#insp") || ev.target.closest("#palette") ||
-      ev.target.closest("#warn") || ev.target.closest("#menu")) return;
+      ev.target.closest("#warn") || ev.target.closest("#menu") ||
+      ev.target.closest("#prop")) return;
 
   const port = ev.target.closest(".port.out");
   if (port && S.mode === "build") {

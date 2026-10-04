@@ -1,0 +1,138 @@
+{
+  "sessions": [
+    {
+      "schema_version": "AAW_PRODUCTION_USE_EVIDENCE_V0.1",
+      "session_id": "PLANREQ-406e00add042",
+      "planner": {
+        "workflow_id": "PRODUCTION_USE_EVIDENCE_WALKTHROUGH_A",
+        "anchor_node_id": "N01",
+        "provider": "scripted",
+        "model": "scripted",
+        "effort": "n/a",
+        "planner_latency_s": 0.0,
+        "proposal_id": "PROP-0d3821bd978a022a",
+        "proposal_hash": "0d3821bd978a022afdcbba0aa503b50614ae56d9c6ada9ca0fe9a13851b70286",
+        "proposal_status": "PROPOSAL_READY",
+        "node_count": 1,
+        "edge_count": 2,
+        "refusal_code": null,
+        "operator_decision": "ACCEPT"
+      },
+      "execution": {
+        "run_id": "AAW_20260913_154923_ffabf93d",
+        "run_status": "WAITING_FOR_HUMAN",
+        "final_outcome": "HUMAN_REQUIRED",
+        "node_count": 4,
+        "repair_cycles": 0,
+        "human_gates": 1,
+        "wall_time_total": 1.814
+      },
+      "resources": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "known_cost": null
+      },
+      "operator_feedback": {
+        "usefulness": "USEFUL",
+        "reuse_intent": "YES",
+        "comment": "did exactly what I asked",
+        "recorded_at": "2026-09-13T15:49:26.585+02:00"
+      },
+      "post_accept_manual_edit": false,
+      "created_at": "2026-09-13T15:49:23.172+02:00"
+    },
+    {
+      "schema_version": "AAW_PRODUCTION_USE_EVIDENCE_V0.1",
+      "session_id": "PLANREQ-aad9698c314b",
+      "planner": {
+        "workflow_id": "PRODUCTION_USE_EVIDENCE_WALKTHROUGH_B",
+        "anchor_node_id": "N01",
+        "provider": "scripted",
+        "model": "scripted",
+        "effort": "n/a",
+        "planner_latency_s": 0.0,
+        "proposal_id": "PROP-0192c3f99bb7b5c7",
+        "proposal_hash": "0192c3f99bb7b5c74dd597192f742f27b5c95b7de3cccd5fe1e76c8263165413",
+        "proposal_status": "PROPOSAL_READY",
+        "node_count": 1,
+        "edge_count": 2,
+        "refusal_code": null,
+        "operator_decision": "REJECT"
+      },
+      "execution": {
+        "run_id": null,
+        "run_status": null,
+        "final_outcome": null,
+        "node_count": null,
+        "repair_cycles": null,
+        "human_gates": null,
+        "wall_time_total": null
+      },
+      "resources": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "known_cost": null
+      },
+      "operator_feedback": null,
+      "post_accept_manual_edit": null,
+      "created_at": "2026-09-13T15:49:26.643+02:00"
+    },
+    {
+      "schema_version": "AAW_PRODUCTION_USE_EVIDENCE_V0.1",
+      "session_id": "PLANREQ-1bc2ef77b48d",
+      "planner": {
+        "workflow_id": "PRODUCTION_USE_EVIDENCE_WALKTHROUGH_C",
+        "anchor_node_id": "N01",
+        "provider": "scripted",
+        "model": "scripted",
+        "effort": "n/a",
+        "planner_latency_s": 0.0,
+        "proposal_id": "PROP-f13ffb5f773728cd",
+        "proposal_hash": "f13ffb5f773728cdf5e92ee3e34716459d14ea286eb2bd0431c5c5dfff28bba2",
+        "proposal_status": "PROPOSAL_READY",
+        "node_count": 1,
+        "edge_count": 2,
+        "refusal_code": null,
+        "operator_decision": "ACCEPT"
+      },
+      "execution": {
+        "run_id": "AAW_20260913_154927_4147a42b",
+        "run_status": "WAITING_FOR_HUMAN",
+        "final_outcome": "HUMAN_REQUIRED",
+        "node_count": 5,
+        "repair_cycles": 1,
+        "human_gates": 1,
+        "wall_time_total": 2.26
+      },
+      "resources": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "known_cost": null
+      },
+      "operator_feedback": null,
+      "post_accept_manual_edit": false,
+      "created_at": "2026-09-13T15:49:26.693+02:00"
+    }
+  ],
+  "report": {
+    "schema_version": "AAW_PRODUCTION_USE_EVIDENCE_V0.1",
+    "session_count": 3,
+    "planner_sessions": 3,
+    "planner_decided_sessions": 3,
+    "planner_accept_rate": 0.6667,
+    "planner_reject_rate": 0.3333,
+    "runs": 2,
+    "completed_run_rate": 0.0,
+    "avg_repair_cycles": 0.5,
+    "manual_edit_frequency": 0.0,
+    "human_gate_frequency": 1.0,
+    "avg_input_tokens": null,
+    "avg_output_tokens": null,
+    "operator_feedback_distribution": {
+      "USEFUL": 1,
+      "PARTIAL": 0,
+      "NOT_USEFUL": 0
+    },
+    "feedback_count": 1
+  }
+}

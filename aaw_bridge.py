@@ -29,9 +29,18 @@ Invariants this module exists to hold:
   * **Cancellation is real.** `cancel_run` terminates the child process the
     run is blocked on. It does not set a flag for the UI to draw.
 
-Deliberately absent, to keep the boundary small: planner proposals, branch
-merge, workflow creation/deletion, multi-user identity, remote transport,
-authentication beyond loopback binding, and any query language.
+AAW PLANNER PROPOSAL PIPELINE V0.1 adds one more invariant, in the same shape
+as the others: **a planner proposes, it never mutates.** `plan_from_node`
+reads a workflow and returns an inert artifact; `accept_proposal` is the only
+method that can change a graph, it is explicit, it revalidates against the
+current workflow first, and it persists through `save_workflow` and nothing
+else. See `planner_proposal` for the contract and
+`AAW_PLANNER_PROPOSAL_PIPELINE_V0_1.md` for the frozen description.
+
+Deliberately absent, to keep the boundary small: modifying a proposal before
+acceptance, automatic resolution of a stale proposal, branch merge authoring,
+workflow deletion, multi-user identity, remote transport, authentication
+beyond loopback binding, and any query language.
 """
 
 from __future__ import annotations
@@ -40,9 +49,12 @@ import copy
 import datetime as dt
 import json
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import aaw_planner
+import planner_proposal
 import routing_contract
 import run_cancellation
 import run_recovery
@@ -83,6 +95,29 @@ RECOVERY_UNRESOLVED = run_recovery.UNRESOLVED
 RECOVERY_KEPT = run_recovery.KEPT
 RECOVERY_DISCARDED = run_recovery.DISCARDED
 RECOVERY_ADOPTED = run_recovery.ADOPTED
+
+# AAW PLANNER PROPOSAL PIPELINE V0.1 — why a planner request was refused.
+# Closed set, rendered directly by the UX. `PROPOSAL_STALE` and
+# `PROPOSAL_INVALID` are the proposal statuses themselves: a refusal to accept
+# and the state the proposal is left in are the same fact, so they are not
+# given two vocabularies.
+PLANNER_BASE_INVALID = "PLANNER_BASE_INVALID"
+PROPOSAL_UNKNOWN = "PROPOSAL_UNKNOWN"
+PROPOSAL_NOT_ACCEPTABLE = "PROPOSAL_NOT_ACCEPTABLE"
+PROPOSAL_ALREADY_RESOLVED = "PROPOSAL_ALREADY_RESOLVED"
+PROPOSAL_RUN_ACTIVE = "PROPOSAL_RUN_ACTIVE"
+PROPOSAL_STALE = planner_proposal.PROPOSAL_STALE
+PROPOSAL_INVALID = planner_proposal.PROPOSAL_INVALID
+PROPOSAL_CODES = (PLANNER_BASE_INVALID, PROPOSAL_UNKNOWN, PROPOSAL_NOT_ACCEPTABLE,
+                  PROPOSAL_ALREADY_RESOLVED, PROPOSAL_RUN_ACTIVE, PROPOSAL_STALE,
+                  PROPOSAL_INVALID)
+
+# Proposals and their journal are BUILD-time authoring state, held in memory
+# and bounded. They are deliberately not persisted: a proposal is inert, and
+# writing one into a run's evidence tree would put authoring history inside
+# execution evidence.
+PROPOSAL_STORE_LIMIT = 32
+PLANNER_JOURNAL_LIMIT = 500
 
 
 class BridgeError(ValueError):
@@ -175,13 +210,20 @@ class AawBridge:
     """The public UX/runtime boundary. One instance per process."""
 
     def __init__(self, *, workflows_root: Path | None = None, stats_root: Path | None = None,
-                 runner: Any = workflow_runner) -> None:
+                 runner: Any = workflow_runner,
+                 proposal_limits: "planner_proposal.ProposalLimits | None" = None) -> None:
         self.runner = runner
         self._workflows_root = Path(workflows_root) if workflows_root else None
         self._stats_root = Path(stats_root) if stats_root else None
         self._runs: dict[str, RunHandle] = {}
         self._active_worktrees: dict[str, str] = {}
         self._lock = threading.RLock()
+        # AAW PLANNER PROPOSAL PIPELINE V0.1. Ephemeral by design; see
+        # PROPOSAL_STORE_LIMIT above.
+        self._proposals: dict[str, dict[str, Any]] = {}
+        self._planner_journal: list[dict[str, Any]] = []
+        self._planner_sequence = 0
+        self._proposal_limits = proposal_limits or planner_proposal.ProposalLimits.from_env()
 
     # Roots are resolved late and through the runner module so that a test
     # which repoints `workflow_runner.STATS_ROOT` repoints the bridge too,
@@ -1192,6 +1234,452 @@ class AawBridge:
             self._runs[str(run_id)] = handle
         return handle.describe()
 
+    # ══════════════════════ PLANNER PROPOSALS ══════════════════════
+    #
+    # AAW PLANNER PROPOSAL PIPELINE V0.1. The planner is a proposal generator
+    # and nothing else. Everything in this section holds one boundary:
+    #
+    #     plan   → reads a workflow, writes nothing, returns an inert artifact
+    #     accept → an explicit operator action; revalidates, then mutates once
+    #     reject → discards the artifact; the workflow never knew about it
+    #
+    # `plan_from_node` cannot reach `save_workflow`, `atomic_json`, the runner
+    # or a worktree. `accept_proposal` is the only method here that can produce
+    # a workflow mutation, it is the only one that persists, and it persists
+    # through exactly the validated save path every other canvas edit uses.
+
+    def _planner_limits(self) -> planner_proposal.ProposalLimits:
+        return self._proposal_limits
+
+    def _planner_event(self, event_type: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Append one structured planner fact. Bounded, in-memory, sequenced.
+
+        Sequenced like the routing journal, so a consumer that stores the last
+        sequence it rendered receives exactly the tail it missed. It is not
+        persisted: a proposal is BUILD-time authoring state, and writing a
+        planner journal into a run's evidence tree would put authoring history
+        inside execution evidence.
+        """
+        with self._lock:
+            self._planner_sequence += 1
+            # `event_type`, `sequence` and `at` are the routing journal's own
+            # field names: one vocabulary for events, so a consumer that can
+            # read the runtime journal can read this one.
+            row = {"sequence": self._planner_sequence, "at": routing_contract.now(),
+                   "contract": planner_proposal.PROPOSAL_CONTRACT,
+                   "event_type": str(event_type),
+                   **{k: v for k, v in dict(payload).items()}}
+            self._planner_journal.append(row)
+            if len(self._planner_journal) > PLANNER_JOURNAL_LIMIT:
+                del self._planner_journal[:-PLANNER_JOURNAL_LIMIT]
+        return row
+
+    def planner_events(self, *, since: int = 0, limit: int | None = None) -> dict[str, Any]:
+        """Planner/proposal events after `since`, in sequence order."""
+        with self._lock:
+            rows = [dict(row) for row in self._planner_journal
+                    if int(row.get("sequence") or 0) > int(since)]
+            last_known = self._planner_sequence
+        truncated = bool(limit is not None and len(rows) > int(limit))
+        if truncated:
+            rows = rows[: int(limit)]
+        return {"bridge_version": BRIDGE_VERSION,
+                "contract": planner_proposal.PROPOSAL_CONTRACT,
+                "since": int(since),
+                "last_sequence": int(rows[-1]["sequence"]) if rows else int(since),
+                "journal_last_sequence": last_known,
+                "count": len(rows), "truncated": truncated, "events": rows}
+
+    def _planning_base(self, workflow_id: str,
+                       candidate: Mapping[str, Any] | None) -> tuple[dict[str, Any], str]:
+        """The workflow a proposal is generated against, and its identity.
+
+        A canvas plans against what the operator is looking at, which is the
+        unsaved draft — so a candidate may be supplied. It is validated by the
+        same `validate_candidate` a save goes through first: an invalid base
+        cannot be planned over, because the proposal's whole meaning is "this
+        graph, extended", and there is no meaning in extending a graph the
+        runtime would refuse.
+        """
+        if candidate is not None:
+            report = self.validate_candidate(candidate)
+            if not report["valid"]:
+                error = BridgeError(PLANNER_BASE_INVALID,
+                                    "; ".join(report["errors"]) or "base workflow is invalid")
+                error.diagnostics = report["diagnostics"]
+                raise error
+            base = report["candidate"]
+            if str(base.get("workflow_id")) != str(workflow_id):
+                raise BridgeError(WRITE_IDENTITY_MISMATCH,
+                                  f"candidate declares workflow_id {base.get('workflow_id')!r}, "
+                                  f"target is {workflow_id!r}")
+            return base, report["semantic_hash"]
+        frame = self.load_workflow(workflow_id)
+        if not frame["valid"]:
+            raise BridgeError(PLANNER_BASE_INVALID,
+                              f"{workflow_id} does not validate: {'; '.join(frame['errors'])}")
+        return frame["definition"], frame["semantic_hash"]
+
+    def _active_run_for(self, workflow_id: str) -> str | None:
+        with self._lock:
+            for handle in self._runs.values():
+                if str(handle.workflow_id) == str(workflow_id) and handle.lifecycle == RUN_ACTIVE:
+                    return handle.run_id
+        return None
+
+    def plan_from_node(self, workflow_id: str, anchor_node_id: str, *,
+                       instruction: str = "", candidate: Mapping[str, Any] | None = None,
+                       adapter: Any = None, profile_id: str | None = None) -> dict[str, Any]:
+        """Ask the planner for a proposed subgraph from one anchor. Writes nothing.
+
+        Every exit of this method leaves the workflow file, the executable
+        graph and the workflow's semantic hash exactly as it found them; the
+        returned frame carries the base hash twice, measured before and after,
+        so that is a checkable claim and not a promise.
+
+        Provider failures are reported, not raised: a planner that could not
+        answer is a fact the canvas shows, the same way a refused save is.
+        """
+        base, before_hash = self._planning_base(workflow_id, candidate)
+        limits = self._planner_limits()
+        try:
+            package = planner_proposal.planning_package(
+                base, anchor_node_id, instruction=instruction, limits=limits)
+        except planner_proposal.ProposalRefusal as exc:
+            raise BridgeError(exc.code, str(exc), [exc.as_diagnostic()]) from exc
+        input_hash = planner_proposal.package_hash(package)
+        request_id = "PLANREQ-" + uuid.uuid4().hex[:12]
+        self._planner_event(planner_proposal.PLANNER_STARTED, {
+            "request_id": request_id, "workflow_id": str(workflow_id),
+            "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+            "base_semantic_hash": before_hash,
+            "package_bytes": package.get("package_bytes"),
+            "instruction_chars": len(str(instruction or "")),
+        })
+
+        frame: dict[str, Any] = {
+            "bridge_version": BRIDGE_VERSION,
+            "contract": planner_proposal.PROPOSAL_CONTRACT,
+            "request_id": request_id, "workflow_id": str(workflow_id),
+            "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+            "base_semantic_hash": before_hash, "package": package,
+            "status": None, "proposal": None, "summary": None,
+            "diagnostics": [], "errors": [], "preview": None, "planner": None,
+        }
+        try:
+            kwargs: dict[str, Any] = {}
+            if adapter is None and aaw_planner.current_planner_adapter() is aaw_planner.provider_planner:
+                kwargs["profile_id"] = profile_id
+            raw, telemetry = aaw_planner.invoke_planner(package, adapter=adapter, **kwargs)
+        except aaw_planner.PlannerError as exc:
+            frame.update({"status": planner_proposal.PLANNER_FAILED,
+                          "errors": [str(exc)],
+                          "diagnostics": [{"code": exc.code, "message": str(exc),
+                                           "node_id": str(anchor_node_id), "edge_id": None,
+                                           "source": "PLANNER"}]})
+            self._planner_event(planner_proposal.PLANNER_FAILED, {
+                "request_id": request_id, "workflow_id": str(workflow_id),
+                "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+                "code": exc.code, "message": str(exc)})
+            frame["base_semantic_hash_after"] = routing_contract.semantic_hash(
+                self._planning_base(workflow_id, candidate)[0])
+            return frame
+        except Exception as exc:                    # a broken adapter is a planner failure
+            detail = f"{type(exc).__name__}: {exc}"
+            frame.update({"status": planner_proposal.PLANNER_FAILED, "errors": [detail],
+                          "diagnostics": [{"code": aaw_planner.PLANNER_DISPATCH_FAILED,
+                                           "message": detail, "node_id": str(anchor_node_id),
+                                           "edge_id": None, "source": "PLANNER"}]})
+            self._planner_event(planner_proposal.PLANNER_FAILED, {
+                "request_id": request_id, "workflow_id": str(workflow_id),
+                "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+                "code": aaw_planner.PLANNER_DISPATCH_FAILED, "message": detail})
+            frame["base_semantic_hash_after"] = routing_contract.semantic_hash(
+                self._planning_base(workflow_id, candidate)[0])
+            return frame
+
+        planner_row = {key: telemetry.get(key) for key in
+                       ("harness", "provider", "profile", "model", "effort", "access_class",
+                        "provider_session_id", "wall_time_s", "adapter", "telemetry_status",
+                        "invocation")}
+        frame["planner"] = planner_row
+        self._planner_event(planner_proposal.PLANNER_COMPLETED, {
+            "request_id": request_id, "workflow_id": str(workflow_id),
+            "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+            "planner": planner_row})
+
+        try:
+            proposal = planner_proposal.normalize_proposal(
+                raw, workflow=base, anchor_node_id=str(anchor_node_id),
+                intent_fallback=str(instruction or ""))
+        except planner_proposal.ProposalRefusal as exc:
+            return self._store_invalid(frame, workflow_id, request_id, input_hash,
+                                       before_hash, [exc.as_diagnostic()], [str(exc)],
+                                       candidate)
+
+        report = planner_proposal.validate_proposal(
+            base, proposal, limits=limits, schema_validator=self.validate_candidate)
+        record = {
+            "proposal": proposal, "status": report["status"],
+            "summary": planner_proposal.proposal_summary(proposal),
+            "validation": {key: report[key] for key in
+                           ("status", "valid", "diagnostics", "errors", "semantic_hash",
+                            "added_node_ids", "added_edge_ids", "detached_edge_ids")},
+            "planner": planner_row, "input_hash": input_hash, "request_id": request_id,
+            "workflow_id": str(workflow_id), "created_at": _now(), "resolved_at": None,
+            # The applied graph is kept only as a *preview*. It is never
+            # written, never handed to a runner, and is recomputed from the
+            # live workflow on accept.
+            "preview": ({"projection": report["projection"],
+                         "semantic_hash": report["semantic_hash"]} if report["valid"] else None),
+        }
+        with self._lock:
+            self._proposals[str(proposal["proposal_id"])] = record
+            while len(self._proposals) > PROPOSAL_STORE_LIMIT:
+                self._proposals.pop(next(iter(self._proposals)))
+
+        frame.update({"status": report["status"], "proposal": proposal,
+                      "summary": record["summary"], "diagnostics": report["diagnostics"],
+                      "errors": report["errors"], "preview": record["preview"],
+                      "materialization": report.get("materialization"),
+                      "added_node_ids": report["added_node_ids"],
+                      "added_edge_ids": report["added_edge_ids"],
+                      "detached_edge_ids": report["detached_edge_ids"]})
+        self._planner_event(report["status"], {
+            "request_id": request_id, "workflow_id": str(workflow_id),
+            "anchor_node_id": str(anchor_node_id), "input_hash": input_hash,
+            "proposal_id": proposal["proposal_id"],
+            "proposal_hash": record["summary"]["proposal_hash"],
+            "base_semantic_hash": before_hash,
+            "node_count": record["summary"]["node_count"],
+            "edge_count": record["summary"]["edge_count"],
+            "diagnostics": report["diagnostics"]})
+        # Measured, not asserted: the same hash, read again after the whole
+        # round trip, is what proves generation did not touch the workflow.
+        frame["base_semantic_hash_after"] = routing_contract.semantic_hash(
+            self._planning_base(workflow_id, candidate)[0])
+        return frame
+
+    def _store_invalid(self, frame: dict[str, Any], workflow_id: str, request_id: str,
+                       input_hash: str, before_hash: str,
+                       diagnostics: Sequence[Mapping[str, Any]], errors: Sequence[str],
+                       candidate: Mapping[str, Any] | None) -> dict[str, Any]:
+        """Planner output refused before it could even become a proposal."""
+        frame.update({"status": planner_proposal.PROPOSAL_INVALID,
+                      "diagnostics": [dict(row) for row in diagnostics],
+                      "errors": list(errors)})
+        self._planner_event(planner_proposal.PROPOSAL_INVALID, {
+            "request_id": request_id, "workflow_id": str(workflow_id),
+            "anchor_node_id": frame.get("anchor_node_id"), "input_hash": input_hash,
+            "proposal_id": None, "base_semantic_hash": before_hash,
+            "diagnostics": [dict(row) for row in diagnostics]})
+        frame["base_semantic_hash_after"] = routing_contract.semantic_hash(
+            self._planning_base(workflow_id, candidate)[0])
+        return frame
+
+    def _proposal_record(self, proposal_id: str) -> dict[str, Any]:
+        with self._lock:
+            record = self._proposals.get(str(proposal_id))
+        if record is None:
+            raise BridgeError(PROPOSAL_UNKNOWN, f"unknown proposal {proposal_id!r}")
+        return record
+
+    def list_proposals(self, workflow_id: str | None = None, *,
+                       candidate: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Every proposal this bridge is holding, with staleness re-measured.
+
+        Why this exists: a browser refresh loses the canvas's reference to a
+        proposal, not the proposal. Re-attaching is a read, and the read tells
+        the truth about whether the graph has moved underneath it since.
+        """
+        with self._lock:
+            records = [(pid, record) for pid, record in self._proposals.items()
+                       if workflow_id is None or str(record["workflow_id"]) == str(workflow_id)]
+        rows = []
+        for proposal_id, record in records:
+            stale = None
+            if record["status"] == planner_proposal.PROPOSAL_READY:
+                try:
+                    base, _ = self._planning_base(str(record["workflow_id"]),
+                                                  candidate if workflow_id else None)
+                    stale = planner_proposal.is_stale(base, record["proposal"])
+                except BridgeError:
+                    stale = None
+            rows.append({"proposal_id": proposal_id, "status": record["status"], "stale": stale,
+                         "workflow_id": record["workflow_id"],
+                         "created_at": record["created_at"],
+                         "resolved_at": record["resolved_at"],
+                         "request_id": record["request_id"],
+                         "planner": record["planner"], "summary": record["summary"],
+                         "diagnostics": record["validation"]["diagnostics"]})
+        return {"bridge_version": BRIDGE_VERSION,
+                "contract": planner_proposal.PROPOSAL_CONTRACT,
+                "workflow_id": workflow_id, "proposals": rows}
+
+    def proposal(self, proposal_id: str, *,
+                 candidate: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """One proposal in full, with its preview and current staleness."""
+        record = self._proposal_record(proposal_id)
+        try:
+            base, _ = self._planning_base(str(record["workflow_id"]), candidate)
+            stale = planner_proposal.is_stale(base, record["proposal"])
+        except BridgeError:
+            stale = None
+        return {"bridge_version": BRIDGE_VERSION,
+                "contract": planner_proposal.PROPOSAL_CONTRACT,
+                "proposal_id": str(proposal_id), "status": record["status"],
+                "stale": stale, "proposal": record["proposal"],
+                "summary": record["summary"], "validation": record["validation"],
+                "preview": record["preview"], "planner": record["planner"],
+                "workflow_id": record["workflow_id"], "created_at": record["created_at"],
+                "resolved_at": record["resolved_at"]}
+
+    def accept_proposal(self, proposal_id: str, *,
+                        candidate: Mapping[str, Any] | None = None,
+                        persist: bool = False) -> dict[str, Any]:
+        """The operator's explicit acceptance. The only mutating planner path.
+
+        Order, and what each step refuses:
+
+          1  the proposal is READY and unresolved     PROPOSAL_NOT_ACCEPTABLE /
+                                                      PROPOSAL_ALREADY_RESOLVED
+          2  no run of this workflow is moving        PROPOSAL_RUN_ACTIVE
+          3  the base still validates                 PLANNER_BASE_INVALID
+          4  the base has not moved since generation  PROPOSAL_STALE
+          5  the proposal still validates now         PROPOSAL_INVALID
+          6  the resulting graph validates            PROPOSAL_INVALID
+
+        Only after all six does anything change, and the change is one atomic
+        document: `apply_proposal` builds a whole new candidate from a deep
+        copy, so there is no state in which half a proposal has been applied.
+        Persisting, when asked for, is `save_workflow` — the same validated,
+        stale-checked, atomic write every other canvas edit takes.
+        """
+        record = self._proposal_record(proposal_id)
+        workflow_id = str(record["workflow_id"])
+        proposal = record["proposal"]
+
+        if record["status"] in (planner_proposal.PROPOSAL_ACCEPTED,
+                                planner_proposal.PROPOSAL_REJECTED):
+            # A duplicate Accept must not apply the mutation twice. This is the
+            # refusal, not a re-application that happens to be idempotent.
+            raise BridgeError(PROPOSAL_ALREADY_RESOLVED,
+                              f"proposal {proposal_id} is already {record['status']}; "
+                              f"generate a new one")
+        if record["status"] != planner_proposal.PROPOSAL_READY:
+            raise BridgeError(PROPOSAL_NOT_ACCEPTABLE,
+                              f"proposal {proposal_id} is {record['status']} and cannot "
+                              f"be accepted", record["validation"]["diagnostics"])
+        active = self._active_run_for(workflow_id)
+        if active:
+            raise BridgeError(PROPOSAL_RUN_ACTIVE,
+                              f"run {active} of {workflow_id} is still moving; accepting a "
+                              f"planner proposal is BUILD authoring and is refused while a "
+                              f"run of this workflow is active")
+
+        base, current_hash = self._planning_base(workflow_id, candidate)
+        if planner_proposal.is_stale(base, proposal):
+            with self._lock:
+                record["status"] = planner_proposal.PROPOSAL_STALE
+                record["resolved_at"] = _now()
+            message = (f"{workflow_id} changed since this proposal was generated "
+                       f"(now {current_hash}, proposal based on "
+                       f"{proposal.get('base_semantic_hash')}); regenerate it — V0.1 does "
+                       f"not attempt a semantic three-way merge")
+            self._planner_event(planner_proposal.PROPOSAL_STALE, {
+                "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+                "phase": "ACCEPT", "code": PROPOSAL_STALE, "message": message,
+                "base_semantic_hash": proposal.get("base_semantic_hash"),
+                "semantic_hash": current_hash})
+            raise BridgeError(PROPOSAL_STALE, message)
+
+        report = planner_proposal.validate_proposal(
+            base, proposal, limits=self._planner_limits(),
+            schema_validator=self.validate_candidate)
+        if not report["valid"]:
+            with self._lock:
+                record["status"] = planner_proposal.PROPOSAL_INVALID
+                record["validation"] = {key: report[key] for key in
+                                        ("status", "valid", "diagnostics", "errors",
+                                         "semantic_hash", "added_node_ids", "added_edge_ids",
+                                         "detached_edge_ids")}
+            message = "; ".join(report["errors"]) or "proposal no longer validates"
+            self._planner_event(planner_proposal.PROPOSAL_INVALID, {
+                "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+                "phase": "ACCEPT", "code": PROPOSAL_INVALID, "message": message,
+                "diagnostics": report["diagnostics"]})
+            raise BridgeError(PROPOSAL_INVALID, message, report["diagnostics"])
+
+        applied = report["candidate"]
+        written = False
+        save: dict[str, Any] | None = None
+        if persist:
+            # If this refuses, nothing has been written and `applied` is
+            # discarded: the previous valid workflow is still the workflow.
+            save = self.save_workflow(workflow_id, applied, base_semantic_hash=current_hash)
+            written = bool(save.get("written"))
+
+        with self._lock:
+            record["status"] = planner_proposal.PROPOSAL_ACCEPTED
+            record["resolved_at"] = _now()
+        self._planner_event(planner_proposal.PROPOSAL_ACCEPTED, {
+            "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+            "anchor_node_id": proposal.get("anchor_node_id"),
+            "proposal_hash": record["summary"]["proposal_hash"],
+            "previous_semantic_hash": current_hash,
+            "semantic_hash": report["semantic_hash"],
+            "added_node_ids": report["added_node_ids"],
+            "added_edge_ids": report["added_edge_ids"],
+            "detached_edge_ids": report["detached_edge_ids"],
+            "persisted": written})
+        return {"bridge_version": BRIDGE_VERSION,
+                "contract": planner_proposal.PROPOSAL_CONTRACT,
+                "status": planner_proposal.PROPOSAL_ACCEPTED,
+                "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+                "anchor_node_id": proposal.get("anchor_node_id"),
+                "candidate": applied, "projection": report["projection"],
+                "previous_semantic_hash": current_hash,
+                "semantic_hash": report["semantic_hash"],
+                "added_node_ids": report["added_node_ids"],
+                "added_edge_ids": report["added_edge_ids"],
+                "detached_edge_ids": report["detached_edge_ids"],
+                "persisted": written, "save": save,
+                "undo_label": "accept planner proposal " + str(proposal_id)}
+
+    def reject_proposal(self, proposal_id: str, *, reason: str = "") -> dict[str, Any]:
+        """Discard a proposal. Changes nothing else, and says so with a hash."""
+        record = self._proposal_record(proposal_id)
+        workflow_id = str(record["workflow_id"])
+        if record["status"] == planner_proposal.PROPOSAL_ACCEPTED:
+            raise BridgeError(PROPOSAL_ALREADY_RESOLVED,
+                              f"proposal {proposal_id} was already accepted; rejecting it "
+                              f"now would not undo the mutation — use Undo")
+        with self._lock:
+            record["status"] = planner_proposal.PROPOSAL_REJECTED
+            record["resolved_at"] = _now()
+            self._proposals.pop(str(proposal_id), None)
+        semantic = None
+        try:
+            semantic = self._planning_base(workflow_id, None)[1]
+        except BridgeError:
+            pass
+        self._planner_event(planner_proposal.PROPOSAL_REJECTED, {
+            "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+            "proposal_hash": record["summary"]["proposal_hash"],
+            "reason": str(reason or ""), "semantic_hash": semantic})
+        return {"bridge_version": BRIDGE_VERSION,
+                "contract": planner_proposal.PROPOSAL_CONTRACT,
+                "status": planner_proposal.PROPOSAL_REJECTED,
+                "proposal_id": str(proposal_id), "workflow_id": workflow_id,
+                "reason": str(reason or ""), "semantic_hash": semantic,
+                "workflow_changed": False}
+
+    def planner_status(self, profile_id: str | None = None) -> dict[str, Any]:
+        """Whether a real planner call is possible, without making one."""
+        row = dict(aaw_planner.planner_status(profile_id))
+        row.update({"bridge_version": BRIDGE_VERSION,
+                    "limits": self._planner_limits().as_dict()})
+        return row
 
 # ─────────────────────────────── helpers ───────────────────────────────
 
@@ -1275,6 +1763,17 @@ def public_contract() -> dict[str, Any]:
         "build": ["list_workflows", "load_workflow", "graph_projection",
                   "validate_candidate", "save_workflow", "create_workflow", "blank_workflow",
                   "load_layout", "save_layout"],
+        # AAW PLANNER PROPOSAL PIPELINE V0.1. Listed apart from `build` because
+        # planning is not an authoring primitive: it produces a proposal, and
+        # only `accept_proposal` reaches the authoring write path at all.
+        "planner": ["planner_status", "plan_from_node", "list_proposals", "proposal",
+                    "accept_proposal", "reject_proposal", "planner_events"],
+        "planner_contract": planner_proposal.public_contract(),
+        "planner_event_types": list(planner_proposal.PLANNER_EVENT_TYPES),
+        "proposal_statuses": list(planner_proposal.PROPOSAL_STATUSES),
+        "proposal_codes": list(PROPOSAL_CODES),
+        "proposal_refusal_codes": list(planner_proposal.REFUSAL_CODES),
+        "planner_failure_codes": list(aaw_planner.PLANNER_FAILURE_CODES),
         "run": ["start_run", "list_runs", "run_projection", "events", "cancel_run",
                 "resolve_human_decision", "adopt_run", "plan_resume", "reset_downstream",
                 "run_worktree", "keep_run_changes", "discard_run_changes",
@@ -1296,12 +1795,18 @@ def public_contract() -> dict[str, Any]:
         "routing_modes": list(routing_contract.ROUTING_MODES),
         "terminals": list(routing_contract.TERMINALS),
         "lifecycles": [RUN_PENDING, RUN_ACTIVE, RUN_SETTLED],
-        "deferred": ["planner graph mutation", "repair branch merge/rejoin", "routing DSL",
+        # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1. Context is now
+        # path-scoped (`routing_contract.ancestry_of`) and MERGE is a first-
+        # class node type — "repair branch merge/rejoin" is no longer deferred.
+        # AAW PLANNER PROPOSAL PIPELINE V0.1. "planner graph mutation" is no
+        # longer deferred: a planner can propose one and an operator can accept
+        # it. What remains deferred about the planner is named precisely, in
+        # `planner_contract.deferred`, rather than as one broad phrase.
+        "deferred": ["planner Modify", "automatic stale-proposal resolution",
+                     "N-of-M quorum merge", "routing DSL",
+                     "optional/non-closed merge inputs", "cyclic graph execution",
                      "advanced loops", "multi-user", "remote deployment", "telemetry UI",
                      "workflow delete"],
-        # Recorded per AAW CANVAS FUNCTIONALIZATION V0.1 §5, on the wire so a
-        # canvas cannot offer merge without seeing why it is absent.
-        "merge_prerequisite": (
-            "path-scoped carry_forward is a prerequisite for future branch merge/rejoin; "
-            "accumulate_carry_forward is currently run-global, not per-lineage"),
+        "merge_policies": list(routing_contract.MERGE_POLICIES),
+        "arrival_statuses": list(routing_contract.ARRIVAL_STATUSES),
     }

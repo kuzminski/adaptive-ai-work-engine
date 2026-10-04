@@ -59,7 +59,7 @@ operator-led workflows, not yet for unattended production automation.
 | Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
 | Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASE CANDIDATE — see `AAW_PRODUCT_MVP_V0_2.md` |
 | Dynamic planner | PLANNED |
-| Repair merge/rejoin | PLANNED |
+| Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 
 ## Product app (MVP V0.2 — release candidate `0.2.0-rc1`)
 
@@ -87,6 +87,22 @@ its analytics index is disposable and never becomes execution authority.
 
 Every route that needs approval ends at a Human Gate. A Human Gate can record
 an acceptance candidate but cannot merge, push, or open a pull request.
+
+## Starting AAW
+
+Double-click `START_AAW.cmd`. It starts the bridge server if it is not
+already running, waits for it to become healthy, and opens the current live
+canvas in your default browser. If AAW is already running, it reuses that
+instance instead of starting a duplicate.
+
+- Log: `.runtime\launcher\launcher.log` (bridge output: `.runtime\launcher\bridge.log`)
+- If startup fails, the console window explains why and stays open so you can
+  read the message.
+- To stop a launcher-started instance, double-click `STOP_AAW.cmd`.
+
+Manual bridge startup (`python aaw_bridge_server.py ...`, see below) remains
+available for development, debugging, and scripted use — `START_AAW.cmd` is
+the normal entry point, not the only one.
 
 ## Installation
 
@@ -126,7 +142,11 @@ python workflow_runner.py --workflow WORKFLOWS\IMPLEMENT_REVIEW_REPAIR_V1.json `
   --repo C:\path\to\repo --worktree C:\path\to\repo-worktree --dry-run
 ```
 
-The Control Center can be started locally with:
+The Control Center is a separate desktop tool for the older, queue-based
+Single Task / Workflow / Custom Job primitives (recipes, presets, run
+history, disposable analytics). It is not the current live-canvas UI and is
+not started by `START_AAW.cmd`. It remains available for operators who want
+that interface:
 
 ```powershell
 python CONTROL_CENTER\aaw_control_center.py
@@ -148,7 +168,9 @@ reporting guidance and operating boundaries.
   bundled in this repository.
 - ORCA supervision and local Qwen preprocessing are opt-in experiments, not
   policy authority or automatic fallbacks.
-- Static workflow branches do not yet merge or rejoin automatically.
+- Static workflow branches merge only through an explicitly declared `MERGE`
+  node (`ALL_REQUIRED`/`ANY_COMPLETED`); there is no implicit or automatic
+  join, and no planner-driven graph mutation yet.
 - Focused green tests do not prove provider availability, runtime credentials,
   or a release authorization.
 
@@ -156,8 +178,10 @@ reporting guidance and operating boundaries.
 
 Near-term work focuses on completing portable configuration, stabilizing the
 Control Center and execution-identity surfaces, and improving descriptive
-analytics. Dynamic planning and repair merge/rejoin remain planned and require
-separate design and safety gates.
+analytics. Path-scoped branch context and a declared `MERGE`/rejoin primitive
+are implemented (see `AAW_PATH_SCOPED_BRANCH_CONTEXT_MERGE_V0_1.md`). Dynamic
+planner-driven graph mutation remains planned and requires separate design and
+safety gates.
 
 ## Test status
 

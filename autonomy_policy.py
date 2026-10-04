@@ -163,3 +163,33 @@ def select_continuation_planner(profiles: Mapping[str, str], final_selection: Ma
 def profile_id_map(policy_bindings: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
     return {key: str(binding["profile_id"]) for key, binding in policy_bindings.items()
             if isinstance(binding, Mapping) and isinstance(binding.get("profile_id"), str)}
+
+
+# ── V0.4: bounded repair escalation (roles, not model names) ─────────────────
+
+def default_repair_escalation(profiles: Mapping[str, str]) -> dict[str, Any]:
+    """The ladder implied by the policy profiles when AUTONOMY_ROLES does not configure one.
+
+    Roles only: `default_implementer` is the implementer family's profile,
+    `difficult_implementer` the capability-escalation profile, `planner` the
+    initial planner. Changing a profile ID in `policy_profiles` (or supplying
+    an explicit `repair_escalation` block) changes the ladder; this module
+    names no model.
+    """
+    return {"enabled": True, "stages": ["CURRENT", "EFFORT_UP", "DIFFICULT_IMPLEMENTER", "PLANNER_DIAGNOSIS"],
+            "max_effort_steps": 1, "max_attempts_per_stage": 2,
+            "effort_ladder": [profiles["implementer_default"], profiles["implementer_harder"],
+                              profiles["implementer_hard"]],
+            "roles": {"default_implementer": profiles["implementer_default"],
+                      "difficult_implementer": profiles["implementer_capability_escalation"],
+                      "planner": profiles["initial_planner"], "reviewer": profiles["primary_reviewer"],
+                      "final_reviewer": profiles["final_review_default"]}}
+
+
+def select_repair_step(step: Mapping[str, Any], *, profile_id: str, previous_profile_id: str | None,
+                       evidence: Sequence[Any] = ()) -> dict[str, Any]:
+    """A selection record for an escalated repair (or diagnosis) step; same shape as `_selection`."""
+    return {"policy_version": POLICY_VERSION, "profile_key": "repair_escalation_" + str(step["stage"]).lower(),
+            "profile_id": profile_id, "selection_reason": "REPAIR_ESCALATION:" + str(step["stage"]),
+            "tier": str(step["stage"]), "complexity_risk_evidence": [str(e) for e in evidence],
+            "previous_attempt": None, "escalated_from": previous_profile_id}

@@ -496,6 +496,24 @@
       "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "exact_runtime_mapping_of": "SONNET_5_5_MEDIUM",
       "curated": true
+    },
+    {
+      "profile_id": "ANTIGRAVITY_FREE",
+      "display_name": "Google Antigravity (FREE) / experimental",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR"
+      ],
+      "description": "EXPERIMENTAL provider: SMALL/MEDIUM implementations, adapter tests and simple repairs only. Live integration NOT_TESTED.",
+      "harness": "antigravity",
+      "runtime_model_id": "antigravity-free",
+      "effort": "default",
+      "availability": "KNOWN_BUT_UNAVAILABLE",
+      "unavailable_reason": "Antigravity live integration NOT_TESTED / CLI not installed",
+      "trust_level": "EXPERIMENTAL",
+      "curated": false,
+      "not_implementer": false
     }
   ]
 }

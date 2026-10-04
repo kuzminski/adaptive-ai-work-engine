@@ -1,0 +1,168 @@
+{
+  "results": [
+    {
+      "label": "DOC_extract_verify_synthesize",
+      "case_id": "DOC_extract_verify_synthesize",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-f4a1108b984e6f78",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "semantic_hash_after": "61295bf57fa4b89afc7455c06a7b6030f7f76d3445b45afb2df83bcd5ca1854c",
+      "added_node_ids": [
+        "N03"
+      ],
+      "added_edge_ids": [
+        "E_N02_N03",
+        "E_N03_N09"
+      ],
+      "detached_edge_ids": [
+        "E_N02_PASS"
+      ],
+      "run_id": "AAW_20260913_134018_5194d385",
+      "run_lifecycle": "SETTLED",
+      "run_status": "WAITING_FOR_HUMAN",
+      "run_final_outcome": "HUMAN_REQUIRED",
+      "run_completed_nodes": [
+        "N01",
+        "N02",
+        "N03",
+        "N09"
+      ]
+    },
+    {
+      "label": "AMBIGUOUS_cleanup_vague",
+      "case_id": "AMBIGUOUS_cleanup_vague",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-d71f02656224a685",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "d2898967d52fd4b879e0fb06f44f904f88544d831d5420005ead41aea7c435e5",
+      "semantic_hash_after": "5236523682c24da204b00e719bd2d589769d698bb0162ffd90d11cf1a624f8f1",
+      "added_node_ids": [
+        "N02C"
+      ],
+      "added_edge_ids": [
+        "E_N02_CLEANUP",
+        "E_N02C_CONTINUE"
+      ],
+      "detached_edge_ids": [
+        "E_N02_CONTINUE"
+      ],
+      "run_id": "AAW_20260913_134021_4cbeb61a",
+      "run_lifecycle": "SETTLED",
+      "run_status": "WAITING_FOR_HUMAN",
+      "run_final_outcome": "HUMAN_REQUIRED",
+      "run_completed_nodes": [
+        "N01",
+        "N02",
+        "N02C",
+        "N03",
+        "N04",
+        "N09"
+      ]
+    },
+    {
+      "label": "AMBIGUOUS_handoff_ready",
+      "case_id": "AMBIGUOUS_handoff_ready",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-510d71fa64448e9d",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "29b4456c8d2a5cbce66418c4bc0ae06771b2fadbfe730d4e0238ab8709674c2e",
+      "semantic_hash_after": "2045a4d518b524b0687fdabe8a00ed6b0f80469d13be06f6dd1dfb8d3c156acc",
+      "added_node_ids": [
+        "N10"
+      ],
+      "added_edge_ids": [
+        "E_N02_PASS_HANDOFF",
+        "E_N02_PASS"
+      ],
+      "detached_edge_ids": [
+        "E_N02_PASS"
+      ],
+      "run_id": "AAW_20260913_134033_f184e959",
+      "run_lifecycle": "SETTLED",
+      "run_status": "BLOCKED",
+      "run_final_outcome": "BLOCKED",
+      "run_completed_nodes": [
+        "N01",
+        "N02",
+        "N10"
+      ]
+    },
+    {
+      "label": "RESEARCH_two_explanations_one_verdict",
+      "case_id": "RESEARCH_two_explanations_one_verdict",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-eb1af26b7a80a654",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "29b4456c8d2a5cbce66418c4bc0ae06771b2fadbfe730d4e0238ab8709674c2e",
+      "semantic_hash_after": "4b296849635d6eb2fc3be67078de5e1e4d82994b264702891e5f86f88d38e82f",
+      "added_node_ids": [
+        "N10",
+        "N11",
+        "M12"
+      ],
+      "added_edge_ids": [
+        "E_N01_N10",
+        "E_N01_N11",
+        "E_N10_M12",
+        "E_N11_M12",
+        "E_M12_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "run_id": "AAW_20260913_134037_d5242d64",
+      "run_lifecycle": "SETTLED",
+      "run_status": "BLOCKED",
+      "run_final_outcome": "BLOCKED",
+      "run_completed_nodes": [
+        "N01",
+        "N10",
+        "N11",
+        "M12",
+        "N02"
+      ]
+    },
+    {
+      "label": "DOC_numbers_match_sources",
+      "case_id": "DOC_numbers_match_sources",
+      "profile": "SOL_HIGH",
+      "proposal_id": "PROP-37db0073a3be5a98",
+      "accept_status": "PROPOSAL_ACCEPTED",
+      "persisted": true,
+      "semantic_hash_before": "2544f30c677d234abf81fb25f489ffa9977be30c60ca002a1f985562838cf968",
+      "semantic_hash_after": "b397536738c085eacdd01d0b724d4176b86664ef2c096b73cb7a83549778953b",
+      "added_node_ids": [
+        "N10",
+        "N11",
+        "N12R"
+      ],
+      "added_edge_ids": [
+        "E_N01_TO_N10",
+        "E_N10_TO_N11",
+        "E_N11_PASS_TO_N02",
+        "E_N11_REPAIR_TO_N12R",
+        "E_N11_BLOCKED_TO_HUMAN",
+        "E_N12R_TO_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "run_id": "AAW_20260913_134043_a2abfc53",
+      "run_lifecycle": "SETTLED",
+      "run_status": "WAITING_FOR_HUMAN",
+      "run_final_outcome": "HUMAN_REQUIRED",
+      "run_completed_nodes": [
+        "N01",
+        "N10",
+        "N11",
+        "N02",
+        "N09"
+      ]
+    }
+  ]
+}

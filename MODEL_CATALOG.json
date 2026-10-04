@@ -344,6 +344,27 @@
         "CURRENT_CLAUDE_CLI_ACCEPTS_MODEL_ID",
         "AAW_PRODUCT_RUNTIME_PROBE"
       ]
+    },
+    {
+      "provider": "google",
+      "harness": "antigravity",
+      "model_family": "Google Antigravity (FREE)",
+      "runtime_model_id": "antigravity-free",
+      "supported_efforts": [
+        "default"
+      ],
+      "runtime_available": false,
+      "account_available": false,
+      "access_class": "FREE_EXPERIMENTAL",
+      "automatic_use_allowed": false,
+      "manual_use_allowed": true,
+      "trust_level": "EXPERIMENTAL",
+      "live_integration": "NOT_TESTED",
+      "reason": "Antigravity CLI is not installed/verified here; adapter contract, capability detection and routing exist, live dispatch is NOT_TESTED.",
+      "role_hint": "EXPERIMENTAL: adequate SMALL/MEDIUM work, adapter tests, simple implementations and repairs. Never the sole critical reviewer, never an automatic VERY_LARGE/critical implementer.",
+      "source_class": [
+        "ADAPTER_CONTRACT_ONLY"
+      ]
     }
   ]
 }

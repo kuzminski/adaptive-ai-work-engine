@@ -1,0 +1,1215 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "evaluation": "AAW_PLANNER_PACKAGE_REPAIR_V0.4",
+  "generated_at": "2026-09-13T11:32:12+0200",
+  "results": [
+    {
+      "case_id": "A_simple_linear",
+      "class": "9A",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Before the review, insert a bounded research/synthesis step that gathers context on the change, then let the review proceed exactly as it does today.",
+      "expected": "2-3 nodes: a research/synthesis step then the existing review path preserved via detach+re-route of E_N01_CONTINUE.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 21.8,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a16-ac7a-7842-9280-6187f88a77b1",
+        "wall_time_s": 21.71,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-db6c2d75ebad9494",
+      "proposal_hash": "db6c2d75ebad94942da6b818e4f0df024b251830f8ebdfac371cb4754c77ee80",
+      "intent": "Insert one bounded research and synthesis step between implementation and the unchanged existing review.",
+      "node_count": 1,
+      "edge_count": 2,
+      "detach_count": 1,
+      "anchor_routing": "FIRST_MATCH",
+      "assumptions": [
+        "The workflow passes the synthesis produced by N03 into the context available to the existing N02 review.",
+        "Gathering context can be completed without modifying the implementation."
+      ],
+      "warnings": [
+        "Before accepting, verify that the available context sources are sufficient and permitted for the proposed research step.",
+        "Confirm that replacing E_N01_CONTINUE with the two proposed edges leaves N02 and all of its existing review behavior unchanged."
+      ],
+      "added_node_ids": [
+        "N03"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N03_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12598,
+      "input_hash": "34352d8ff637557dedf0e950deb7bc7c951900e74dfd1d25a5f47a714c2f35ba",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Insert one bounded research and synthesis step between implementation and the unchanged existing review.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "IMPLEMENT",
+            "role": "RESEARCH_SYNTHESIZER",
+            "capability": "RESEARCH_SYNTHESIZER",
+            "effort": "medium",
+            "instructions": "Gather context directly relevant to the implemented change and synthesize it for the downstream review. Bound the work to the change, its acceptance criteria, applicable constraints, material risks, and unresolved uncertainties. Clearly distinguish verified context, reasoned conclusions, and missing information. Do not edit the implementation or make release decisions.",
+            "acceptance": [
+              "A concise synthesis covers the change, its acceptance criteria, applicable constraints, material risks, and unresolved uncertainties.",
+              "Verified context, conclusions, and missing information are clearly distinguished for the downstream review.",
+              "The implementation remains unmodified by this step."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "research context"
+          },
+          {
+            "edge_id": "E_N03_N02",
+            "from": "N03",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "continue to existing review"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "FIRST_MATCH",
+        "replacements": [],
+        "assumptions": [
+          "The workflow passes the synthesis produced by N03 into the context available to the existing N02 review.",
+          "Gathering context can be completed without modifying the implementation."
+        ],
+        "warnings": [
+          "Before accepting, verify that the available context sources are sufficient and permitted for the proposed research step.",
+          "Confirm that replacing E_N01_CONTINUE with the two proposed edges leaves N02 and all of its existing review behavior unchanged."
+        ],
+        "proposal_id": "PROP-db6c2d75ebad9494"
+      }
+    },
+    {
+      "case_id": "B_parallel_merge",
+      "class": "9B",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Investigate this problem independently from two different perspectives in parallel, then merge both sets of findings into one before the review proceeds.",
+      "expected": "fan-out into two branches, MERGE ALL_REQUIRED, then into the existing review; a legal closed-incoming MERGE.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 49.307,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a17-00ac-7b22-a895-1b62f311a245",
+        "wall_time_s": 49.239,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-042fd30979219041",
+      "proposal_hash": "042fd3097921904171ac5a38918b039bc7aa29c615dcd7c628c4ae272977f1a7",
+      "intent": "Run two independent, distinct investigations in parallel and reunify their findings before the existing review proceeds.",
+      "node_count": 3,
+      "edge_count": 5,
+      "detach_count": 1,
+      "anchor_routing": "ALL_MATCHES",
+      "assumptions": [
+        "The supplied problem and relevant evidence remain available in each branch context after the anchor completes.",
+        "Architectural and evidence-and-operational-risk viewpoints satisfy the request for two different perspectives."
+      ],
+      "warnings": [
+        "Before accepting, verify that the two selected perspectives match the problem domain and are sufficiently non-overlapping.",
+        "Verify that MERGE preserves both complete branch outputs as one review input rather than only recording branch completion."
+      ],
+      "added_node_ids": [
+        "N03",
+        "N04",
+        "N05"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N01_N04",
+        "E_N03_N05",
+        "E_N04_N05",
+        "E_N05_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12602,
+      "input_hash": "5c1e911db1019476365df21e4454e42da43e9e0fd772944a02675dc2f235b0b8",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Run two independent, distinct investigations in parallel and reunify their findings before the existing review proceeds.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "IMPLEMENT",
+            "role": "ARCHITECT_STRONG",
+            "capability": "ARCHITECT_STRONG",
+            "effort": "high",
+            "instructions": "Investigate the supplied problem independently from a structural and architectural perspective. Examine boundaries, dependencies, failure modes, and solution tradeoffs. Produce a concise, evidence-separated findings set without relying on conclusions from the other investigation branch.",
+            "acceptance": [
+              "The findings address structural risks, dependencies, failure modes, and tradeoffs from an architectural perspective.",
+              "Confirmed facts, inferences, and unresolved uncertainties are clearly distinguished."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N04",
+            "type": "IMPLEMENT",
+            "role": "RESEARCH_SYNTHESIZER",
+            "capability": "RESEARCH_SYNTHESIZER",
+            "effort": "high",
+            "instructions": "Investigate the supplied problem independently from an evidence and operational-risk perspective. Examine observed behavior, competing explanations, verification gaps, and practical consequences. Produce a concise, evidence-separated findings set without relying on conclusions from the other investigation branch.",
+            "acceptance": [
+              "The findings address evidence quality, competing explanations, verification gaps, and operational consequences.",
+              "Confirmed facts, inferences, and unresolved uncertainties are clearly distinguished."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N05",
+            "type": "MERGE",
+            "role": null,
+            "capability": null,
+            "effort": null,
+            "instructions": "Wait for both independent investigation branches and expose their complete findings together as one combined input to the existing review.",
+            "acceptance": [
+              "Both required investigation outputs are present in the combined review input without either perspective being discarded."
+            ],
+            "depends_on": [
+              "N03",
+              "N04"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": "ALL_REQUIRED",
+            "expected_incoming": [
+              "E_N03_N05",
+              "E_N04_N05"
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "architectural investigation"
+          },
+          {
+            "edge_id": "E_N01_N04",
+            "from": "N01",
+            "to": "N04",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "evidence and operational-risk investigation"
+          },
+          {
+            "edge_id": "E_N03_N05",
+            "from": "N03",
+            "to": "N05",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "architectural findings complete"
+          },
+          {
+            "edge_id": "E_N04_N05",
+            "from": "N04",
+            "to": "N05",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "evidence findings complete"
+          },
+          {
+            "edge_id": "E_N05_N02",
+            "from": "N05",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "combined findings ready for review"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "ALL_MATCHES",
+        "replacements": [],
+        "assumptions": [
+          "The supplied problem and relevant evidence remain available in each branch context after the anchor completes.",
+          "Architectural and evidence-and-operational-risk viewpoints satisfy the request for two different perspectives."
+        ],
+        "warnings": [
+          "Before accepting, verify that the two selected perspectives match the problem domain and are sufficiently non-overlapping.",
+          "Verify that MERGE preserves both complete branch outputs as one review input rather than only recording branch completion."
+        ],
+        "proposal_id": "PROP-042fd30979219041"
+      }
+    },
+    {
+      "case_id": "C_review_repair",
+      "class": "9C",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N09",
+      "operator_instruction": "After human acceptance, add one more implementation step, followed by a strict independent review that can route any defects it finds into a bounded repair before the work is considered done.",
+      "expected": "IMPLEMENT -> REVIEW -> REPAIR trio with a legal REPAIR-kind edge targeting a REPAIR node; anchor N09 has no existing outgoing edges.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 19.271,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a17-c150-7a93-92f7-b08a8e30c780",
+        "wall_time_s": 19.208,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_INVALID",
+      "errors": [
+        "a proposal must add at least one node or one edge"
+      ],
+      "diagnostics": [
+        {
+          "code": "PROPOSAL_SHAPE",
+          "message": "a proposal must add at least one node or one edge",
+          "node_id": null,
+          "edge_id": null,
+          "source": "PLANNER_PROPOSAL"
+        }
+      ],
+      "proposal_id": "PROP-dd7e6a3bf2f3faf5",
+      "proposal_hash": "dd7e6a3bf2f3faf52c40481f7c6021c080c4003f5199864dcba82f803369f8af",
+      "intent": "Determine whether the requested post-acceptance implementation, independent review, and bounded repair path can be legally attached at the supplied anchor.",
+      "node_count": 0,
+      "edge_count": 0,
+      "detach_count": 0,
+      "anchor_routing": null,
+      "assumptions": [
+        "“After human acceptance” means the implementation must execute only after the existing N09 human verdict, not before that gate."
+      ],
+      "warnings": [
+        "No legal extension can be proposed at N09: it is a HUMAN_GATE, which halts the run and must have no outgoing continuation; proposed nodes would therefore be unreachable without violating the gate rule. Start a separate later planning run from an executable node after acceptance, then add IMPLEMENT, REVIEW, and REPAIR there."
+      ],
+      "added_node_ids": [],
+      "added_edge_ids": [],
+      "detached_edge_ids": [],
+      "package_bytes": 11893,
+      "input_hash": "a565a4f7b07e1bf1348ff48464aa964e45508929daa0bf9a083b9b5d1cbc0fc1",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N09",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Determine whether the requested post-acceptance implementation, independent review, and bounded repair path can be legally attached at the supplied anchor.",
+        "nodes": [],
+        "edges": [],
+        "detach_edges": [],
+        "anchor_routing": null,
+        "replacements": [],
+        "assumptions": [
+          "“After human acceptance” means the implementation must execute only after the existing N09 human verdict, not before that gate."
+        ],
+        "warnings": [
+          "No legal extension can be proposed at N09: it is a HUMAN_GATE, which halts the run and must have no outgoing continuation; proposed nodes would therefore be unreachable without violating the gate rule. Start a separate later planning run from an executable node after acceptance, then add IMPLEMENT, REVIEW, and REPAIR there."
+        ],
+        "proposal_id": "PROP-dd7e6a3bf2f3faf5"
+      }
+    },
+    {
+      "case_id": "E_first_match_hazard",
+      "class": "9E",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Before continuing to the review, add a check: if the change touches anything under WORKFLOWS/, route it to a mandatory compliance review first. For every other change, continue to the existing review exactly as before.",
+      "expected": "a new conditional edge plus the original continuation preserved as an explicit, correctly-ordered fallback -- the classic FIRST_MATCH unconditional-must-be-last hazard.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 70.045,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a18-0ca8-7ee3-9c8b-5772c3e76d18",
+        "wall_time_s": 69.972,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-904e2b97dcb1f2a8",
+      "proposal_hash": "904e2b97dcb1f2a84748f1ef577e8ede33c5d3fa95d581f25ab8de6cdb168fa2",
+      "intent": "Insert a scope check after implementation so changes touching WORKFLOWS/ receive mandatory compliance review before the existing review, while all other changes follow the original route.",
+      "node_count": 2,
+      "edge_count": 6,
+      "detach_count": 1,
+      "anchor_routing": "FIRST_MATCH",
+      "assumptions": [
+        "The runtime supplies authoritative changed-path evidence to N10 and supports REVIEW outputs used by the declared predicates.",
+        "Under WORKFLOWS/ means any root-relative path whose first directory component is WORKFLOWS, including added, modified, deleted, and renamed items."
+      ],
+      "warnings": [
+        "Before accepting, verify that the applicable WORKFLOWS/ compliance requirements and evidence are available to N11; otherwise affected changes will require human intervention.",
+        "Verify that the runtime's changed-path representation preserves deleted paths and both sides of renames so N10 cannot produce a false negative."
+      ],
+      "added_node_ids": [
+        "N10",
+        "N11"
+      ],
+      "added_edge_ids": [
+        "E_N01_N10",
+        "E_N10_HUMAN_REQUIRED",
+        "E_N10_N11",
+        "E_N10_N02",
+        "E_N11_N02",
+        "E_N11_HUMAN_REQUIRED"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12667,
+      "input_hash": "335fa6c5928787aba5599c85f8b84d8e56f4689031ecd6f14eb4785aeb7ca961",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Insert a scope check after implementation so changes touching WORKFLOWS/ receive mandatory compliance review before the existing review, while all other changes follow the original route.",
+        "nodes": [
+          {
+            "id": "N10",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "low",
+            "instructions": "Inspect the authoritative candidate change set without editing it. Set outcome = BLOCKED if the changed-path evidence is unavailable or cannot be evaluated reliably. Otherwise set has_findings = true if any added, modified, deleted, or renamed path is under the root-relative WORKFLOWS/ directory, and false if none is. Do not perform the compliance review in this node.",
+            "acceptance": [
+              "Every changed path, including rename sources and destinations and deleted paths, is evaluated against root-relative WORKFLOWS/.",
+              "has_findings is true exactly when at least one changed path is under WORKFLOWS/.",
+              "Unavailable or ambiguous changed-path evidence produces outcome = BLOCKED rather than being treated as no match."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N11",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "high",
+            "instructions": "Perform a read-only compliance review of the candidate change affecting WORKFLOWS/ before the existing implementation review. Evaluate every affected WORKFLOWS/ artifact against the applicable compliance requirements. Set verdict = PASS only when the applicable requirements are identified and satisfied. Set verdict = BLOCKED when requirements or evidence are unavailable, ambiguous, or not satisfied. Do not edit files.",
+            "acceptance": [
+              "The compliance review covers every affected artifact under WORKFLOWS/.",
+              "PASS is issued only with sufficient evidence that all applicable compliance requirements are satisfied.",
+              "Missing, ambiguous, or noncompliant evidence results in BLOCKED."
+            ],
+            "depends_on": [
+              "N10"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N10",
+            "from": "N01",
+            "to": "N10",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "check changed scope"
+          },
+          {
+            "edge_id": "E_N10_HUMAN_REQUIRED",
+            "from": "N10",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": null,
+              "outcome": "BLOCKED",
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "scope evidence blocked"
+          },
+          {
+            "edge_id": "E_N10_N11",
+            "from": "N10",
+            "to": "N11",
+            "when": {
+              "verdict": null,
+              "outcome": null,
+              "has_findings": true,
+              "min_severity": null
+            },
+            "kind": "CONTINUE",
+            "label": "WORKFLOWS change requires compliance review"
+          },
+          {
+            "edge_id": "E_N10_N02",
+            "from": "N10",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "no WORKFLOWS change"
+          },
+          {
+            "edge_id": "E_N11_N02",
+            "from": "N11",
+            "to": "N02",
+            "when": {
+              "verdict": "PASS",
+              "outcome": null,
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "CONTINUE",
+            "label": "compliance passed"
+          },
+          {
+            "edge_id": "E_N11_HUMAN_REQUIRED",
+            "from": "N11",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": "BLOCKED",
+              "outcome": null,
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "compliance blocked"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "FIRST_MATCH",
+        "replacements": [],
+        "assumptions": [
+          "The runtime supplies authoritative changed-path evidence to N10 and supports REVIEW outputs used by the declared predicates.",
+          "Under WORKFLOWS/ means any root-relative path whose first directory component is WORKFLOWS, including added, modified, deleted, and renamed items."
+        ],
+        "warnings": [
+          "Before accepting, verify that the applicable WORKFLOWS/ compliance requirements and evidence are available to N11; otherwise affected changes will require human intervention.",
+          "Verify that the runtime's changed-path representation preserves deleted paths and both sides of renames so N10 cannot produce a false negative."
+        ],
+        "proposal_id": "PROP-904e2b97dcb1f2a8"
+      }
+    },
+    {
+      "case_id": "H_ambiguous",
+      "class": "9H",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Make this more robust.",
+      "expected": "a cautious, bounded proposal with stated assumptions -- not runaway complexity for an under-specified instruction.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 50.241,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a19-1e51-7e10-9c26-75a8285e4c18",
+        "wall_time_s": 50.167,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-e43d6500bc28eeb4",
+      "proposal_hash": "e43d6500bc28eeb45a5fe11bc9afddf79583a1c0239caddaa8f044b3e1594814",
+      "intent": "Add a focused hardening step that strengthens failure handling, boundary-case behavior, and regression coverage before the existing independent review.",
+      "node_count": 1,
+      "edge_count": 2,
+      "detach_count": 1,
+      "anchor_routing": "FIRST_MATCH",
+      "assumptions": [
+        "More robust means improving boundary-case handling, failure behavior, and focused regression coverage without changing the requested feature scope."
+      ],
+      "warnings": [
+        "Before accepting, the operator should confirm that this interpretation of robustness matches the risks relevant to the supplied goal."
+      ],
+      "added_node_ids": [
+        "N03"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N03_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12471,
+      "input_hash": "15a59d91586a5bc77cabaf117b1b48e256d4acfaa8b88f891c001d54b36a2557",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Add a focused hardening step that strengthens failure handling, boundary-case behavior, and regression coverage before the existing independent review.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "IMPLEMENT",
+            "role": "CODE_IMPLEMENTER",
+            "capability": "CODE_IMPLEMENTER",
+            "effort": "medium",
+            "instructions": "Harden the completed implementation without expanding its intended scope. Identify plausible boundary cases and failure modes within the supplied goal, improve defensive behavior where needed, and add or refine focused tests that demonstrate those cases. Preserve existing behavior unless a change is required by the goal. Do not merge, push, create a pull request, or alter the canonical checkout.",
+            "acceptance": [
+              "Relevant boundary cases and failure modes are explicitly addressed.",
+              "Focused tests cover the added robustness behavior.",
+              "The hardening remains within the supplied goal and preserves unrelated behavior."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "harden implementation"
+          },
+          {
+            "edge_id": "E_N03_N02",
+            "from": "N03",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "continue to independent review"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "FIRST_MATCH",
+        "replacements": [],
+        "assumptions": [
+          "More robust means improving boundary-case handling, failure behavior, and focused regression coverage without changing the requested feature scope."
+        ],
+        "warnings": [
+          "Before accepting, the operator should confirm that this interpretation of robustness matches the risks relevant to the supplied goal."
+        ],
+        "proposal_id": "PROP-e43d6500bc28eeb4"
+      }
+    },
+    {
+      "case_id": "RP2_research_merge_decision",
+      "class": "10.2",
+      "workflow_id": "MERGE_SLICE_DRAIN_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Before this goes to the machine-gated review, we need two independent security audits of the change -- static analysis and dependency/supply-chain -- run in parallel, with their findings merged into one report for the reviewer to read.",
+      "expected": "realistic project case: research/synthesis -> independent verification -> merge -> decision, in a workflow that already has a REPAIR-drain MERGE downstream.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 66.101,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a19-e2bf-7671-b40e-d0ff72648796",
+        "wall_time_s": 66.01,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-24aad22d796071f2",
+      "proposal_hash": "24aad22d796071f2245d328ce32341d8cd74f69e4a127dd505474bcfff3a9f8d",
+      "intent": "Run two independent security audits in parallel, rejoin their findings into one report, and pass that report to the existing downstream reviewer.",
+      "node_count": 3,
+      "edge_count": 5,
+      "detach_count": 1,
+      "anchor_routing": "ALL_MATCHES",
+      "assumptions": [
+        "N02 is the existing downstream reviewer that should receive the unified security audit report.",
+        "The runtime's MERGE behavior can preserve both incoming audit outputs as one rejoined report context without requiring a separate synthesis node."
+      ],
+      "warnings": [
+        "Before accepting, verify that N02 is the intended reviewer immediately preceding the externally described machine-gated review.",
+        "The existing M08 ALL_REQUIRED merge deliberately expects mutually exclusive PASS-path and repair-path inputs; this proposal leaves that fail-closed drain-time behavior unchanged.",
+        "Verify that the runtime's merged context preserves distinct findings, evidence, severities, disagreements, and missing-evidence states from both audits."
+      ],
+      "added_node_ids": [
+        "N10",
+        "N11",
+        "M10"
+      ],
+      "added_edge_ids": [
+        "E_N01_N10",
+        "E_N01_N11",
+        "E_N10_M10",
+        "E_N11_M10",
+        "E_M10_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 13041,
+      "input_hash": "49bd299ab18c005d8b93c11144f5eda84d99aee47d02e4299c1595acaaf6b08f",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "29b4456c8d2a5cbce66418c4bc0ae06771b2fadbfe730d4e0238ab8709674c2e",
+      "base_semantic_hash_after": "29b4456c8d2a5cbce66418c4bc0ae06771b2fadbfe730d4e0238ab8709674c2e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "MERGE_SLICE_DRAIN_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "29b4456c8d2a5cbce66418c4bc0ae06771b2fadbfe730d4e0238ab8709674c2e",
+        "intent": "Run two independent security audits in parallel, rejoin their findings into one report, and pass that report to the existing downstream reviewer.",
+        "nodes": [
+          {
+            "id": "N10",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "high",
+            "instructions": "Perform an independent static security audit of the implemented change. Identify security-relevant defects, unsafe data flows, trust-boundary violations, authorization weaknesses, injection risks, secret exposure, and insecure failure behavior. Record each finding with severity, supporting evidence, affected behavior, and a concise remediation recommendation. Do not treat the other audit as an input.",
+            "acceptance": [
+              "The static security audit covers the implemented change and its security-relevant interactions.",
+              "Each finding states severity, evidence, affected behavior, and a remediation recommendation.",
+              "The output explicitly distinguishes confirmed findings from uncertainties and reports when no finding was established."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N11",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "high",
+            "instructions": "Perform an independent dependency and supply-chain security audit of the implemented change. Assess introduced or affected dependencies, provenance, integrity, known risk signals, version or constraint safety, transitive exposure, and build or distribution trust assumptions. Record each finding with severity, supporting evidence, affected dependency or supply-chain boundary, and a concise remediation recommendation. Do not treat the static audit as an input.",
+            "acceptance": [
+              "The dependency and supply-chain audit covers all dependencies and trust boundaries introduced or affected by the change.",
+              "Each finding states severity, evidence, affected dependency or boundary, and a remediation recommendation.",
+              "The output explicitly distinguishes confirmed findings, unavailable evidence, and areas not affected by the change."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "M10",
+            "type": "MERGE",
+            "role": null,
+            "capability": null,
+            "effort": null,
+            "instructions": "Rejoin both independent audit outputs into one security audit report for the downstream reviewer. Preserve separate static-analysis and dependency/supply-chain sections, retain each finding's evidence and severity, identify overlaps without suppressing disagreements, and explicitly retain uncertainties or missing evidence.",
+            "acceptance": [
+              "Both required audit outputs are present before the report is released downstream.",
+              "The report contains clearly separated sections for both audit perspectives and a consolidated finding index.",
+              "No finding, disagreement, uncertainty, or missing-evidence state from either audit is silently discarded.",
+              "The unified report is passed to the existing downstream reviewer."
+            ],
+            "depends_on": [
+              "N10",
+              "N11"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": "ALL_REQUIRED",
+            "expected_incoming": [
+              "E_N10_M10",
+              "E_N11_M10"
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N10",
+            "from": "N01",
+            "to": "N10",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "start independent static security audit"
+          },
+          {
+            "edge_id": "E_N01_N11",
+            "from": "N01",
+            "to": "N11",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "start independent dependency and supply-chain audit"
+          },
+          {
+            "edge_id": "E_N10_M10",
+            "from": "N10",
+            "to": "M10",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "submit static audit findings"
+          },
+          {
+            "edge_id": "E_N11_M10",
+            "from": "N11",
+            "to": "M10",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "submit dependency and supply-chain findings"
+          },
+          {
+            "edge_id": "E_M10_N02",
+            "from": "M10",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "send unified security audit report to reviewer"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "ALL_MATCHES",
+        "replacements": [],
+        "assumptions": [
+          "N02 is the existing downstream reviewer that should receive the unified security audit report.",
+          "The runtime's MERGE behavior can preserve both incoming audit outputs as one rejoined report context without requiring a separate synthesis node."
+        ],
+        "warnings": [
+          "Before accepting, verify that N02 is the intended reviewer immediately preceding the externally described machine-gated review.",
+          "The existing M08 ALL_REQUIRED merge deliberately expects mutually exclusive PASS-path and repair-path inputs; this proposal leaves that fail-closed drain-time behavior unchanged.",
+          "Verify that the runtime's merged context preserves distinct findings, evidence, severities, disagreements, and missing-evidence states from both audits."
+        ],
+        "proposal_id": "PROP-24aad22d796071f2"
+      }
+    },
+    {
+      "case_id": "L_repair_reuse_test",
+      "class": "V0.4-1",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Add an independent review of this implementation, with a bounded repair path if the review finds issues, before the existing review runs.",
+      "expected": "minimal sufficient: REVIEW + REPAIR (2 nodes). REPAIR's successful continuation should route forward to the existing N02 review rather than to a freshly invented third review node -- the exact pattern V0.2's H_ambiguous/RP1/C_review_repair all got wrong.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 52.298,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a1a-e51c-7880-85b9-56ce3ad6ae65",
+        "wall_time_s": 52.211,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-f010a590a0f825e4",
+      "proposal_hash": "f010a590a0f825e4ce32464f7cbea8e99e4e40f3d93ab0852decde1a5b49bfed",
+      "intent": "Insert a fresh independent review with one bounded repair attempt before the existing review.",
+      "node_count": 2,
+      "edge_count": 8,
+      "detach_count": 1,
+      "anchor_routing": "FIRST_MATCH",
+      "assumptions": [
+        "The existing review can legally receive either a direct PASS transition from the added review or a successful transition from the repair.",
+        "A single non-reentrant repair node constitutes the requested bounded repair path."
+      ],
+      "warnings": [
+        "Before accepting, verify that the added review will execute in a context independent of the implementation and the existing review.",
+        "A repair that does not report PASS stops for human intervention and does not reach the existing review."
+      ],
+      "added_node_ids": [
+        "N03",
+        "N04"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N03_N04",
+        "E_N03_N02",
+        "E_N03_HUMAN_REQUIRED",
+        "E_N04_N02",
+        "E_N04_BLOCKED",
+        "E_N04_FAIL",
+        "E_N04_INVALID"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12586,
+      "input_hash": "7559162cca917e3d55f48630ce964f327239dc35ac29c099d9e4378ba4a24e6c",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Insert a fresh independent review with one bounded repair attempt before the existing review.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "REVIEW",
+            "role": "INDEPENDENT_REVIEWER",
+            "capability": "INDEPENDENT_REVIEWER",
+            "effort": "high",
+            "instructions": "Review the implementation in a fresh, read-only context independently of the implementer and the existing review. Do not edit the implementation. Set verdict to PASS only when the implementation and focused tests satisfy the supplied goal; set REPAIR when concrete, bounded corrections can address identified issues; set BLOCKED when resolution requires human judgment or exceeds a bounded repair.",
+            "acceptance": [
+              "The review is performed in a fresh read-only context.",
+              "Every issue is recorded with enough specificity for a bounded repair.",
+              "The verdict distinguishes PASS, REPAIR, and BLOCKED according to the review findings."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          },
+          {
+            "id": "N04",
+            "type": "REPAIR",
+            "role": "CODE_IMPLEMENTER",
+            "capability": "CODE_IMPLEMENTER",
+            "effort": "high",
+            "instructions": "Apply only the concrete corrections identified by the independent review and update focused tests where necessary. Make one bounded repair attempt. Set outcome to PASS only when the cited issues are resolved and relevant validation succeeds; otherwise set BLOCKED, FAIL, or INVALID as appropriate. Do not expand scope or perform external integration actions.",
+            "acceptance": [
+              "The repair addresses only findings from the independent review.",
+              "Relevant focused validation succeeds before outcome PASS is reported.",
+              "Unresolved, invalid, or out-of-scope findings are reported without claiming success."
+            ],
+            "depends_on": [
+              "N03"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "independent review"
+          },
+          {
+            "edge_id": "E_N03_N04",
+            "from": "N03",
+            "to": "N04",
+            "when": {
+              "verdict": "REPAIR",
+              "outcome": null,
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "REPAIR",
+            "label": "bounded repair"
+          },
+          {
+            "edge_id": "E_N03_N02",
+            "from": "N03",
+            "to": "N02",
+            "when": {
+              "verdict": "PASS",
+              "outcome": null,
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "CONTINUE",
+            "label": "independent review passed"
+          },
+          {
+            "edge_id": "E_N03_HUMAN_REQUIRED",
+            "from": "N03",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": "BLOCKED",
+              "outcome": null,
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "human decision required"
+          },
+          {
+            "edge_id": "E_N04_N02",
+            "from": "N04",
+            "to": "N02",
+            "when": {
+              "verdict": null,
+              "outcome": "PASS",
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "CONTINUE",
+            "label": "repair completed"
+          },
+          {
+            "edge_id": "E_N04_BLOCKED",
+            "from": "N04",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": null,
+              "outcome": "BLOCKED",
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "repair blocked"
+          },
+          {
+            "edge_id": "E_N04_FAIL",
+            "from": "N04",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": null,
+              "outcome": "FAIL",
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "repair failed"
+          },
+          {
+            "edge_id": "E_N04_INVALID",
+            "from": "N04",
+            "to": "HUMAN_REQUIRED",
+            "when": {
+              "verdict": null,
+              "outcome": "INVALID",
+              "has_findings": null,
+              "min_severity": null
+            },
+            "kind": "FALLBACK",
+            "label": "repair result invalid"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "FIRST_MATCH",
+        "replacements": [],
+        "assumptions": [
+          "The existing review can legally receive either a direct PASS transition from the added review or a successful transition from the repair.",
+          "A single non-reentrant repair node constitutes the requested bounded repair path."
+        ],
+        "warnings": [
+          "Before accepting, verify that the added review will execute in a context independent of the implementation and the existing review.",
+          "A repair that does not report PASS stops for human intervention and does not reach the existing review."
+        ],
+        "proposal_id": "PROP-f010a590a0f825e4"
+      }
+    },
+    {
+      "case_id": "M_fake_merge_temptation",
+      "class": "V0.4-2",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N01",
+      "operator_instruction": "Before the review, gather relevant context from both the codebase and the design docs, and produce one combined synthesis for the reviewer.",
+      "expected": "minimal sufficient: 1 node (a single research/synthesis step whose own instructions cover both sources). No branch, no MERGE -- there is no independent-perspectives request here, just two inputs to one step.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 31.555,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a09a1b-b135-7901-8acb-0e988cd43a1b",
+        "wall_time_s": 31.485,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_READY",
+      "errors": [],
+      "diagnostics": [],
+      "proposal_id": "PROP-3548bd06b69845fb",
+      "proposal_hash": "3548bd06b69845fb023b0ec53453c634c1768a4dcf47ec1e0de3b454551f823a",
+      "intent": "Insert a single context-gathering and synthesis step between implementation and review so the reviewer receives combined evidence from the codebase and design documentation.",
+      "node_count": 1,
+      "edge_count": 2,
+      "detach_count": 1,
+      "anchor_routing": "FIRST_MATCH",
+      "assumptions": [
+        "The codebase and relevant design documentation are accessible to the synthesis step.",
+        "The runtime supplies the synthesis result as context to the subsequent review node."
+      ],
+      "warnings": [
+        "Before accepting, verify that the available design documentation is authoritative for the implemented scope and that the synthesis output will be visible to N02."
+      ],
+      "added_node_ids": [
+        "N03"
+      ],
+      "added_edge_ids": [
+        "E_N01_N03",
+        "E_N03_N02"
+      ],
+      "detached_edge_ids": [
+        "E_N01_CONTINUE"
+      ],
+      "package_bytes": 12588,
+      "input_hash": "86b428ab102e27dbc9a374edc77f93cbdb3d4d2c467280575b903560cf79332f",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N01",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Insert a single context-gathering and synthesis step between implementation and review so the reviewer receives combined evidence from the codebase and design documentation.",
+        "nodes": [
+          {
+            "id": "N03",
+            "type": "IMPLEMENT",
+            "role": "RESEARCH_SYNTHESIZER",
+            "capability": "RESEARCH_SYNTHESIZER",
+            "effort": "medium",
+            "instructions": "Gather review-relevant context from both the implemented codebase and the available design documentation without modifying the implementation. Produce one concise combined synthesis for the reviewer that links documented intent to observed implementation evidence, identifies material discrepancies or unresolved questions, and clearly distinguishes confirmed facts from interpretations and missing information.",
+            "acceptance": [
+              "Relevant context from both the codebase and the design documentation is represented in one combined synthesis.",
+              "The synthesis relates documented intent to implementation evidence and identifies material discrepancies, unresolved questions, and missing information.",
+              "The synthesis is available as context for the subsequent independent review."
+            ],
+            "depends_on": [
+              "N01"
+            ],
+            "run_if": "ON_TRANSITION",
+            "merge_policy": null,
+            "expected_incoming": null
+          }
+        ],
+        "edges": [
+          {
+            "edge_id": "E_N01_N03",
+            "from": "N01",
+            "to": "N03",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "gather and synthesize review context"
+          },
+          {
+            "edge_id": "E_N03_N02",
+            "from": "N03",
+            "to": "N02",
+            "when": null,
+            "kind": "CONTINUE",
+            "label": "continue to review with synthesis"
+          }
+        ],
+        "detach_edges": [
+          "E_N01_CONTINUE"
+        ],
+        "anchor_routing": "FIRST_MATCH",
+        "replacements": [],
+        "assumptions": [
+          "The codebase and relevant design documentation are accessible to the synthesis step.",
+          "The runtime supplies the synthesis result as context to the subsequent review node."
+        ],
+        "warnings": [
+          "Before accepting, verify that the available design documentation is authoritative for the implemented scope and that the synthesis output will be visible to N02."
+        ],
+        "proposal_id": "PROP-3548bd06b69845fb"
+      }
+    }
+  ]
+}

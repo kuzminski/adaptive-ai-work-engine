@@ -146,5 +146,5 @@ there were no application JavaScript errors.
    can consume several of the 100 history entries; semantic operations and
    insert-into-edge remain atomic.
 
-`path-scoped carry_forward` remains explicitly deferred and remains a prerequisite
-for any future merge/rejoin work.
+`path-scoped carry_forward` was deferred at the time this contract was frozen. **Superseded**:
+AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 implements it, plus a declared `MERGE` node.
