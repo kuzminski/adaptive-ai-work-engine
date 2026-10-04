@@ -1,0 +1,128 @@
+{
+  "workflow_id": "MERGE_SLICE_V1",
+  "version": "0.1",
+  "description": "Vertical slice for AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1: ALL_MATCHES fan-out into a declared MERGE node, source-attributed incoming, and a deterministic merge_resolution_hash. `merge_policy` on M08 is mutated in-place by the test harness between ALL_REQUIRED and ANY_COMPLETED (both slices reuse this one fixture).",
+  "goal": null,
+  "start_node": "N01",
+  "routing_contract": "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 12,
+    "max_repair_cycles": 2,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 10,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree.",
+      "acceptance": ["The requested behavior is implemented."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {"edge_id": "E_N01_CONTINUE", "to": "N04", "when": null, "kind": "CONTINUE", "label": "continue"}
+      ]
+    },
+    {
+      "id": "N04",
+      "type": "MACHINE_GATE",
+      "depends_on": ["N01"],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Run the pre-approved focused test command without a shell.",
+      "acceptance": ["The command exits with code 0."],
+      "command": ["python", "-m", "pytest", "-q"],
+      "timeout_seconds": 300,
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "ALL_MATCHES",
+      "edges": [
+        {"edge_id": "E_N04_HARDENING", "to": "N05", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "hardening"},
+        {"edge_id": "E_N04_MIGRATION", "to": "N06", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "migration"},
+        {"edge_id": "E_N04_FAILED", "to": "N09", "when": {"outcome": "FAIL"}, "kind": "FALLBACK", "label": "tests failed -- human"}
+      ]
+    },
+    {
+      "id": "N05",
+      "type": "IMPLEMENT",
+      "depends_on": ["N04"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Fan-out branch: hardening. Honour every carry_forward constraint.",
+      "acceptance": ["Hardening is applied without widening the goal."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {"edge_id": "E_N05_CONTINUE", "to": "M08", "when": null, "kind": "CONTINUE", "label": "continue"}
+      ]
+    },
+    {
+      "id": "N06",
+      "type": "IMPLEMENT",
+      "depends_on": ["N04"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Fan-out branch: migration. Honour every carry_forward constraint.",
+      "acceptance": ["The migration is forward-only and has a dry-run mode."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {"edge_id": "E_N06_CONTINUE", "to": "M08", "when": null, "kind": "CONTINUE", "label": "continue"}
+      ]
+    },
+    {
+      "id": "M08",
+      "type": "MERGE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "merge_policy": "ALL_REQUIRED",
+      "expected_incoming": ["E_N05_CONTINUE", "E_N06_CONTINUE"],
+      "instructions": "Merge the hardening and migration branches before human acceptance.",
+      "acceptance": ["Both fan-out branches are represented, source-attributed, in the merged package."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {"edge_id": "E_M08_CONTINUE", "to": "N09", "when": null, "kind": "CONTINUE", "label": "continue"}
+      ]
+    },
+    {
+      "id": "N09",
+      "type": "HUMAN_GATE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Human acceptance. ACCEPT CANDIDATE records READY_FOR_EXTERNAL_INTEGRATION. The runner never merges, pushes or opens a PR.",
+      "acceptance": ["A human verdict is recorded against the candidate."],
+      "on_pass": null,
+      "on_fail": null
+    }
+  ]
+}

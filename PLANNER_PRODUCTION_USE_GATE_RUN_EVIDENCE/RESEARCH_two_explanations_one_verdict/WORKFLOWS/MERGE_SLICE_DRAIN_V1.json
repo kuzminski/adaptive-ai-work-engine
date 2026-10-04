@@ -1,0 +1,261 @@
+{
+  "workflow_id": "MERGE_SLICE_DRAIN_V1",
+  "version": "0.1",
+  "description": "Minimal fixture for AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 drain-time fail-closed semantics: N09 (the only HUMAN_GATE) is reachable *only* through M08, and M08's second slot is owned by a REPAIR template that this slice never mints -- so no node ever holds that slot's own edge_id, and only the drain-time scan (not the fast path) can catch it.",
+  "goal": null,
+  "start_node": "N01",
+  "routing_contract": "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 8,
+    "max_repair_cycles": 2,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 6,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree.",
+      "acceptance": [
+        "The requested behavior is implemented."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "ALL_MATCHES",
+      "edges": [
+        {
+          "edge_id": "E_N01_N10",
+          "to": "N10",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "investigate first theory independently"
+        },
+        {
+          "edge_id": "E_N01_N11",
+          "to": "N11",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "investigate second theory independently"
+        }
+      ]
+    },
+    {
+      "id": "N02",
+      "type": "REVIEW",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "verdict=PASS feeds the merge directly; verdict=REPAIR would mint the second slot's branch (never scripted in this slice).",
+      "acceptance": [
+        "verdict is one of PASS, REPAIR, BLOCKED."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N02_PASS",
+          "to": "M08",
+          "when": {
+            "verdict": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "PASS -- merge slot 1"
+        },
+        {
+          "edge_id": "E_N02_REPAIR",
+          "to": "N02R",
+          "when": {
+            "verdict": "REPAIR"
+          },
+          "kind": "REPAIR",
+          "label": "REPAIR -- new branch"
+        },
+        {
+          "edge_id": "E_N02_BLOCKED",
+          "to": "STOP",
+          "when": {
+            "verdict": "BLOCKED"
+          },
+          "kind": "FALLBACK",
+          "label": "BLOCKED -- stop, no human gate in this slice"
+        }
+      ]
+    },
+    {
+      "id": "N02R",
+      "type": "REPAIR",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Repair template. Never entered directly.",
+      "acceptance": [
+        "Every point of the inherited brief is addressed."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N02R_CONTINUE",
+          "to": "M08",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "repaired -- merge slot 2"
+        }
+      ]
+    },
+    {
+      "id": "M08",
+      "type": "MERGE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "merge_policy": "ALL_REQUIRED",
+      "expected_incoming": [
+        "E_N02_PASS",
+        "E_N02R_CONTINUE"
+      ],
+      "instructions": "Merge the plain PASS path with the (in this slice, never-minted) repair path.",
+      "acceptance": [
+        "The run never claims COMPLETED with this merge unresolved."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_M08_CONTINUE",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N09",
+      "type": "HUMAN_GATE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Human acceptance, reachable only once the merge resolves.",
+      "acceptance": [
+        "A human verdict is recorded against the candidate."
+      ],
+      "on_pass": null,
+      "on_fail": null
+    },
+    {
+      "id": "N10",
+      "type": "REVIEW",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Investigate only the first supplied theory independently. Test it against the available evidence, actively seek disconfirming evidence, distinguish confirmed facts from inference and uncertainty, and produce an evidence-grounded finding suitable for downstream comparison.",
+      "acceptance": [
+        "The first theory has a clear supported, unsupported, or inconclusive finding with supporting and disconfirming evidence identified."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "INDEPENDENT_REVIEWER",
+      "edges": [
+        {
+          "edge_id": "E_N10_M12",
+          "to": "M12",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "first investigation complete"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    },
+    {
+      "id": "N11",
+      "type": "REVIEW",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Investigate only the second supplied theory independently. Test it against the available evidence, actively seek disconfirming evidence, distinguish confirmed facts from inference and uncertainty, and produce an evidence-grounded finding suitable for downstream comparison.",
+      "acceptance": [
+        "The second theory has a clear supported, unsupported, or inconclusive finding with supporting and disconfirming evidence identified."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "INDEPENDENT_REVIEWER",
+      "edges": [
+        {
+          "edge_id": "E_N11_M12",
+          "to": "M12",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "second investigation complete"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    },
+    {
+      "id": "M12",
+      "type": "MERGE",
+      "depends_on": [
+        "N10",
+        "N11"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Wait for both independent investigation reports and forward them as distinct, complete inputs to the existing downstream review step without selecting or rewriting either finding.",
+      "acceptance": [
+        "Both independent reports are present as distinct inputs for downstream verification."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "merge_policy": "ALL_REQUIRED",
+      "expected_incoming": [
+        "E_N10_M12",
+        "E_N11_M12"
+      ],
+      "edges": [
+        {
+          "edge_id": "E_M12_N02",
+          "to": "N02",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "both investigations ready for verification"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    }
+  ]
+}

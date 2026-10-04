@@ -1,0 +1,123 @@
+{
+  "workflow_id": "PLANNER_SLICE_V1",
+  "version": "0.1",
+  "description": "Vertical slice for AAW PLANNER PROPOSAL PIPELINE V0.1. A deliberately short graph whose only outgoing edge from the start node is unconditional, so `Plan from here` on N01 must splice a subgraph into an existing route rather than append to a free port. Slice A extends it linearly, slice B fans out into a MERGE, slice C is generated against it and then invalidated by an edit.",
+  "goal": null,
+  "start_node": "N01",
+  "routing_contract": "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 16,
+    "max_repair_cycles": 2,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 16,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree. Keep the change narrowly scoped and add or update focused tests. Do not merge, push, create a PR, or alter the canonical checkout.",
+      "acceptance": [
+        "The requested behaviour is implemented in the isolated worktree."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N01_CONTINUE",
+          "to": "N02",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N02",
+      "type": "REVIEW",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Review the implementation in a fresh, read-only context. Do not edit files.\n\nYou do not choose the next node: set `verdict` and the deterministic gate routes.\nverdict = PASS when the work meets the acceptance criteria.\nverdict = BLOCKED when a human decision is required.",
+      "acceptance": [
+        "The review ran in a fresh read-only context."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N02_N03",
+          "to": "N03",
+          "when": {
+            "verdict": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "PASS to evidence synthesis"
+        }
+      ]
+    },
+    {
+      "id": "N09",
+      "type": "HUMAN_GATE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Human acceptance. ACCEPT CANDIDATE records READY_FOR_EXTERNAL_INTEGRATION. The runner never merges, pushes or opens a PR.",
+      "acceptance": [
+        "A human verdict is recorded against the candidate."
+      ],
+      "on_pass": null,
+      "on_fail": null
+    },
+    {
+      "id": "N03",
+      "type": "IMPLEMENT",
+      "depends_on": [
+        "N02"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "RESEARCH_SYNTHESIZER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Analyze the supplied report and source batch. Extract the material claims and state what each cited source actually supports, distinguishing direct evidence, inference, contradiction, partial support, and missing support. Select at least two of the most surprising or consequential quantitative claims and spot-check their values, units, populations, periods, and surrounding context against the identifiable original sources rather than summaries. Produce a concise team-ready handoff containing a claim-to-source evidence table, the spot-check results, material discrepancies or limitations, and clear follow-up items. Preserve uncertainty and do not convert missing or partial evidence into confirmation.",
+      "acceptance": [
+        "The handoff maps each material report claim to its supporting source or explicitly marks support as missing, partial, contradictory, or indirect.",
+        "At least two surprising or consequential quantitative claims are checked against identifiable original sources, including value, unit, population, period, and relevant context.",
+        "Every verification result includes enough source provenance for the team to locate the supporting original.",
+        "The deliverable clearly separates source statements, analytical inferences, discrepancies, uncertainty, and recommended follow-up.",
+        "The output is concise, internally consistent, and suitable to hand directly to the team."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "RESEARCH_SYNTHESIZER",
+      "edges": [
+        {
+          "edge_id": "E_N03_N09",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "team handoff ready for human acceptance"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    }
+  ]
+}

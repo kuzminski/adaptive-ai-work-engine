@@ -1,0 +1,243 @@
+{
+  "workflow_id": "MULTIROUTING_SLICE_V1",
+  "version": "0.1",
+  "description": "Vertical slice for AAW MULTIROUTING RUNTIME CONTRACT V0.1: conditional FIRST_MATCH routing after review, explicit repair branch lineage, ALL_MATCHES fan-out after the machine gate, and a fail-closed human fallback.",
+  "goal": null,
+  "start_node": "N01",
+  "routing_contract": "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 12,
+    "max_repair_cycles": 2,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 10,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree. Keep the change narrowly scoped and add or update focused tests. Do not merge, push, create a PR, or alter the canonical checkout.",
+      "acceptance": [
+        "The requested behavior is implemented in the isolated worktree.",
+        "Changes stay within the goal and stated scope."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N01_CONTINUE",
+          "to": "N02",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N02",
+      "type": "IMPLEMENT",
+      "depends_on": ["N01"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Complete the implementation started by N01. Honour every carry_forward constraint supplied in the node package. Do not widen the scope.",
+      "acceptance": [
+        "The implementation is complete against the goal.",
+        "Focused tests are present where applicable."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N02_CONTINUE",
+          "to": "N03",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N03",
+      "type": "REVIEW",
+      "depends_on": ["N02"],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Review the implementation in a fresh, read-only context. Assess the goal, the acceptance criteria, the diff, the changed files and the machine evidence. Do not edit files.\n\nReturn a structured result only. You do not choose the next node: set `verdict` and the deterministic gate routes.\n\nverdict = PASS when the work meets the acceptance criteria.\nverdict = REPAIR when the work is fixable inside the current scope; then `next_brief` is mandatory and becomes the binding brief of the repair branch.\nverdict = BLOCKED when the work cannot proceed without a human decision.\n\nUse `carry_forward` for constraints that must survive into every downstream brief, and `artifacts` for evidence paths a later node needs.",
+      "acceptance": [
+        "The review ran in a fresh read-only context.",
+        "verdict is one of PASS, REPAIR, BLOCKED.",
+        "A REPAIR verdict carries a concrete, self-contained next_brief."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N03_PASS",
+          "to": "N04",
+          "when": {"verdict": "PASS"},
+          "kind": "CONTINUE",
+          "label": "PASS"
+        },
+        {
+          "edge_id": "E_N03_REPAIR",
+          "to": "N03R",
+          "when": {"verdict": "REPAIR"},
+          "kind": "REPAIR",
+          "label": "REPAIR — new branch"
+        },
+        {
+          "edge_id": "E_N03_BLOCKED",
+          "to": "N09",
+          "when": {"verdict": "BLOCKED"},
+          "kind": "FALLBACK",
+          "label": "BLOCKED — human"
+        }
+      ]
+    },
+    {
+      "id": "N03R",
+      "type": "REPAIR",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Repair template. This node is never entered directly: the gate mints an explicit lineage child from it and the reviewer's next_brief is appended below as INHERITED_BRIEF.\n\nMake only the changes the inherited brief requires. Do not widen the scope, do not refactor adjacent code, and do not touch the canonical checkout.",
+      "acceptance": [
+        "Every point of the inherited brief is addressed.",
+        "No change outside the scope the brief names."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N03R_CONTINUE",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "repaired — human"
+        }
+      ]
+    },
+    {
+      "id": "N04",
+      "type": "MACHINE_GATE",
+      "depends_on": ["N03"],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Run the pre-approved focused test command without a shell.",
+      "acceptance": ["The command exits with code 0."],
+      "command": ["python", "-m", "pytest", "-q"],
+      "timeout_seconds": 300,
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "ALL_MATCHES",
+      "edges": [
+        {
+          "edge_id": "E_N04_HARDENING",
+          "to": "N05",
+          "when": {"outcome": "PASS"},
+          "kind": "CONTINUE",
+          "label": "hardening"
+        },
+        {
+          "edge_id": "E_N04_MIGRATION",
+          "to": "N06",
+          "when": {"outcome": "PASS"},
+          "kind": "CONTINUE",
+          "label": "migration"
+        },
+        {
+          "edge_id": "E_N04_FAILED",
+          "to": "N09",
+          "when": {"outcome": "FAIL"},
+          "kind": "FALLBACK",
+          "label": "tests failed — human"
+        }
+      ]
+    },
+    {
+      "id": "N05",
+      "type": "IMPLEMENT",
+      "depends_on": ["N04"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Fan-out branch: hardening. Apply the hardening work the verified implementation now permits. Honour every carry_forward constraint.",
+      "acceptance": ["Hardening is applied without widening the goal."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N05_CONTINUE",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N06",
+      "type": "IMPLEMENT",
+      "depends_on": ["N04"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Fan-out branch: migration. Write the forward-only migration the verified implementation requires, with a dry-run mode. Honour every carry_forward constraint.",
+      "acceptance": ["The migration is forward-only and has a dry-run mode."],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N06_CONTINUE",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N09",
+      "type": "HUMAN_GATE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Human acceptance. ACCEPT CANDIDATE records READY_FOR_EXTERNAL_INTEGRATION. The runner never merges, pushes or opens a PR.",
+      "acceptance": ["A human verdict is recorded against the candidate."],
+      "on_pass": null,
+      "on_fail": null
+    }
+  ]
+}

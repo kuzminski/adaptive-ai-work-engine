@@ -1,0 +1,411 @@
+{
+  "workflow_id": "MERGE_SLICE_REPAIR_V1",
+  "version": "0.1",
+  "description": "Vertical slice for AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 slice C: a plain PASS branch (N05) and a REPAIR-minted branch (from template N03R) fill the two declared slots of one MERGE. A second, independent REPAIR origin (N04) reuses the same template edge after the first minted branch already settled that slot, to exercise STALE_LINEAGE.",
+  "goal": null,
+  "start_node": "N01",
+  "routing_contract": "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 14,
+    "max_repair_cycles": 4,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 12,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree.",
+      "acceptance": [
+        "The requested behavior is implemented."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N01_TO_N10",
+          "to": "N10",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "extract structured data"
+        }
+      ]
+    },
+    {
+      "id": "N02",
+      "type": "MACHINE_GATE",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Run the pre-approved focused test command without a shell.",
+      "acceptance": [
+        "The command exits with code 0."
+      ],
+      "command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "timeout_seconds": 300,
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "ALL_MATCHES",
+      "edges": [
+        {
+          "edge_id": "E_N02_TO_N05",
+          "to": "N05",
+          "when": {
+            "outcome": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "plain branch"
+        },
+        {
+          "edge_id": "E_N02_TO_N03",
+          "to": "N03",
+          "when": {
+            "outcome": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "review origin A"
+        },
+        {
+          "edge_id": "E_N02_TO_N04",
+          "to": "N04",
+          "when": {
+            "outcome": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "review origin B"
+        },
+        {
+          "edge_id": "E_N02_FAILED",
+          "to": "N09",
+          "when": {
+            "outcome": "FAIL"
+          },
+          "kind": "FALLBACK",
+          "label": "tests failed -- human"
+        }
+      ]
+    },
+    {
+      "id": "N05",
+      "type": "IMPLEMENT",
+      "depends_on": [
+        "N02"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Plain branch, no repair involved.",
+      "acceptance": [
+        "Work is applied without widening the goal."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N05_CONTINUE",
+          "to": "M08",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N03",
+      "type": "REVIEW",
+      "depends_on": [
+        "N02"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Review origin A. verdict=REPAIR mints an explicit branch from the shared REPAIR template.",
+      "acceptance": [
+        "verdict is one of PASS, REPAIR, BLOCKED."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N03_PASS",
+          "to": "N09",
+          "when": {
+            "verdict": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "PASS -- unused in this slice"
+        },
+        {
+          "edge_id": "E_N03_REPAIR",
+          "to": "N03R",
+          "when": {
+            "verdict": "REPAIR"
+          },
+          "kind": "REPAIR",
+          "label": "REPAIR -- new branch"
+        },
+        {
+          "edge_id": "E_N03_BLOCKED",
+          "to": "N09",
+          "when": {
+            "verdict": "BLOCKED"
+          },
+          "kind": "FALLBACK",
+          "label": "BLOCKED -- human"
+        }
+      ]
+    },
+    {
+      "id": "N04",
+      "type": "REVIEW",
+      "depends_on": [
+        "N02"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Review origin B, independent of N03. verdict=REPAIR mints its own branch from the same shared REPAIR template.",
+      "acceptance": [
+        "verdict is one of PASS, REPAIR, BLOCKED."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N04_PASS",
+          "to": "N09",
+          "when": {
+            "verdict": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "PASS -- unused in this slice"
+        },
+        {
+          "edge_id": "E_N04_REPAIR",
+          "to": "N03R",
+          "when": {
+            "verdict": "REPAIR"
+          },
+          "kind": "REPAIR",
+          "label": "REPAIR -- new branch, same template"
+        },
+        {
+          "edge_id": "E_N04_BLOCKED",
+          "to": "N09",
+          "when": {
+            "verdict": "BLOCKED"
+          },
+          "kind": "FALLBACK",
+          "label": "BLOCKED -- human"
+        }
+      ]
+    },
+    {
+      "id": "N03R",
+      "type": "REPAIR",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Shared repair template. Never entered directly: the gate mints an explicit lineage child from it for each origin that selects the REPAIR edge.",
+      "acceptance": [
+        "Every point of the inherited brief is addressed."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_N03R_CONTINUE",
+          "to": "M08",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "repaired -- merge"
+        }
+      ]
+    },
+    {
+      "id": "M08",
+      "type": "MERGE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "merge_policy": "ALL_REQUIRED",
+      "expected_incoming": [
+        "E_N05_CONTINUE",
+        "E_N03R_CONTINUE"
+      ],
+      "instructions": "Merge the plain branch with whichever repair-minted branch first fills the shared repair slot.",
+      "acceptance": [
+        "The merge names the concrete minted node, not the template, as the source of the repair slot."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "routing": "FIRST_MATCH",
+      "edges": [
+        {
+          "edge_id": "E_M08_CONTINUE",
+          "to": "N09",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "continue"
+        }
+      ]
+    },
+    {
+      "id": "N09",
+      "type": "HUMAN_GATE",
+      "depends_on": [],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Human acceptance. ACCEPT CANDIDATE records READY_FOR_EXTERNAL_INTEGRATION. The runner never merges, pushes or opens a PR.",
+      "acceptance": [
+        "A human verdict is recorded against the candidate."
+      ],
+      "on_pass": null,
+      "on_fail": null
+    },
+    {
+      "id": "N10",
+      "type": "IMPLEMENT",
+      "depends_on": [
+        "N01"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "RESEARCH_SYNTHESIZER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Extract the material's structured data points without interpretation drift. For every numeric value, retain its source reference, original value, unit, period, scope, qualifiers, and missingness or uncertainty state; do not infer absent values or convert missing data to zero.",
+      "acceptance": [
+        "Each extracted numeric data point is traceable to a specific source location and preserves the source's value, unit, period, scope, qualifiers, and uncertainty state.",
+        "No unsupported or inferred numeric value is introduced."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "RESEARCH_SYNTHESIZER",
+      "edges": [
+        {
+          "edge_id": "E_N10_TO_N11",
+          "to": "N11",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "verify against sources"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    },
+    {
+      "id": "N11",
+      "type": "REVIEW",
+      "depends_on": [
+        "N10"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Independently compare every extracted numeric data point with its cited source. Return PASS only when all values, units, signs, periods, scopes, totals, and qualifiers match; return REPAIR for bounded transcription or structuring discrepancies; return BLOCKED when a source is unavailable, ambiguous, internally inconsistent, or insufficient to verify a number.",
+      "acceptance": [
+        "Every extracted numeric data point is checked against its cited source.",
+        "The verdict is PASS, REPAIR, or BLOCKED and identifies every discrepancy or verification blocker.",
+        "PASS is not issued while any numeric mismatch or unresolved source ambiguity remains."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "INDEPENDENT_REVIEWER",
+      "edges": [
+        {
+          "edge_id": "E_N11_PASS_TO_N02",
+          "to": "N02",
+          "when": {
+            "verdict": "PASS"
+          },
+          "kind": "CONTINUE",
+          "label": "verified values continue"
+        },
+        {
+          "edge_id": "E_N11_REPAIR_TO_N12R",
+          "to": "N12R",
+          "when": {
+            "verdict": "REPAIR"
+          },
+          "kind": "REPAIR",
+          "label": "correct bounded discrepancies"
+        },
+        {
+          "edge_id": "E_N11_BLOCKED_TO_HUMAN",
+          "to": "HUMAN_REQUIRED",
+          "when": {
+            "verdict": "BLOCKED"
+          },
+          "kind": "FALLBACK",
+          "label": "source verification requires human resolution"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    },
+    {
+      "id": "N12R",
+      "type": "REPAIR",
+      "depends_on": [
+        "N11"
+      ],
+      "run_if": "ON_TRANSITION",
+      "role": "RESEARCH_SYNTHESIZER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Apply only the reviewer's bounded corrections to the structured extraction using the cited source evidence. Preserve provenance and uncertainty, and do not resolve unavailable, ambiguous, or conflicting source evidence by assumption.",
+      "acceptance": [
+        "Every identified transcription or structuring discrepancy is corrected to match the cited source.",
+        "No correction introduces an unsupported value or erases provenance, qualifiers, ambiguity, or missingness."
+      ],
+      "on_pass": null,
+      "on_fail": null,
+      "capability": "RESEARCH_SYNTHESIZER",
+      "edges": [
+        {
+          "edge_id": "E_N12R_TO_N02",
+          "to": "N02",
+          "when": null,
+          "kind": "CONTINUE",
+          "label": "corrected extraction continues"
+        }
+      ],
+      "routing": "FIRST_MATCH"
+    }
+  ]
+}

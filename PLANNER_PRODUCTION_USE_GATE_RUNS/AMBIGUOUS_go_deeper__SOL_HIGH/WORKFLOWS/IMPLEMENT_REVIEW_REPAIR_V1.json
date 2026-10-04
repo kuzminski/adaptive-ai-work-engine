@@ -1,0 +1,101 @@
+{
+  "workflow_id": "IMPLEMENT_REVIEW_REPAIR_V1",
+  "version": "0.2",
+  "description": "Static implementation, machine gate, independent review, bounded repair, and human acceptance workflow.",
+  "goal": null,
+  "start_node": "N01",
+  "workspace_policy": {
+    "isolated_worktree_required": true,
+    "main_merge_allowed": false
+  },
+  "limits": {
+    "max_nodes": 5,
+    "max_repair_cycles": 2,
+    "max_wall_time_minutes": 240,
+    "max_llm_calls": 8,
+    "max_token_budget": null
+  },
+  "nodes": [
+    {
+      "id": "N01",
+      "type": "IMPLEMENT",
+      "depends_on": [],
+      "run_if": "ALWAYS",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Implement the supplied goal in the isolated worktree. Keep the change narrowly scoped and add or update focused tests. Do not merge, push, create a PR, or alter the canonical checkout.",
+      "acceptance": [
+        "The requested behavior is implemented in the isolated worktree.",
+        "Changes stay within the goal and stated scope.",
+        "Focused tests are present where applicable."
+      ],
+      "on_pass": "N02",
+      "on_fail": "STOP"
+    },
+    {
+      "id": "N02",
+      "type": "MACHINE_GATE",
+      "depends_on": ["N01"],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Run the pre-approved focused test command without a shell.",
+      "acceptance": ["The command exits with code 0."],
+      "command": ["python", "-m", "pytest", "-q"],
+      "timeout_seconds": 300,
+      "on_pass": "N03",
+      "on_fail": "N04"
+    },
+    {
+      "id": "N03",
+      "type": "REVIEW",
+      "depends_on": ["N02"],
+      "run_if": "ON_TRANSITION",
+      "role": "INDEPENDENT_REVIEWER",
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "instructions": "Review the implementation in a fresh, read-only context. Assess the goal, acceptance criteria, diff, changed files, and machine evidence. Do not edit files. Report concrete structured findings only.",
+      "acceptance": [
+        "Every goal acceptance criterion is met.",
+        "The implementation introduces no material correctness or scope defect.",
+        "Machine-gate evidence is sufficient for the claimed scope."
+      ],
+      "on_pass": "N05",
+      "on_fail": "N04"
+    },
+    {
+      "id": "N04",
+      "type": "REPAIR",
+      "depends_on": ["N01"],
+      "run_if": "ON_TRANSITION",
+      "role": "CODE_IMPLEMENTER",
+      "capability": "CODE_IMPLEMENTER",
+      "model": "gpt-5.6-sol",
+      "effort": "medium",
+      "instructions": "Repair only the latest machine-gate failures and reviewer findings supplied in EXACT_ALLOWED_REPAIR_SCOPE. Do not broaden the goal or touch unrelated files.",
+      "acceptance": [
+        "All supplied failures/findings are addressed within the existing goal.",
+        "No unrelated scope is added.",
+        "The candidate is ready to rerun the machine gate."
+      ],
+      "on_pass": "N02",
+      "on_fail": "STOP"
+    },
+    {
+      "id": "N05",
+      "type": "HUMAN_GATE",
+      "depends_on": ["N03"],
+      "run_if": "ON_TRANSITION",
+      "role": null,
+      "model": null,
+      "effort": null,
+      "instructions": "Stop and present the validated candidate for an explicit human verdict.",
+      "acceptance": ["A human explicitly accepts or rejects the candidate."],
+      "on_pass": "STOP",
+      "on_fail": "STOP"
+    }
+  ]
+}
