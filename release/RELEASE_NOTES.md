@@ -17,4 +17,9 @@ nigdy nie robi merge ani push i na końcu czeka na Twoją decyzję (Human Gate).
 
 Uwaga: plik nie jest jeszcze podpisany cyfrowo — jeśli Windows pokaże „System Windows ochronił
 ten komputer”, wybierz „Więcej informacji” → „Uruchom mimo to”. Interfejs jest po polsku.
+Jeśli Microsoft Defender wykryje `Trojan:Win32/Wacatac…!ml` i usunie `AAW.exe`: to ogólne wykrycie
+heurystyczne (fałszywy alarm typowy dla niepodpisanych aplikacji PyInstaller). Rozpakuj ZIP poza OneDrive
+(np. `C:\AAW`), w Zabezpieczeniach Windows → Historia ochrony wybierz Akcje → Zezwól na urządzeniu / Przywróć,
+albo dodaj folder `AAW` do wyjątków. Sumę SHA256 pliku ZIP porównasz poleceniem `Get-FileHash` z wartością
+w logu kroku „Microsoft Defender scan” przebiegu CI tego wydania.
 Zmiany: `CHANGELOG.md` w paczce.

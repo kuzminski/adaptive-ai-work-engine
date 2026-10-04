@@ -1,6 +1,6 @@
 # Changelog — AAW product app
 
-## Unreleased — Implementer chain chosen at start
+## 0.3.0 — 2026-10-04 — Implementer chain chosen at start (includes 0.2.1)
 
 Details: `AAW_IMPLEMENTER_CHAIN_V0_1.md`. Lifecycle unchanged.
 - The implementer is no longer fixed: at the "Modele" step the user can pick any model as the implementer, or an
@@ -9,6 +9,11 @@ Details: `AAW_IMPLEMENTER_CHAIN_V0_1.md`. Lifecycle unchanged.
 - New exact profiles: `TERRA_VERY_HIGH`, `TERRA_MAX`, `CLAUDE_SONNET_5_5_HIGH`.
 - The chain is frozen with the run (`roles.implementer_chain`) and drives start (by plan complexity), capability
   escalation, repairs and the repair ladder. A step that is not runnable here is never replaced by another model.
+
+## 0.2.1 — 2026-10-04 — antivirus false-positive mitigation
+- `AAW.exe` now carries a Windows version resource (company, product, description, version).
+- CI builds the PyInstaller bootloader from source and scans the built app with Microsoft Defender (informational).
+- Start guides explain what to do when Defender quarantines the file.
 
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 

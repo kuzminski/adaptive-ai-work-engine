@@ -61,7 +61,7 @@ operator-led workflows, not yet for unattended production automation.
 | Dynamic planner | PLANNED |
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 
-## Product app (MVP V0.2 — release `0.2.0`)
+## Product app (MVP V0.2 — release `0.3.0`)
 
 For a normal user: see **Pobierz dla Windows** at the top — the
 `AAW-Windows-x64.zip` asset of the GitHub Release, unzip, run `AAW\AAW.exe`
