@@ -557,6 +557,7 @@ function gateHtml(v) {
     <div class="sec"><h3>Ostrzeżenia</h3>${list(g.warnings, "Brak.")}</div>
     <div class="sec"><h3>Bieżący kandydat</h3><div class="kv small">
       <div>Zmienione pliki</div><div class="mono">${esc((c.changed_files || []).join(", ") || "—")}</div>
+      ${c.last_repair ? `<div>Ostatnia naprawa</div><div class="small">${c.last_repair.code_changed ? "zmieniła kod" : "bez zmian w kodzie (cała iteracja — lista powyżej)"}${(c.last_repair.signals || []).length ? " · postęp: " + esc(c.last_repair.signals.join(", ")) : ""}</div>` : ""}
       <div>Folder z wynikiem</div><div class="mono">${esc(c.worktree)}</div>
       <div>Gałąź</div><div class="mono">${esc(c.branch)}</div>
       <div>Można zaakceptować</div><div>${c.promotable ? "tak" : "nie (eskalacja lub brak zaakceptowanej iteracji)"}</div>

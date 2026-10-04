@@ -1,0 +1,158 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "generated_at": "2026-09-13T10:38:03+0200",
+  "results": [
+    {
+      "case_id": "C_review_repair",
+      "class": "9C",
+      "workflow_id": "PLANNER_SLICE_V1",
+      "anchor_node_id": "N09",
+      "operator_instruction": "After human acceptance, add one more implementation step, followed by a strict independent review that can route any defects it finds into a bounded repair before the work is considered done.",
+      "expected": "IMPLEMENT -> REVIEW -> REPAIR trio with a legal REPAIR-kind edge targeting a REPAIR node; anchor N09 has no existing outgoing edges.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 36.328,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a099e9-b33b-7940-8240-e31f417ab341",
+        "wall_time_s": 36.213,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_INVALID",
+      "errors": [
+        "a proposal must add at least one node or one edge"
+      ],
+      "diagnostics": [
+        {
+          "code": "PROPOSAL_SHAPE",
+          "message": "a proposal must add at least one node or one edge",
+          "node_id": null,
+          "edge_id": null,
+          "source": "PLANNER_PROPOSAL"
+        }
+      ],
+      "proposal_id": "PROP-38ba137fd6aaaa42",
+      "proposal_hash": "38ba137fd6aaaa42673ba5fbd654f81c24ab295a7ab5b966b45abfe02a1464ad",
+      "intent": "Decline the requested extension because this anchor cannot continue into post-acceptance work within the same run.",
+      "node_count": 0,
+      "edge_count": 0,
+      "detach_count": 0,
+      "anchor_routing": null,
+      "assumptions": [],
+      "warnings": [
+        "N09 is a HUMAN_GATE and must have no outgoing edges; the requested implementation, independent review, and bounded repair must therefore be proposed in a separate later run anchored at a startable node."
+      ],
+      "added_node_ids": [],
+      "added_edge_ids": [],
+      "detached_edge_ids": [],
+      "package_bytes": 6284,
+      "input_hash": "86d22bee26cee8d4de717a709f13dc8875a8fcbf7fa6e64603fd30878823dee7",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "base_semantic_hash_after": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "PLANNER_SLICE_V1",
+        "anchor_node_id": "N09",
+        "base_semantic_hash": "4931c17f87d9d87d3ee376a996402fb1f1aa499da3e584892d32e73f9bb9649e",
+        "intent": "Decline the requested extension because this anchor cannot continue into post-acceptance work within the same run.",
+        "nodes": [],
+        "edges": [],
+        "detach_edges": [],
+        "anchor_routing": null,
+        "replacements": [],
+        "assumptions": [],
+        "warnings": [
+          "N09 is a HUMAN_GATE and must have no outgoing edges; the requested implementation, independent review, and bounded repair must therefore be proposed in a separate later run anchored at a startable node."
+        ],
+        "proposal_id": "PROP-38ba137fd6aaaa42"
+      }
+    },
+    {
+      "case_id": "RP1_impl_review_repair",
+      "class": "10.1",
+      "workflow_id": "IMPLEMENT_REVIEW_REPAIR_V1",
+      "anchor_node_id": "N05",
+      "operator_instruction": "We also need to add rate-limiting to the public API. Add an implementation step for that, an independent review, and a bounded repair path if the review finds issues -- matching how the rest of this workflow already handles review and repair.",
+      "expected": "realistic project case: implementation -> review -> bounded repair, anchored after an existing human acceptance gate.",
+      "requested_profile": "SOL_HIGH",
+      "harness_wall_time_s": 26.075,
+      "planner": {
+        "harness": "codex",
+        "provider": "openai",
+        "profile": "SOL_HIGH",
+        "model": "gpt-5.6-sol",
+        "effort": "high",
+        "access_class": "VERIFIED_INCLUDED",
+        "provider_session_id": "01a099ea-3408-7ae1-9b49-57a55d3b7f0b",
+        "wall_time_s": 25.996,
+        "adapter": null,
+        "telemetry_status": "CAPTURED",
+        "invocation": "PLANNER_PROPOSAL"
+      },
+      "status": "PROPOSAL_INVALID",
+      "errors": [
+        "a proposal must add at least one node or one edge"
+      ],
+      "diagnostics": [
+        {
+          "code": "PROPOSAL_SHAPE",
+          "message": "a proposal must add at least one node or one edge",
+          "node_id": null,
+          "edge_id": null,
+          "source": "PLANNER_PROPOSAL"
+        }
+      ],
+      "proposal_id": "PROP-56f91ac886caa563",
+      "proposal_hash": "56f91ac886caa563cd96fdc02e8b689e7f638a5261c2670506fb791b7e0404e5",
+      "intent": "No compliant subgraph can add rate-limiting implementation, independent review, and bounded repair after the supplied anchor because reaching that anchor unconditionally halts the run.",
+      "node_count": 0,
+      "edge_count": 0,
+      "detach_count": 0,
+      "anchor_routing": null,
+      "assumptions": [
+        "Reachability is interpreted as runtime reachability, not merely the presence of a declared edge that the runtime will never evaluate."
+      ],
+      "warnings": [
+        "The operator should provide a non-halting anchor before N05, such as the existing review pass route, because N05 is a HUMAN_GATE and its outgoing edges are never evaluated.",
+        "Accepting a proposal that places the requested steps after N05 would create unreachable work and would not add rate limiting to this run.",
+        "No workflow change is proposed in this package."
+      ],
+      "added_node_ids": [],
+      "added_edge_ids": [],
+      "detached_edge_ids": [],
+      "package_bytes": 6628,
+      "input_hash": "4107fd91151a5ecd9d14ebd34f084d2e9ef52b84b03812826527d8e369737161",
+      "workflow_unchanged_by_planning": true,
+      "base_semantic_hash": "e8efc6f2893b17a19698c805ef25c0ae2b7c94ec87ed538008eab4a693477c68",
+      "base_semantic_hash_after": "e8efc6f2893b17a19698c805ef25c0ae2b7c94ec87ed538008eab4a693477c68",
+      "full_proposal": {
+        "proposal_version": "0.1",
+        "workflow_id": "IMPLEMENT_REVIEW_REPAIR_V1",
+        "anchor_node_id": "N05",
+        "base_semantic_hash": "e8efc6f2893b17a19698c805ef25c0ae2b7c94ec87ed538008eab4a693477c68",
+        "intent": "No compliant subgraph can add rate-limiting implementation, independent review, and bounded repair after the supplied anchor because reaching that anchor unconditionally halts the run.",
+        "nodes": [],
+        "edges": [],
+        "detach_edges": [],
+        "anchor_routing": null,
+        "replacements": [],
+        "assumptions": [
+          "Reachability is interpreted as runtime reachability, not merely the presence of a declared edge that the runtime will never evaluate."
+        ],
+        "warnings": [
+          "The operator should provide a non-halting anchor before N05, such as the existing review pass route, because N05 is a HUMAN_GATE and its outgoing edges are never evaluated.",
+          "Accepting a proposal that places the requested steps after N05 would create unreachable work and would not add rate limiting to this run.",
+          "No workflow change is proposed in this package."
+        ],
+        "proposal_id": "PROP-56f91ac886caa563"
+      }
+    }
+  ]
+}

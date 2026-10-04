@@ -244,14 +244,12 @@ Multirouting semantics are untouched. The canvas displays selected edges (green)
 template as a dashed non-task, the runtime-minted descendant in amber with its own lineage edge,
 and the reviewer's `next_brief` as a card glued under the node that issued it.
 
-`accumulate_carry_forward` was not touched.
-
-> **Recorded, as the objective requires:** *path-scoped `carry_forward` is a prerequisite for
-> future branch merge/rejoin.* `accumulate_carry_forward` unions across every result in the run,
-> not the path that reached the node. Correct while there is no join; wrong the moment fan-out
-> branches carry conflicting constraints. This is on the wire at
-> `GET /api/contract` → `merge_prerequisite`, so a canvas cannot offer merge without seeing why
-> it is absent. Branch merge/rejoin is **not** implemented and the canvas does not imply it.
+> **Superseded by AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1.** The prerequisite recorded
+> here — `accumulate_carry_forward` unioning across every result in the run instead of the path that
+> reached the node — is resolved: context is now path-scoped (`routing_contract.ancestry_of`) and a
+> declared `MERGE` node is a real, tested join primitive. `GET /api/contract` no longer carries
+> `merge_prerequisite` and no longer lists branch merge/rejoin as deferred. See
+> `AAW_PATH_SCOPED_BRANCH_CONTEXT_MERGE_V0_1.md` for the frozen contract.
 
 ---
 
@@ -336,7 +334,7 @@ Ranked by what actually cost time while building a four-node workflow on the rea
 | 3 | **A second unconditional edge on a `FIRST_MATCH` node is a dead end until the user finds the predicate picker.** Correct, and correctly refused, but the repair is two clicks away in a panel. | The `Make N0x the start node` pattern shows the fix; only the unreachable case has it today. |
 | 4 | `depends_on` is a raw multi-select of node ids with no explanation on the canvas | deliberate (§2.1), but unexplained in the UI. |
 | 5 | **U5** planner ghost subgraph | deferred by the objective. |
-| 6 | **U6** branch merge/rejoin — blocked on path-scoped `carry_forward` (§5) | deferred. |
+| 6 | ~~**U6** branch merge/rejoin — blocked on path-scoped `carry_forward` (§5)~~ | **resolved** by AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 — a declared `MERGE` node, path-scoped context throughout. |
 | 7 | **U7** sub-node progress; **B8** limits invisible until violated | unchanged. |
 | 8 | **B6** SSE polls the journal at 4 Hz; **B7** loopback, single user, no auth | unchanged, by design for V0.1. |
 | 9 | **B9** `save_layout` accepts an unknown workflow id; **B10** no workflow *delete* | creation is now exposed; delete is still absent. |

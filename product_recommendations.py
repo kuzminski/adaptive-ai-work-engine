@@ -321,6 +321,11 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
               "purpose": "AAW Product run binding resolved from simple levels; frozen by the engine at start.",
               "allow_same_model_fresh_context": same_model, "roles": roles,
               "policy_profiles": {slot: slots[slot]["profile_id"] for slot in ap.PROFILE_KEYS}}
+    routing = _routing_defaults()
+    if routing:
+        # Quota/trust/capability routing and provider failover ship with the engine's defaults; the repair
+        # escalation ladder is derived from the policy profiles above (autonomy_policy.default_repair_escalation).
+        config["routing"] = routing
     validated = None
     try:
         validated = ac.validate_roles(config, profiles)
@@ -330,6 +335,16 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
             "catalog_source": catalog.get("_source", "BUILTIN"), "slots": slots,
             "roles_config": config, "roles_valid": validated is not None,
             "blockers": blockers, "warnings": warnings}
+
+
+def _routing_defaults() -> dict[str, Any] | None:
+    """The `routing` block of AUTONOMY_ROLES.json (None if the file or block is missing: routing stays off)."""
+    try:
+        data = json.loads((Path(__file__).resolve().parent / "AUTONOMY_ROLES.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    routing = data.get("routing")
+    return routing if isinstance(routing, dict) else None
 
 
 def _why_unavailable(profile_id: str, mappings: Mapping[str, str], states: Mapping[str, Mapping[str, Any]]) -> str | None:

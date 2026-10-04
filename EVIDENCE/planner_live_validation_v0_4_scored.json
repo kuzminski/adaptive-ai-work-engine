@@ -1,0 +1,112 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "evaluation": "AAW_PLANNER_PACKAGE_REPAIR_V0.4",
+  "generated_at": "2026-09-13",
+  "note": "Human-assessed quality AND complexity scores over the raw captures in planner_live_validation_v0_4.json (8 live SOL_HIGH calls: 6 reused verbatim from V0.2/V0.3, 2 new -- L_repair_reuse_test, M_fake_merge_temptation) plus planner_accept_run_v0_4.json (real Accept+Save+Run evidence). 'Before' figures are the already-recorded V0.2/V0.3 evidence for the same case/profile/instruction, not a fresh baseline rerun -- V0.4 did not repeat V0.3's git-stash Phase A methodology since the comparison here is package-content-vs-package-content on identical instructions, already available from prior evidence files.",
+  "quality_rubric": {
+    "0": "unusable", "1": "major repair required",
+    "2": "useful with minor modification", "3": "accept-ready"
+  },
+  "complexity_rubric": {
+    "0": "under-specified -- missing required structure",
+    "1": "overbuilt -- contains clearly unnecessary structure",
+    "2": "reasonable -- some optional structure, but defensible",
+    "3": "minimal sufficient -- no structural element can be removed without losing requested semantics"
+  },
+  "cases": [
+    {
+      "case_id": "A_simple_linear", "profile": "SOL_HIGH", "role": "control",
+      "status": "PROPOSAL_READY", "proposal_id": "PROP-db6c2d75ebad9494",
+      "node_count": 1, "edge_count": 2, "branch_count": 0, "review_count": 0,
+      "merge_count": 0, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 3, "accept_ready": true,
+      "before": "V0.2/V0.3: identical shape (1 node, 2 edges), quality 3",
+      "notes": "Unchanged control case -- confirms V0.4's rules did not regress the simplest path. Real Accept+Save+Run verified (planner_accept_run_v0_4.json, label simple_A)."
+    },
+    {
+      "case_id": "B_parallel_merge", "profile": "SOL_HIGH", "role": "control",
+      "status": "PROPOSAL_READY", "proposal_id": "PROP-042fd30979219041",
+      "node_count": 3, "edge_count": 5, "branch_count": 2, "review_count": 0,
+      "merge_count": 1, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 3, "accept_ready": true,
+      "before": "V0.2 (after repair)/V0.3: identical shape (3 nodes, 5 edges, role null on MERGE), quality 3",
+      "notes": "Unchanged control case -- confirms the branch/MERGE-discipline rules did not suppress a genuinely justified fan-out+rejoin (explicit 'two different perspectives... merge' request). Real Accept+Save+Run verified (planner_accept_run_v0_4.json, label branch_merge_B): N01->{N03,N04}->N05(MERGE)->N02->N09, settled WAITING_FOR_HUMAN."
+    },
+    {
+      "case_id": "C_review_repair", "profile": "SOL_HIGH", "role": "previously over-complex",
+      "status": "PROPOSAL_INVALID", "node_count": 0, "edge_count": 0, "branch_count": 0,
+      "review_count": 0, "merge_count": 0, "human_gate_count": 0,
+      "quality_score": null, "complexity_score": null, "accept_ready": false,
+      "before": "V0.2 original: 6 nodes (IMPLEMENT/REVIEW/REPAIR/REVIEW/MERGE/FINAL_GATE), role-on-MERGE defect, quality 1. V0.3: empty decline (HUMAN_GATE reachability), unscored.",
+      "notes": "Same correct empty decline as V0.3, now with a more specific, actionable warning: 'Start a separate later planning run from an executable node after acceptance, then add IMPLEMENT, REVIEW, and REPAIR there.' Not a complexity case at all once the anchor is recognized as a HUMAN_GATE -- V0.2's original over-complexity (MERGE-as-generic-aggregator, extra FINAL_GATE) was a symptom of the model attempting an unreachable structure, not a pure complexity failure; the complexity rules cannot be exercised at this anchor and this case is retained per the evaluation's 'do not replace difficult cases' instruction, not because it independently tests V0.4's changes."
+    },
+    {
+      "case_id": "E_first_match_hazard", "profile": "SOL_HIGH", "role": "required (also over-complex in V0.3)",
+      "status": "PROPOSAL_READY", "proposal_id": null,
+      "node_count": 2, "edge_count": 6, "branch_count": 0, "review_count": 2,
+      "merge_count": 0, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 2, "accept_ready": true,
+      "before": "V0.2: 2 nodes/5 edges, quality 3. V0.3: 2 nodes/8 edges (2 redundant FALLBACK-to-HUMAN_REQUIRED edges beyond V0.2's shape), quality 2, unnecessary_complexity=true.",
+      "notes": "Improved back toward V0.2's leaner shape: edge count fell from 8 (V0.3) to 6, and FIRST_MATCH is now used with a single unconditional catch-all (declared last) instead of enumerating both has_findings values explicitly plus a separate 'unclassified' fallback -- the exact FIRST_MATCH-catch-all pattern the package's own unconditional_edge_id addition (V0.3) highlights. complexity_score 2, not 3: the second REVIEW node (escalation for has_findings=True) is defensible but not provably required -- a single-node design (V0.2's very first baseline) is also legal. quality_score 3: legal, correctly ordered, reasonably scoped, an operator would plausibly accept as-is."
+    },
+    {
+      "case_id": "H_ambiguous", "profile": "SOL_HIGH", "role": "previously over-complex / ambiguous request",
+      "status": "PROPOSAL_READY", "proposal_id": null,
+      "node_count": 1, "edge_count": 2, "branch_count": 0, "review_count": 0,
+      "merge_count": 0, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 3, "accept_ready": true,
+      "before": "V0.2/V0.3: identical 3-node REVIEW->REPAIR->REVIEW loop, quality 2, unnecessary_complexity flagged.",
+      "notes": "The single largest before/after swing in this stage: 3 nodes/8 edges -> 1 node/2 edges. The model reinterpreted 'make this more robust' as a single hardening IMPLEMENT step feeding directly into the EXISTING review, rather than fabricating an entire REVIEW->REPAIR->REVIEW loop. No structural element can be removed without losing the requested semantics (a hardening step, reviewed by the existing review) -- complexity_score 3. Direct, clean evidence the required-vs-optional and review-discipline rules changed behavior, not just wording."
+    },
+    {
+      "case_id": "RP2_research_merge_decision", "profile": "SOL_HIGH", "role": "control / project-grounded",
+      "status": "PROPOSAL_READY", "proposal_id": null,
+      "node_count": 3, "edge_count": 5, "branch_count": 2, "review_count": 2,
+      "merge_count": 1, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 3, "accept_ready": true,
+      "before": "V0.2/V0.3: identical shape (3 nodes, 5 edges, role null on MERGE), quality 3",
+      "notes": "Unchanged control case -- confirms branch/MERGE discipline did not regress a genuinely justified project-grounded fan-out+rejoin (two independent security audits explicitly requested)."
+    },
+    {
+      "case_id": "L_repair_reuse_test", "profile": "SOL_HIGH", "role": "new -- targets the REPAIR/REVIEW-reuse rule",
+      "status": "PROPOSAL_READY", "proposal_id": "PROP-f010a590a0f825e4",
+      "node_count": 2, "edge_count": 8, "branch_count": 0, "review_count": 1,
+      "merge_count": 0, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 2, "accept_ready": true,
+      "before": "No V0.2/V0.3 equivalent -- new case, built specifically to test whether REPAIR's continuation reuses an existing node instead of fabricating a new REVIEW.",
+      "notes": "THE direct test of V0.4's single most evidence-grounded rule. Result: exactly 2 nodes (REVIEW + REPAIR), and REPAIR's successful (outcome=PASS) continuation routes to the EXISTING N02 review -- the model's own assumption states this explicitly: 'The existing review can legally receive either a direct PASS transition from the added review or a successful transition from the repair.' No third review node was fabricated. complexity_score 2, not 3: REPAIR's non-PASS outcomes (BLOCKED, FAIL, INVALID) were each given a separate FALLBACK edge to HUMAN_REQUIRED (3 edges) rather than one unconditional catch-all declared last, the same collapsing trick E_first_match_hazard's own N10 uses for a comparable case -- a real, minor, edge-level residual pattern, not a node-level one. quality_score 3: legal, correct, and the core structural question (does it reuse the existing review) was answered correctly."
+    },
+    {
+      "case_id": "M_fake_merge_temptation", "profile": "SOL_HIGH", "role": "new -- targets MERGE/branch discipline",
+      "status": "PROPOSAL_READY", "proposal_id": "PROP-3548bd06b69845fb",
+      "node_count": 1, "edge_count": 2, "branch_count": 0, "review_count": 0,
+      "merge_count": 0, "human_gate_count": 0,
+      "quality_score": 3, "complexity_score": 3, "accept_ready": true,
+      "before": "No V0.2/V0.3 equivalent -- new case, phrased ('both the codebase and the design docs') to tempt a spurious fan-out+MERGE for what one node can do.",
+      "notes": "Built exactly one node whose own instructions cover both sources, with no branch and no MERGE. Direct, clean positive evidence for the branch/MERGE-discipline rules: 'gather from two sources' was correctly read as one responsibility, not two independent perspectives requiring isolation and rejoin."
+    }
+  ],
+  "aggregate_metrics": {
+    "raw_live_calls": 8,
+    "provider_dispatch_success_rate": "8/8 (100%)",
+    "schema_envelope_valid_rate": "8/8 (100%) -- the one non-READY case was a well-reasoned, closed-set PROPOSAL_SHAPE decline, not a malformed output",
+    "proposal_ready_rate": "7/8 (87.5%)",
+    "useful_rate_of_all_attempts": "7/8 (87.5%)",
+    "accept_ready_rate_of_all_attempts": "7/8 (87.5%)",
+    "accept_ready_rate_of_ready_proposals": "7/7 (100%)",
+    "complexity_score_distribution_of_scored_cases": {"3": 5, "2": 2, "1": 0, "0": 0},
+    "complexity_score_average": 2.71,
+    "complexity_score_at_2_plus_pct": "100% (7/7 scored)",
+    "complexity_score_at_3_pct": "71.4% (5/7 scored)",
+    "caveat": "This is a small (8-call), single-pass, deliberately-curated corpus: 3 of V0.2/V0.3's hardest structurally-blocked cases (G_human_gate, RP1_impl_review_repair, J_merge_and_human_gate) were intentionally NOT rerun here because they are already well-understood, non-complexity failures (HUMAN_GATE reachability / zero node budget) whose outcome does not depend on anything V0.4 changed -- rerunning them would have re-confirmed known behavior without adding complexity evidence, at real live-call cost. The 87.5% figures describe this narrower, complexity-focused corpus, not a re-measurement of the full V0.2/V0.3 difficulty spread; they should not be read as a claim that the planner's overall unconditional pass rate across every case shape is now 87.5%."
+  },
+  "before_after_summary": {
+    "cases_with_a_direct_before_after_pair": 5,
+    "improved": ["E_first_match_hazard (edges 8->6, complexity q2->q2 but edge-level cleaner; quality q2->q3)",
+                "H_ambiguous (nodes 3->1, edges 8->2, complexity flagged->q3, quality q2->q3)"],
+    "unchanged_controls": ["A_simple_linear", "B_parallel_merge", "RP2_research_merge_decision"],
+    "regressed": [],
+    "new_cases_both_positive": ["L_repair_reuse_test (core rule worked exactly as designed)",
+                                "M_fake_merge_temptation (branch/MERGE discipline held)"]
+  }
+}

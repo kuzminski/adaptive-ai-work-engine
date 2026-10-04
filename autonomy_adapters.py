@@ -35,6 +35,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import provider_adapters as pa
 import workflow_runner as wr
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
@@ -47,14 +48,25 @@ SUPPORTED_HARNESSES = ("codex", "claude")
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
 INHERITED_SESSION_ENV = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID")
-READ_ONLY_EXECUTORS = frozenset({"plan", "self_verify", "prepare_packet", "review", "final_review"})
+READ_ONLY_EXECUTORS = frozenset({"plan", "self_verify", "prepare_packet", "review", "final_review", "diagnose"})
 MAX_PROMPT_DIFF = 120_000
 
+_STRS = {"type": "array", "items": {"type": "string"}}
+# `command`, `exit_code`, `log_ref` and `supersedes` carry the evidence a later repair or reviewer needs
+# (the failing command, its exit code, where its output lives, and the stale checks a re-run replaces).
 _CHECK = {"type": "object", "additionalProperties": False, "required": ["name", "status", "summary"],
           "properties": {"name": {"type": "string"},
                          "status": {"type": "string", "enum": ["PASS", "FAIL", "ERROR", "WARN", "SKIPPED"]},
-                         "summary": {"type": "string"}}}
-_STRS = {"type": "array", "items": {"type": "string"}}
+                         "summary": {"type": "string"}, "command": {"type": ["string", "null"]},
+                         "exit_code": {"type": ["integer", "null"]}, "log_ref": {"type": ["string", "null"]},
+                         "supersedes": _STRS}}
+_DIAGNOSIS = {"type": ["object", "null"], "additionalProperties": False,
+              "required": ["root_cause", "why_prior_attempts_failed", "next_actions", "classification"],
+              "properties": {"root_cause": {"type": "string"}, "why_prior_attempts_failed": {"type": "string"},
+                             "next_actions": _STRS,
+                             "classification": {"type": ["string", "null"], "enum": [
+                                 None, "PRODUCT_DEFECT", "MISSING_EVIDENCE", "STALE_FINDING", "PRE_EXISTING_BASELINE",
+                                 "ENVIRONMENTAL_LIMITATION", "EVIDENCE_PROPAGATION", "REVIEW_PROCESS"]}}}
 
 # Small, closed role output contracts. Field names are the V0.1 controller
 # contract; the V0.2 role vocabulary maps onto them (see the V0.2 document).
@@ -132,7 +144,26 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "repair": {"type": "object", "additionalProperties": False,
                "required": ["summary", "addressed_findings", "changed_files", "checks", "uncertainties"],
                "properties": {"summary": {"type": "string"}, "addressed_findings": _STRS, "changed_files": _STRS,
-                              "checks": {"type": "array", "items": _CHECK}, "uncertainties": _STRS}},
+                              "checks": {"type": "array", "items": _CHECK}, "uncertainties": _STRS,
+                              "diagnosis": _DIAGNOSIS, "evidence_refs": _STRS,
+                              "reclassifications": {"type": "array", "items": {
+                                  "type": "object", "additionalProperties": False,
+                                  "required": ["check_name", "classification", "evidence_ref", "explanation",
+                                               "acceptance_impact", "superseded_by"],
+                                  "properties": {"check_name": {"type": "string"},
+                                                 "classification": {"type": "string", "enum": [
+                                                     "PRE_EXISTING_BASELINE", "ENVIRONMENTAL_LIMITATION",
+                                                     "SUPERSEDED_BY_NEWER_CHECK"]},
+                                                 "evidence_ref": {"type": "string"}, "explanation": {"type": "string"},
+                                                 "acceptance_impact": {"type": "string", "enum": ["NONE", "AFFECTED"]},
+                                                 "superseded_by": {"type": ["string", "null"]}}}},
+                              "process_fixes": {"type": "array", "items": {
+                                  "type": "object", "additionalProperties": False,
+                                  "required": ["kind", "description", "evidence_ref"],
+                                  "properties": {"kind": {"type": "string"}, "description": {"type": "string"},
+                                                 "evidence_ref": {"type": "string"}}}}}},
+    "diagnose": {"type": "object", "additionalProperties": False, "required": ["summary", "diagnosis"],
+                 "properties": {"summary": {"type": "string"}, "diagnosis": _DIAGNOSIS}},
 }
 OUTPUT_SCHEMAS["final_review"] = OUTPUT_SCHEMAS["review"]
 
@@ -203,6 +234,19 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
                "finding keys you addressed and the checks you ran."),
 }
+ROLE_INSTRUCTIONS["repair"] += (
+    " If REPAIR_PACKET is present, start from it and do not re-read the whole repository; if MODE is "
+    "DIAGNOSE_THEN_REPAIR, first state the root cause in `diagnosis` (and why earlier attempts failed) and do "
+    "not repeat an earlier approach. A repair may need no product change: re-run the failing check and report "
+    "its command, exit code and log_ref; when a re-run replaces a stale check, list that check in `supersedes`; "
+    "a failure that is pre-existing or environmental goes in `reclassifications` ONLY with an evidence_ref and "
+    "acceptance_impact NONE. Never invent a diff to look like progress.")
+ROLE_INSTRUCTIONS["diagnose"] = (
+    "You are the AAW DIAGNOSTICIAN. You are READ-ONLY: do not create, edit or delete files. Starting from "
+    "REPAIR_PACKET, find the root cause of the surviving FINDINGS and explain why the earlier attempts did not "
+    "resolve them. Say whether the cause is a product defect, missing evidence, a stale finding, a pre-existing "
+    "baseline failure, an environmental limitation, or a defect in evidence propagation / the review process. "
+    "Propose concrete next_actions. Do not repeat a previous diagnosis; do not edit anything.")
 ROLE_INSTRUCTIONS["final_review"] = ROLE_INSTRUCTIONS["review"].replace("REVIEWER", "FINAL REVIEWER")
 
 
@@ -219,11 +263,16 @@ def resolve_runtime(binding: Mapping[str, Any]) -> tuple[dict[str, Any] | None, 
     if profile is None:
         return None, f"unknown profile {profile_id!r}"
     harness = str(profile.get("harness") or "")
-    if harness not in SUPPORTED_HARNESSES:
+    adapter = pa.PROVIDER_ADAPTERS.get(harness)
+    if harness not in SUPPORTED_HARNESSES and adapter is None:
         return None, f"harness {harness!r} is not a direct CLI harness for autonomy roles"
     status, reason = wr.profile_availability(profile)
     if status != "VERIFIED":
         return None, reason or "profile unavailable"
+    if adapter is not None and harness not in SUPPORTED_HARNESSES:
+        adapter_reason = adapter.preflight(profile)
+        if adapter_reason:
+            return None, adapter_reason
     executable = wr.harness_executable(harness)
     try:
         model = validate_model_effort(str(profile["runtime_model_id"]), str(profile["effort"]))
@@ -274,7 +323,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
-    if name in ("execute", "repair", "self_verify"):
+    if name in ("execute", "repair", "self_verify", "diagnose"):
         it = ctx["iteration"]
         out = {**common, "PLAN": ctx["plan"], "CONSTRAINTS": contract.get("constraints", []),
                "FORBIDDEN_CHANGES": contract.get("forbidden_changes", []),
@@ -283,11 +332,20 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
         if name == "self_verify":
             out.update({"CHANGED_FILES": ctx.get("changed_files", []), "DIFF": _bounded(ctx.get("diff")),
                         "IMPLEMENTATION_RESULT": it.get("execution")})
-        if name == "repair":
+        if name in ("repair", "diagnose"):
             out.update({"FINDINGS": ctx["findings"], "ATTEMPT": ctx["attempt"],
                         "EXACT_ALLOWED_REPAIR_SCOPE": {
                             "findings": [f.get("finding_key") for f in ctx["findings"]],
                             "rule": "Only changes directly required by FINDINGS; no new goal, no new feature."}})
+            packet = ctx.get("repair_packet")
+            if packet:
+                # Later attempts get the compact packet instead of the full iteration context.
+                out = {key: out[key] for key in ("ROLE", "AAW_RUN_ID", "ITERATION_ID", "EXECUTION_ID", "WORKTREE_PATH",
+                                                 "SOURCE_REFERENCES", "CONSTRAINTS", "FORBIDDEN_CHANGES",
+                                                 "REQUIRED_EVIDENCE", "FORBIDDEN_AREAS", "FINDINGS", "ATTEMPT",
+                                                 "EXACT_ALLOWED_REPAIR_SCOPE")}
+                out.update({"PLAN": {"goal": ctx["plan"].get("goal")}, "REPAIR_PACKET": packet,
+                            "MODE": ctx.get("repair_mode"), "STEP": ctx.get("step")})
         return out
     if name == "prepare_packet":
         return {**common, "REVIEW_KIND": "PRETREATMENT", "PACKET": ctx["packet"],
@@ -336,6 +394,31 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
     return argv, True
 
 
+_RATE_PATTERNS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "quota", "too many requests",
+                  "resource_exhausted", "limit reached", "overloaded")
+_AUTH_PATTERNS = ("not logged in", "unauthorized", "authentication", "invalid api key",
+                  "login required", "please log in", "token expired")
+
+
+def classify_failure(rc: int | None, stdout: str | None, stderr: str | None) -> tuple[str | None, float | None]:
+    """Map a provider process failure to a model_router failure class (hard signal, not an estimate)."""
+    import re
+    text = f"{stdout or ''}\n{stderr or ''}".lower()
+    if rc == 124 or "process_timeout" in text:
+        return "TIMEOUT", None
+    import re as _re
+    if any(p in text for p in _RATE_PATTERNS) or _re.search(r"\b429\b", text):
+        match = re.search(r"retry[- _]after[^0-9]{0,12}(\d+(?:\.\d+)?)\s*(s|sec|seconds|m|min|minutes)?", text)
+        minutes = None
+        if match:
+            value = float(match.group(1))
+            minutes = value / 60.0 if (match.group(2) or "s").startswith("s") else value
+        return "RATE_LIMIT", minutes
+    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text):
+        return "AUTH", None
+    return None, None
+
+
 class DirectRoleExecutor:
     """One role operation bound to the direct CLI provider path."""
 
@@ -356,6 +439,10 @@ class DirectRoleExecutor:
         worktree = str((ctx["env"].describe() or {}).get("worktree") or ".")
         schema = OUTPUT_SCHEMAS[self.name]
         handoff = build_handoff(self.name, ctx)
+        adapter = pa.PROVIDER_ADAPTERS.get(runtime["harness"])
+        if adapter is not None and runtime["harness"] not in SUPPORTED_HARNESSES:
+            # A registered non-built-in provider (e.g. Antigravity) owns its own dispatch.
+            return adapter.invoke(ctx, runtime, handoff)
         prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
                   "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
         started = time.monotonic()
@@ -372,7 +459,8 @@ class DirectRoleExecutor:
                 recorder.close(close_reason="FAILED", effect_certainty="CONFIRMED", outcome="BLOCKED",
                                observation_source="RUNNER_EXCEPTION" if recorder.started else "SPAWN_FAILURE",
                                detail=str(exc))
-                raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started) from exc
+                raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started,
+                                      failure_class="UNAVAILABLE" if not recorder.started else None) from exc
             session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
         elapsed = round(time.monotonic() - started, 3)
         update_execution(descriptor_path, execution["execution_id"],
@@ -392,7 +480,9 @@ class DirectRoleExecutor:
         recorder.close(outcome="RESULT_RECEIVED" if valid else ("INVALID" if rc == 0 else "BLOCKED"),
                        result_refs=[str(result_path)], detail=None if valid else (stderr or stdout)[-2000:], **close)
         if rc != 0:
-            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True)
+            failure_class, retry_after = classify_failure(rc, stdout, stderr)
+            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True,
+                                  failure_class=failure_class, retry_after_minutes=retry_after)
         if not valid and self.name not in ("review", "final_review"):
             raise ExecutorFailure(f"{self.name}: provider returned no structured result", dispatched=True)
         # An invalid reviewer result is handed back as-is: `normalize_review`
@@ -432,4 +522,5 @@ def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30) -> dict[
     """The production executor set for `AutonomyController` (no `prepare_packet`:
     the deterministic packet is used as-is)."""
     return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns)
-            for name in ("plan", "execute", "self_verify", "prepare_packet", "review", "repair", "final_review")}
+            for name in ("plan", "execute", "self_verify", "prepare_packet", "review", "repair", "final_review",
+                         "diagnose")}

@@ -1,0 +1,155 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "evaluation": "AAW_PLANNER_QUALITY_HARDENING_V0.3",
+  "generated_at": "2026-09-13",
+  "note": "Human-assessed quality scores, failure taxonomy, and aggregate metrics over the raw captures in planner_live_validation_v0_3_phaseA_baseline.json (Phase A: 2 cases reproduced against the unmodified a6a5f30 package, via `git stash`) and planner_live_validation_v0_3.json (Phase B: the full 12-case V0.3 corpus -- the 10 reused V0.2 cases plus 2 new targeted cases -- against the hardened V0.3 package), plus planner_accept_run_v0_3.json (real Accept+Save+Run evidence). Scored with the identical V0.2 rubric so before/after numbers are comparable. Token usage/cost are not included, for the same bridge-contract reason V0.2 documented.",
+  "rubric": {
+    "0": "unusable -- wrong task, structurally nonsensical, or dangerous",
+    "1": "major repair required -- core idea recognizable but significant graph repair needed",
+    "2": "useful with minor modification -- mostly correct but an operator would realistically edit it",
+    "3": "accept-ready -- good enough to Accept directly"
+  },
+  "phase_a_baseline_reproduction": {
+    "note": "Ran against the TRUE a6a5f30 package (planner_proposal.py/test file changes were `git stash`-ed for these 2 calls, then restored) -- not a simulation of the old code, the actual old code.",
+    "cases": [
+      {
+        "case_id": "C_review_repair", "profile": "SOL_HIGH", "phase": "PHASE_A_BASELINE",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 36.328, "node_count": 0, "edge_count": 0,
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "Did NOT reproduce V0.2's original failure signature (role-on-MERGE over a 6-node graph). Instead the model declined with an empty proposal, citing that anchor N09 is a HUMAN_GATE and anything placed after it would be unreachable -- i.e. repair 3b (already committed in a6a5f30, added for case G) generalizes to C, which V0.2 explicitly flagged as 'not individually re-verified' (§N). This is real evidence the HUMAN_GATE rule holds beyond the one case it was built from, and that live-model output is not perfectly reproducible call to call -- the honest read is 'the mistake did not recur this time', not 'the mistake was fixed by V0.3' (V0.3's own changes were not present for this call)."
+      },
+      {
+        "case_id": "RP1_impl_review_repair", "profile": "SOL_HIGH", "phase": "PHASE_A_BASELINE",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 26.075, "node_count": 0, "edge_count": 0,
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "Did NOT reproduce V0.2's original failure signature (an over-scoped 4-node graph refused by the real validator's own `limits.max_nodes` check). The model instead declined empty. Confirms the workflow-level node-cap problem (§K.3, the one gap V0.3 exists to fix) still has no *good* answer in the unmodified package -- the model still cannot say WHY it is declining in a targeted way, it just abstained. This is the direct baseline V0.3's node_budget addition is measured against."
+      }
+    ]
+  },
+  "phase_b_v0_3_package": {
+    "cases": [
+      {
+        "case_id": "A_simple_linear", "profile": "SOL_HIGH", "class": "9A",
+        "status": "PROPOSAL_READY", "proposal_id": "PROP-f328d21a0f3a29fc",
+        "wall_time_s": 32.205, "node_count": 1, "edge_count": 2, "detach_count": 1,
+        "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Same shape as V0.2 (detach + one research/synthesis REVIEW node, re-routed into the existing review). Real Accept+Save+Run verified (planner_accept_run_v0_3.json, label simple_A): N01->N03->N02->N09, settled WAITING_FOR_HUMAN."
+      },
+      {
+        "case_id": "B_parallel_merge", "profile": "SOL_HIGH", "class": "9B",
+        "status": "PROPOSAL_READY", "proposal_id": "PROP-ed695d3fb1300186",
+        "wall_time_s": 37.286, "node_count": 3, "edge_count": 5, "detach_count": 1,
+        "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Fan-out into two REVIEW branches, ALL_MATCHES, converging on a MERGE with role/capability/effort correctly null -- the exact defect class this evaluation is measuring (V0.2 repair 3a / V0.3's node_type_field_compatibility map) did NOT recur. Real Accept+Save+Run verified (planner_accept_run_v0_3.json, label branch_merge_B): N01->{N03,N04}->N05(MERGE)->N02->N09, settled WAITING_FOR_HUMAN. Required branch+MERGE real-run evidence."
+      },
+      {
+        "case_id": "C_review_repair", "profile": "SOL_HIGH", "class": "9C",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 18.398, "node_count": 0, "edge_count": 0,
+        "quality_score": null, "accept_ready": false, "modify_candidate": false,
+        "failure_category": "declined_after_correction",
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "Same empty decline as Phase A (HUMAN_GATE anchor N09 halts unconditionally) -- consistent with Phase A, so this outcome is attributable to the pre-existing repair-3b rule, not to any V0.3 change. No numeric score: nothing usable produced, but the decline itself is correct given the anchor."
+      },
+      {
+        "case_id": "D_existing_edge_splice", "profile": "SOL_HIGH", "class": "9D",
+        "status": "PROPOSAL_READY", "wall_time_s": 18.308, "node_count": 1, "edge_count": 2, "detach_count": 1,
+        "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Detached the conditional E_N02_PASS edge, inserted one documentation node, preserved the PASS condition through to N09. Same clean shape as V0.2."
+      },
+      {
+        "case_id": "E_first_match_hazard", "profile": "SOL_HIGH", "class": "9E",
+        "status": "PROPOSAL_READY", "wall_time_s": 101.245, "node_count": 2, "edge_count": 8, "detach_count": 1,
+        "quality_score": 2, "accept_ready": false, "modify_candidate": true,
+        "unnecessary_complexity": true, "failure_category": "excessive_graph_complexity",
+        "notes": "Legal (FIRST_MATCH ordering and predicates all correct) but more elaborate than the instruction called for: a second REVIEW node plus three separate FALLBACK-to-HUMAN_REQUIRED safety edges that were not requested. V0.2's SOL_HIGH answer to the identical case used 2 nodes/5 edges; this run, WITH the new complexity-discipline rule in the package, still built the more elaborate 2-node/8-edge shape closer to V0.2's OPUS_HIGH answer. Direct, honest evidence that a prose complexity rule does not reliably suppress over-elaboration on this case -- the single clearest negative result in V0.3."
+      },
+      {
+        "case_id": "F_existing_merge", "profile": "SOL_HIGH", "class": "9F",
+        "status": "PROPOSAL_READY", "wall_time_s": 43.927, "node_count": 1, "edge_count": 3, "detach_count": 1,
+        "quality_score": 2, "accept_ready": false, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Same legal-workaround pattern as V0.2 (reused the detached edge's own id from the new node so M08's expected_incoming stays byte-identical) plus one added FALLBACK-to-HUMAN_REQUIRED edge for a non-PASS validation result. Legal and clever; an operator would likely rename the relocated edge id for clarity, same caveat V0.2 raised."
+      },
+      {
+        "case_id": "G_human_gate", "profile": "SOL_HIGH", "class": "9G",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 23.738, "node_count": 0, "edge_count": 0,
+        "quality_score": null, "accept_ready": false, "modify_candidate": false,
+        "failure_category": "declined_after_correction",
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "Reproduces V0.2's own after-repair-3b result exactly: empty, correct decline given a HUMAN_GATE anchor. No change expected or observed from V0.3 (V0.3 did not touch the HUMAN_GATE rule)."
+      },
+      {
+        "case_id": "H_ambiguous", "profile": "SOL_HIGH", "class": "9H",
+        "status": "PROPOSAL_READY", "wall_time_s": 50.42, "node_count": 2, "edge_count": 5, "detach_count": 1,
+        "quality_score": 2, "accept_ready": false, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Same bounded REVIEW->REPAIR loop shape as V0.2, stated as an assumption. Legal and reasonably scoped for a deliberately ambiguous ask; an operator would likely accept as-is or trim slightly -- unchanged from V0.2's read of this case."
+      },
+      {
+        "case_id": "RP1_impl_review_repair", "profile": "SOL_HIGH", "class": "10.1",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 13.868, "node_count": 0, "edge_count": 0,
+        "quality_score": null, "accept_ready": false, "modify_candidate": false,
+        "failure_category": "workflow_level_node_cap_exceeded",
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "THE node_budget test case. V0.2: an over-scoped 4-node/11-edge proposal, refused by the real validator's own limits.max_nodes check after 98.6s, quality 1 (unusable). Phase A (unmodified package): empty decline after 26.1s, but with NO explanation of why. Phase B (V0.3 package, node_budget exposed): empty decline after 13.9s, and the model's own warnings now say verbatim 'No legal extension can be proposed because the workflow has zero remaining node capacity' and 'The operator must increase the workflow node limit or remove or replace existing nodes' -- it read node_budget.remaining_workflow_capacity=0 directly and reasoned from it. Node count still does not increase (the request is genuinely impossible at budget=0), so this does NOT flip INVALID->READY, but it is a materially better failure: honest, ~2x faster than Phase A and ~7x faster than V0.2's wasted attempt, and immediately actionable instead of a generic schema error."
+      },
+      {
+        "case_id": "RP2_research_merge_decision", "profile": "SOL_HIGH", "class": "10.2",
+        "status": "PROPOSAL_READY", "wall_time_s": 45.478, "node_count": 3, "edge_count": 5, "detach_count": 1,
+        "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "Same clean shape as V0.2: two REVIEW audits fanned out, merged ALL_REQUIRED, role correctly null on the MERGE. Confirms the field-compatibility fix continues to hold on a case that never exhibited the defect in V0.2 either."
+      },
+      {
+        "case_id": "J_merge_and_human_gate", "profile": "SOL_HIGH", "class": "V0.3-1",
+        "status": "PROPOSAL_INVALID", "wall_time_s": 105.196, "node_count": 0, "edge_count": 0,
+        "quality_score": null, "accept_ready": false, "modify_candidate": false,
+        "failure_category": "unavoidable_ambiguity",
+        "refusal_code": "PROPOSAL_SHAPE",
+        "notes": "NEW case, designed to test node_type_field_compatibility on a MERGE and a HUMAN_GATE in the SAME proposal (V0.2 §K.2's exact untested combination). Did not exercise that: the model correctly reasoned that a HUMAN_GATE ending the route would make the existing N02/N09 unreachable (V0.1's reachability rule), and declined rather than build an illegal structure -- a good outcome, but it means this specific case never emitted a MERGE or HUMAN_GATE node to check field legality on. The §K.2 combination remains formally untested; a case would need an anchor/graph shape where a gated merge-then-approve step does NOT strand existing downstream nodes, which V0.1's single-run contract may not admit at all. Longest wall time of the corpus (105.2s), consistent with the deeper reachability reasoning."
+      },
+      {
+        "case_id": "K_minimal_ask", "profile": "SOL_HIGH", "class": "V0.3-2",
+        "status": "PROPOSAL_READY", "wall_time_s": 27.841, "node_count": 1, "edge_count": 2, "detach_count": 1,
+        "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+        "unnecessary_complexity": false, "failure_category": null,
+        "notes": "NEW case, designed to test the complexity-discipline rule against a deliberately small, easy-to-over-build ask ('keep it as small as possible'). The model built exactly one node and two edges, nothing decorative -- the cleanest positive evidence in V0.3 that the rule can and does work; contrasts directly with E_first_match_hazard's negative result in the same corpus."
+      }
+    ]
+  },
+  "aggregate_metrics_phase_b": {
+    "raw_live_calls_phase_b": 12,
+    "raw_live_calls_phase_a": 2,
+    "raw_live_calls_total_v0_3": 14,
+    "provider_dispatch_success_rate": "12/12 (100%)",
+    "schema_envelope_valid_rate": "12/12 (100%) -- every non-READY case was a closed-set PROPOSAL_SHAPE refusal (an explicit, well-reasoned empty decline), never a malformed/unparseable output",
+    "proposal_ready_rate": "8/12 (66.7%)",
+    "useful_rate_of_all_attempts": "8/12 (66.7%) -- every READY proposal scored 2 or 3; zero scored 0 or 1",
+    "useful_rate_of_ready_proposals": "8/8 (100%)",
+    "accept_ready_rate_of_all_attempts": "5/12 (41.7%)",
+    "accept_ready_rate_of_ready_proposals": "5/8 (62.5%) -- identical to V0.2's 62.5%",
+    "modify_candidate_rate": "3/12 (25%): E_first_match_hazard and H_ambiguous (over-elaboration), F_existing_merge (edge-id clarity, same recurring case as V0.2)",
+    "field_misapplication_defect_recurrence": "0/12 -- the single most frequent V0.2 failure class (role/capability/effort on a MERGE, 3/13 occurrences) did not recur once, across B, RP2 (both fan-out+MERGE cases) and every LLM node in every other case",
+    "correct_detach_handling_rate": "8/8 of READY cases that required it",
+    "correct_first_match_ordering_rate": "1/1 dedicated hazard attempt (E) legally correct, though over-scoped",
+    "declined_cases_all_correctly_diagnosed": "4/4 (C, G, RP1, J) -- every decline cited a real, specific V0.1 contract rule (HUMAN_GATE halts unconditionally, zero node_budget, reachability), none were generic or wrong"
+  },
+  "failure_taxonomy_counts_phase_b": {
+    "excessive_graph_complexity": 2,
+    "declined_after_correction_human_gate": 2,
+    "workflow_level_node_cap_exceeded_correctly_declined": 1,
+    "unavoidable_ambiguity_declined": 1,
+    "field_misapplied_to_wrong_node_type": 0,
+    "malformed_output": 0,
+    "duplicate_or_colliding_ids": 0,
+    "bad_anchor_handling": 0,
+    "missing_detach_edges": 0,
+    "first_match_ordering_failure": 0,
+    "bad_routing_mode": 0,
+    "unsupported_node_type": 0,
+    "protected_merge_incoming_mutation_attempted": 0
+  }
+}

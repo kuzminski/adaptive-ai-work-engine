@@ -1,0 +1,187 @@
+{
+  "contract": "AAW_PLANNER_PROPOSAL_PIPELINE_V0.1",
+  "evaluation": "AAW_PLANNER_LIVE_PROVIDER_VALIDATION_V0.2",
+  "generated_at": "2026-09-12",
+  "note": "Human-assessed quality scores, failure taxonomy, and aggregate metrics over the raw captures in planner_live_validation_v0_2.json (baseline + model comparison), planner_live_validation_v0_2_after_repair.json (post-repair reruns of B and G) and planner_accept_run_v0_2.json (real Accept+Save+Run evidence). Token usage/cost are not included: aaw_bridge.plan_from_node's planner telemetry row does not forward the provider seam's internal usage dict, so no per-call token/cost figure is available through the bridge contract this evaluation drives -- not fabricated here.",
+  "rubric": {
+    "0": "unusable -- wrong task, structurally nonsensical, or dangerous",
+    "1": "major repair required -- core idea recognizable but significant graph repair needed",
+    "2": "useful with minor modification -- mostly correct but an operator would realistically edit it",
+    "3": "accept-ready -- good enough to Accept directly"
+  },
+  "cases": [
+    {
+      "case_id": "A_simple_linear", "profile": "SOL_HIGH", "class": "9A",
+      "status": "PROPOSAL_READY", "proposal_id": "PROP-e759ad1c2021d4e6",
+      "wall_time_s": 22.594, "node_count": 1, "edge_count": 2, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": null, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "Detached E_N01_CONTINUE, inserted one research/synthesis node, re-routed into the existing review. Minimal, exactly matched the ask. Real Accept+Save+Run verified (see planner_accept_run_v0_2.json, label simple_A): executed N01->N03->N02->N09, settled WAITING_FOR_HUMAN."
+    },
+    {
+      "case_id": "B_parallel_merge", "profile": "SOL_HIGH", "class": "9B",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 28.579, "node_count": 3, "edge_count": 5, "detach_count": 1,
+      "quality_score": 1, "accept_ready": false, "modify_candidate": true,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": false, "unnecessary_complexity": false,
+      "failure_category": "field_misapplied_to_wrong_node_type",
+      "refusal_code": "UNSUPPORTED_FIELD",
+      "notes": "Fan-out into two branches converging on a MERGE was structurally correct (ALL_MATCHES, closed incoming set), but the MERGE node was given role=RESEARCH_SYNTHESIZER, which only IMPLEMENT/REVIEW/REPAIR nodes may carry. A single-field deletion would make this Accept-ready -- the clearest Modify-candidate in the corpus.",
+      "before_after": "BEFORE the role/capability/effort clarification rule (see repair #2 below)."
+    },
+    {
+      "case_id": "B_parallel_merge", "profile": "SOL_HIGH", "class": "9B", "phase": "AFTER_REPAIR",
+      "status": "PROPOSAL_READY", "proposal_id": null, "wall_time_s": 40.063,
+      "node_count": 4, "edge_count": 6, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": true, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "AFTER adding the role/capability/effort-is-conditional-on-type rule to the planning package: same case, same profile, now PROPOSAL_READY (4 nodes, legal MERGE). Real Accept+Save+Run verified (planner_accept_run_v0_2.json, label branch_merge_B): executed N01->{N03,N04}->N05(MERGE)->N06->N02->N09, settled WAITING_FOR_HUMAN. This is the required branch+MERGE real-run evidence."
+    },
+    {
+      "case_id": "B_parallel_merge", "profile": "OPUS_HIGH", "class": "9B",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 85.885, "node_count": 3, "edge_count": 5, "detach_count": 1,
+      "quality_score": 1, "accept_ready": false, "modify_candidate": true,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": false, "unnecessary_complexity": false,
+      "failure_category": "field_misapplied_to_wrong_node_type",
+      "refusal_code": "UNSUPPORTED_FIELD",
+      "notes": "Same mistake as SOL_HIGH (role on the MERGE node), same case -- cross-model evidence this failure mode is not one provider's quirk. Run before the repair rule existed; not re-tested under OPUS_HIGH after the fix (budget)."
+    },
+    {
+      "case_id": "C_review_repair", "profile": "SOL_HIGH", "class": "9C",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 85.692, "node_count": 6, "edge_count": 14, "detach_count": 0,
+      "quality_score": 1, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": null, "correct_merge": false, "unnecessary_complexity": true,
+      "failure_category": "field_misapplied_to_wrong_node_type",
+      "refusal_code": "UNSUPPORTED_FIELD",
+      "notes": "Asked for one implementation step + a review that can route into repair; the model built a 6-node IMPLEMENT/REVIEW/REPAIR/REVIEW/MERGE/FINAL_GATE structure and gave the MERGE a role (second, unreported instance of the same defect class -- validation stops at first failure so a FINAL_GATE with the same mistake was never even reached). Over-scoped relative to the ask as well as invalid; not a clean Modify case."
+    },
+    {
+      "case_id": "D_existing_edge_splice", "profile": "SOL_HIGH", "class": "9D",
+      "status": "PROPOSAL_READY", "wall_time_s": 24.068, "node_count": 1, "edge_count": 2, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": null, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "Detached the conditional E_N02_PASS edge (not an unconditional one -- a different splice shape than A/B/E), inserted one documentation node, preserved the PASS condition into it and on to N09. Clean."
+    },
+    {
+      "case_id": "E_first_match_hazard", "profile": "SOL_HIGH", "class": "9E",
+      "status": "PROPOSAL_READY", "wall_time_s": 40.394, "node_count": 2, "edge_count": 5, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": null, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "Detached the anchor's sole unconditional edge and re-routed through a new node whose two outgoing edges use mutually-exclusive has_findings True/False predicates -- avoids the FIRST_MATCH unconditional-shadows-conditional hazard entirely rather than triggering it. No unrequested REPAIR/BLOCKED wiring was invented beyond what was asked."
+    },
+    {
+      "case_id": "E_first_match_hazard", "profile": "OPUS_HIGH", "class": "9E",
+      "status": "PROPOSAL_READY", "wall_time_s": 119.605, "node_count": 3, "edge_count": 8, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": null, "unnecessary_complexity": true,
+      "failure_category": null,
+      "notes": "Also correct and legal, with a bounded REPAIR loop added for the compliance check (not strictly requested) and exceptionally thorough self-flagged warnings (fan-in reachability under FIRST_MATCH, cycle avoidance, whether the runtime lets a REVIEW report has_findings independently of verdict). Higher reasoning depth, more elaborate than the minimum, ~3x SOL_HIGH's wall time."
+    },
+    {
+      "case_id": "F_existing_merge", "profile": "SOL_HIGH", "class": "9F",
+      "status": "PROPOSAL_READY", "wall_time_s": 30.212, "node_count": 1, "edge_count": 2, "detach_count": 1,
+      "quality_score": 2, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": true, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "Expected a refusal (splicing before an existing MERGE); instead the model detached E_N05_CONTINUE and re-declared an edge with the SAME edge_id from the new review node to M08 -- M08's expected_incoming stays byte-identical, so the real validator accepts it. Legal and clever, though the reused edge_id no longer names its true source, which an operator would likely want to rename. The model itself flagged this exact risk in its own warnings before being told to."
+    },
+    {
+      "case_id": "F_existing_merge", "profile": "OPUS_HIGH", "class": "9F",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 105.405, "node_count": 1, "edge_count": 3, "detach_count": 1,
+      "quality_score": null, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": null, "correct_merge": false, "unnecessary_complexity": false,
+      "failure_category": "protected_merge_incoming_mutation_attempted",
+      "refusal_code": "SCHEMA",
+      "notes": "Declared a new edge_id (E_N10_MERGE) arriving at M08 instead of reusing E_N05_CONTINUE, which would change M08's expected_incoming -- correctly refused: 'expected_incoming must exactly equal the graph's declared incoming edges'. This is the V0.1 boundary working exactly as designed, not a defect. No numeric quality score: nothing usable was produced, but the refusal itself is the correct, intended outcome."
+    },
+    {
+      "case_id": "G_human_gate", "profile": "SOL_HIGH", "class": "9G",
+      "status": "PROPOSAL_READY", "wall_time_s": 45.948, "node_count": 2, "edge_count": 5, "detach_count": 0,
+      "quality_score": 1, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": false, "correct_merge": null, "unnecessary_complexity": false,
+      "failure_category": "missing_semantic_context",
+      "notes": "Schema-legal (passes validate_proposal/workflow_schema/routing_contract) but built on an incorrect runtime assumption: it declared conditional edges from N09 (an existing HUMAN_GATE) keyed on a verdict the runtime never produces or routes on, because workflow_runner.py unconditionally sets status=WAITING_FOR_HUMAN and returns the moment ANY HUMAN_GATE/FINAL_GATE completes (lines ~1529-1538) -- it never reaches routing_contract.evaluate_gate for that node type. The declared edges would never be evaluated at runtime. The planning package's `rules` said nothing about this. BEFORE the HUMAN_GATE clarification rule (see repair #1)."
+    },
+    {
+      "case_id": "G_human_gate", "profile": "SOL_HIGH", "class": "9G", "phase": "AFTER_REPAIR",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 26.179, "node_count": 0, "edge_count": 0, "detach_count": 0,
+      "quality_score": null, "accept_ready": false, "modify_candidate": false,
+      "failure_category": "declined_after_correction",
+      "refusal_code": "PROPOSAL_SHAPE",
+      "notes": "AFTER the HUMAN_GATE rule: same case, same profile, the model returned an EMPTY proposal (no nodes, no edges) rather than the confidently-wrong routable structure from before. Read positively: once correctly informed that a HUMAN_GATE's outgoing edges are runtime-dead, the model chose not to build a structure that looks functional but is not, rather than inventing a workaround the package gave it no basis for. This is the fail-closed direction, not a regression -- but it also means the operator's actual request (a gated follow-on step) still has no proposed answer; see 'remaining gaps' in the report."
+    },
+    {
+      "case_id": "H_ambiguous", "profile": "SOL_HIGH", "class": "9H",
+      "status": "PROPOSAL_READY", "wall_time_s": 52.718, "node_count": 3, "edge_count": 8, "detach_count": 1,
+      "quality_score": 2, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": null, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "For the deliberately under-specified 'make this more robust', the model built one bounded REVIEW->REPAIR->REVIEW loop and explicitly stated its interpretation as an assumption ('robustness means adding evidence-based independent review and at most one bounded repair cycle') rather than inventing open-ended structure. Legal and reasonably scoped; an operator would likely accept as-is or trim slightly."
+    },
+    {
+      "case_id": "RP1_impl_review_repair", "profile": "SOL_HIGH", "class": "10.1",
+      "status": "PROPOSAL_INVALID", "wall_time_s": 98.575, "node_count": 4, "edge_count": 11, "detach_count": 2,
+      "quality_score": 1, "accept_ready": false, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": null, "correct_merge": null, "unnecessary_complexity": true,
+      "failure_category": "workflow_level_node_cap_exceeded",
+      "refusal_code": "SCHEMA",
+      "notes": "Refused with 'node count exceeds limits.max_nodes'. This is IMPLEMENT_REVIEW_REPAIR_V1.json's OWN workflow-level limits.max_nodes=5 -- the fixture already has 5 nodes (N01-N05) at that cap, so ANY extension was structurally doomed regardless of proposal quality. The planning package DOES expose workflow.limits to the planner, but nothing in `rules` tells it the proposal's total node count must respect the workflow's own remaining budget, not just ProposalLimits.max_nodes=8. Partly a corpus-design artifact (this fixture happened to be full), partly a real, cheap, evidence-backed package gap -- see 'next recommendation'."
+    },
+    {
+      "case_id": "RP2_research_merge_decision", "profile": "SOL_HIGH", "class": "10.2",
+      "status": "PROPOSAL_READY", "wall_time_s": 45.27, "node_count": 3, "edge_count": 5, "detach_count": 1,
+      "quality_score": 3, "accept_ready": true, "modify_candidate": false,
+      "correct_anchor_handling": true, "correct_detach_handling": true,
+      "correct_routing": true, "correct_merge": true, "unnecessary_complexity": false,
+      "failure_category": null,
+      "notes": "Fan-out into two REVIEW nodes (static analysis, dependency/supply-chain audit) converging on a MERGE ALL_REQUIRED, correctly role=None on the MERGE this time -- same failure class as B/C did NOT recur here, confirming the defect is a repeatable tendency, not a universal one."
+    }
+  ],
+  "aggregate_metrics": {
+    "raw_live_calls_in_final_corpus": 13,
+    "raw_live_calls_including_repair_verification_reruns": 15,
+    "provider_dispatch_success_rate_post_fix": "13/13 (100%) -- every post-fix call returned real, parseable structured output; zero PLANNER_MALFORMED_OUTPUT/PLANNER_DISPATCH_FAILED",
+    "schema_envelope_valid_rate": "13/13 (100%) -- every failure was a closed-set/business-rule refusal (UNSUPPORTED_FIELD, SCHEMA), never a shape/JSON-parse failure",
+    "proposal_ready_rate": "8/13 (61.5%)",
+    "accept_ready_rate_of_all_attempts": "5/13 (38.5%)",
+    "accept_ready_rate_of_ready_proposals": "5/8 (62.5%)",
+    "modify_candidate_rate": "2/13 clean cases (15.4%), both the same field-removal fix (B on both profiles); a third (C) is a weaker/partial candidate",
+    "correct_detach_handling_rate": "5/5 of cases requiring detach handled it correctly (A, D, E, F, H); RP2 and B correctly detached too when relevant",
+    "correct_first_match_ordering_rate": "2/2 dedicated hazard attempts (E, both profiles) handled correctly; 0 FIRST_MATCH-ordering refusals anywhere in the corpus",
+    "before_after_repair_1_human_gate_rule": "G_human_gate: PROPOSAL_READY-but-wrong -> PROPOSAL_INVALID-empty (confidently wrong replaced with an honest decline)",
+    "before_after_repair_2_role_conditionality_rule": "B_parallel_merge (SOL_HIGH): PROPOSAL_INVALID -> PROPOSAL_READY, then real Accept+Save+Run verified end to end"
+  },
+  "failure_taxonomy_counts": {
+    "field_misapplied_to_wrong_node_type": 3,
+    "excessive_graph_complexity": 2,
+    "workflow_level_node_cap_exceeded": 1,
+    "protected_merge_incoming_mutation_attempted": 1,
+    "missing_semantic_context_human_gate": 1,
+    "declined_after_correction": 1,
+    "malformed_output": 0,
+    "duplicate_or_colliding_ids": 0,
+    "bad_anchor_handling": 0,
+    "missing_detach_edges": 0,
+    "first_match_ordering_failure": 0,
+    "bad_routing_mode": 0,
+    "unsupported_node_type": 0,
+    "wrong_interpretation_of_operator_intent": 0,
+    "provider_or_transport_failure_pre_fix_only": "all pre-fix live calls (100%) failed this way; 0 post-fix"
+  }
+}
