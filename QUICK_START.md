@@ -1,6 +1,6 @@
 # AAW — Quick Start (Windows)
 
-Release `0.2.0` · the app UI is in Polish; button names are quoted as they appear.
+Release `0.2.1` · the app UI is in Polish; button names are quoted as they appear.
 
 **Before you start (outside AAW, one time):**
 - **Git for Windows** — <https://git-scm.com/downloads>
@@ -16,6 +16,7 @@ Release `0.2.0` · the app UI is in Polish; button names are quoted as they appe
 2. **Unzip** it (right-click → *Extract All…* → *Extract*). No installation, no Python, no terminal needed. Do not start the app from inside the ZIP preview.
 3. **Run** it: the extracted location contains one folder, `AAW`. Open it and double-click `AAW.exe` (Explorer may show it as `AAW`, type *Application*). Next to it: `SZYBKI_START.txt` (this guide in Polish), `README.md`, `EXAMPLES` and `_internal` (app files — do not modify). The app opens in your browser at `http://127.0.0.1:…` (local only).
 4. **Windows warning:** the build is not code-signed yet, so SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**.
+   If Microsoft Defender quarantines `AAW.exe` as `Trojan:Win32/Wacatac…!ml`, it is a generic heuristic false positive for unsigned PyInstaller apps: extract the ZIP outside OneDrive (e.g. `C:\AAW`), then in Windows Security → Protection history choose **Actions → Allow on device** (or exclude the `AAW` folder).
 5. **Welcome screen** → **„Zaczynamy →"** (Let's start). A 7-step wizard opens.
 6. **Project** — click **„Wybierz…"** (Choose…) and pick your normal project folder (a Git repository). AAW creates its own isolated copy; your folder is not changed. If the folder has uncommitted changes, AAW tells you exactly what to do (commit or stash).
 7. **AI tools** — AAW detects Claude CLI / Codex CLI and shows FOUND / NOT FOUND, version and login status, with setup help if something is missing. Then **models**: keep the recommended levels (★) and optionally click **„Sprawdź modele"** (Verify models — one tiny request per model).

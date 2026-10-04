@@ -1,5 +1,10 @@
 # Changelog — AAW product app
 
+## 0.2.1 — 2026-10-04 — antivirus false-positive mitigation
+- `AAW.exe` now carries a Windows version resource (company, product, description, version).
+- CI builds the PyInstaller bootloader from source and scans the built app with Microsoft Defender (informational).
+- Start guides explain what to do when Defender quarantines the file.
+
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 
 Details: `AAW_QUOTA_ROUTING_AND_REPAIR_ESCALATION_V0_1.md`. Lifecycle unchanged.
