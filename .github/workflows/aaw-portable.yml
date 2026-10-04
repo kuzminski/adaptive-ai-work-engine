@@ -1,7 +1,7 @@
 name: AAW portable build
 
 # Every run builds and validates AAW-Windows-x64.zip (workflow artifact).
-# Release: push a tag v<product_version.RELEASE> (e.g. v0.2.0-rc1), or run this workflow
+# Release: push a tag v<product_version.RELEASE> (e.g. v0.2.0), or run this workflow
 # manually with release_tag (the tag is then created on the selected commit). After the
 # Windows and Linux jobs pass, the `publish` job attaches the ZIP to that GitHub Release.
 # No binary is ever committed to the repository.
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Publish a GitHub Release with this tag, e.g. v0.2.0-rc1 (empty = build only)"
+        description: "Publish a GitHub Release with this tag, e.g. v0.2.0 (empty = build only)"
         required: false
         default: ""
   push:

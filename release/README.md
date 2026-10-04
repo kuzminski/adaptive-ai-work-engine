@@ -47,7 +47,7 @@ Your data (tasks, evidence, isolated copies, settings, logs) lives in
 `%LOCALAPPDATA%\AAW`, never in the app folder. Deleting the app folder does not
 delete your tasks.
 
-## Known limitations of this release candidate
+## Known limitations of this release
 
 - The executable is not code-signed (SmartScreen warning on first start).
 - The app UI is in Polish.
