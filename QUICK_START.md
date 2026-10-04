@@ -1,6 +1,6 @@
 # AAW — Quick Start (Windows)
 
-Release `0.2.0-rc1` · the app UI is in Polish; button names are quoted as they appear.
+Release `0.2.0` · the app UI is in Polish; button names are quoted as they appear.
 
 **Before you start (outside AAW, one time):**
 - **Git for Windows** — <https://git-scm.com/downloads>
