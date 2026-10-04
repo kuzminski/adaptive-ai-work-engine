@@ -36,7 +36,7 @@ import re
 import ssl
 import urllib.request
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import autonomy_contract as ac
 import autonomy_policy as ap
@@ -203,11 +203,77 @@ def profile_display(profile_id: str | None, profiles: Mapping[str, Mapping[str, 
     return str(row.get("display_name") or profile_id)
 
 
+def resolve_implementer_chain(requested: Sequence[str] | None, *, catalog: Mapping[str, Any],
+                              option: Mapping[str, Any], runnable: set[str],
+                              profiles: Mapping[str, Mapping[str, Any]],
+                              states: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """The implementer escalation chain for ONE new run.
+
+    `requested` is the user's own ordered chain (even a single model). Without it the
+    chosen implementation level may point at the catalog's system default chain. A user
+    chain is kept exactly as given (an unavailable step is reported, never replaced); the
+    system default chain is used only when its first (starting) step is runnable here and
+    then drops later steps that are not runnable, visibly. No chain at all (`source` None)
+    leaves the legacy per-slot candidate resolution in charge.
+    """
+    result: dict[str, Any] = {"source": None, "profile_ids": [], "skipped": [], "blockers": [], "warnings": []}
+    if requested:
+        try:
+            ids = ap.validate_chain(requested)
+        except ValueError as exc:
+            result["blockers"].append(f"łańcuch implementatora: {exc}")
+            return result
+        unknown = [pid for pid in ids if pid not in profiles]
+        if unknown:
+            result["blockers"].append(f"łańcuch implementatora: nieznane profile {', '.join(unknown)}")
+            return result
+        local = [pid for pid in ids if profiles[pid].get("not_implementer")]
+        if local:
+            result["blockers"].append("łańcuch implementatora: profile lokalne nie mogą implementować: " + ", ".join(local))
+            return result
+        result.update(source="USER", profile_ids=ids)
+        return result
+    spec = catalog.get("default_implementer_chain")
+    if option.get("implementer_chain") != "DEFAULT" or not isinstance(spec, Mapping):
+        return result
+    try:
+        ids = ap.validate_chain(spec.get("profiles"))
+    except ValueError:
+        return result
+    kept = [pid for pid in ids if pid in runnable and pid in profiles]
+    # Leading steps of a provider whose CLI is not installed at all are not a "different model" the run could
+    # silently start on: the chain simply begins at the first step that this machine can have (Claude-only setup).
+    start = next((i for i, pid in enumerate(ids) if (states.get(pid) or {}).get("state") != "CLI_NOT_FOUND"), 0)
+    ids_from_start = ids[start:]
+    for pid in ids:
+        if pid not in kept and (states.get(pid) or {}).get("state") != "CLI_NOT_FOUND":   # uninstalled CLI: not noise
+            state = states.get(pid) or {}
+            result["skipped"].append({"profile_id": pid, "display": profile_display(pid, profiles),
+                                      "state": state.get("state"), "reason": state.get("reason") or state.get("label"),
+                                      "checkable": state.get("state") in ("NEEDS_CHECK", "NOT_VERIFIED")})
+    if ids_from_start[0] not in kept:
+        # The chain's starting model is not runnable here (no CLI, rejected by a local probe, ...): starting
+        # silently on a later, different step would be a substitution. The per-slot candidates decide instead,
+        # with their visible ALTERNATIVE / UNAVAILABLE statuses (e.g. a Claude-only setup before verification).
+        return result
+    if result["skipped"]:
+        result["warnings"].append("Pominięto w domyślnym łańcuchu implementatora (niedostępne na tym komputerze): " +
+                                  ", ".join(f"{row['display']}" for row in result["skipped"]) +
+                                  ". Krok niedostępny jest pomijany jawnie — nigdy podmieniany na inny model.")
+    result.update(source="DEFAULT", profile_ids=kept)
+    return result
+
+
 def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: Mapping[str, Any] | None = None,
                     overrides: Mapping[str, str] | None = None,
                     detection: Mapping[str, Any] | None = None,
-                    states: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
-    """Map the three simple levels onto every V0.3 policy slot for one new run."""
+                    states: Mapping[str, Mapping[str, Any]] | None = None,
+                    implementer_chain: Sequence[str] | None = None) -> dict[str, Any]:
+    """Map the three simple levels onto every V0.3 policy slot for one new run.
+
+    `implementer_chain` (optional) is the user's own ordered implementer escalation chain;
+    without it the implementation level's system default chain (if any) is used.
+    """
     catalog = catalog or effective_catalog()
     profiles = _profiles()
     mappings = exact_mappings(catalog)
@@ -238,11 +304,36 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
     warnings: list[str] = []
     order = list(ap.PROFILE_KEYS)
     implementer_model = None
+    chain = resolve_implementer_chain(
+        implementer_chain, catalog=catalog,
+        option=catalog["choices"]["implementation"]["options"][picked["implementation"]],
+        runnable=runnable, profiles=profiles, states=states)
+    blockers.extend(chain["blockers"])
+    warnings.extend(chain["warnings"])
+    chain_ids = chain["profile_ids"] or None
+    chain_slots = ap.chain_slot_ids(chain_ids) if chain_ids else {}
+    chain_status = "RECOMMENDED" if chain["source"] == "DEFAULT" else "OVERRIDE"
     for slot in order:
         candidates = list(slot_candidates[slot])
         recommended = candidates[0]
         status, chosen, reason, mapped_from = None, None, None, None
-        if slot in overrides:
+        if slot in chain_slots:
+            chosen, status = chain_slots[slot], chain_status
+            recommended = chosen
+            index = ap.CHAIN_SLOT_INDEX[slot]
+            reason = (f"krok {min(index, len(chain_ids) - 1) + 1} z {len(chain_ids)} łańcucha implementatora"
+                      + (" (domyślny łańcuch AAW)" if chain["source"] == "DEFAULT" else " (wybrany ręcznie)"))
+            if slot in overrides:
+                blockers.append(f"{SLOT_LABELS[slot]}: ręczny profil {overrides[slot]} koliduje z łańcuchem "
+                                "implementatora — usuń ręczny profil albo zmień łańcuch")
+            elif chosen not in runnable:
+                if slot in required:
+                    blockers.append(f"{SLOT_LABELS[slot]}: {chosen} (krok łańcucha) nie jest teraz dostępny na tym "
+                                    "komputerze — ten krok służy też do napraw i przygotowania review, więc musi działać")
+                else:
+                    warnings.append(f"{SLOT_LABELS[slot]}: {chosen} (krok łańcucha) nie jest teraz dostępny — jeśli "
+                                    "eskalacja do niego będzie potrzebna, AAW zatrzyma się i poprosi o decyzję")
+        elif slot in overrides:
             chosen, status = overrides[slot], "OVERRIDE"
             if chosen not in profiles:
                 blockers.append(f"{SLOT_LABELS[slot]}: nieznany profil {chosen}")
@@ -321,6 +412,25 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
               "purpose": "AAW Product run binding resolved from simple levels; frozen by the engine at start.",
               "allow_same_model_fresh_context": same_model, "roles": roles,
               "policy_profiles": {slot: slots[slot]["profile_id"] for slot in ap.PROFILE_KEYS}}
+    chain_steps: list[dict[str, Any]] = []
+    if chain_ids:
+        config[ap.CHAIN_KEY] = list(chain_ids)
+        for position, pid in enumerate(chain_ids, start=1):
+            state = states.get(pid) or {}
+            chain_steps.append({"step": position, "profile_id": pid, "display": profile_display(pid, profiles),
+                                "runnable": pid in runnable, "availability": state.get("state"),
+                                "availability_label": state.get("label"), "reason": state.get("reason"),
+                                "harness": (profiles.get(pid) or {}).get("harness"),
+                                "runtime_model_id": runtime(pid), "effort": (profiles.get(pid) or {}).get("effort"),
+                                "checkable": state.get("state") in ("NEEDS_CHECK", "NOT_VERIFIED")})
+            if pid not in runnable and pid not in {slots[k]["profile_id"] for k in chain_slots}:
+                warnings.append(f"Krok {position} łańcucha implementatora ({profile_display(pid, profiles)}) "
+                                "nie jest teraz dostępny — jeśli eskalacja do niego będzie potrzebna, AAW zatrzyma "
+                                "się i poprosi o decyzję zamiast podmienić model.")
+        reviewer_model = runtime(roles["reviewer"]["profile_id"])
+        if reviewer_model and reviewer_model in {runtime(pid) for pid in chain_ids[1:]} and not same_model:
+            warnings.append("Review używa tego samego modelu co jeden z dalszych kroków łańcucha implementatora "
+                            "(świeży kontekst, słabsza niezależność, jeśli eskalacja do niego nastąpi).")
     routing = _routing_defaults()
     if routing:
         # Quota/trust/capability routing and provider failover ship with the engine's defaults; the repair
@@ -334,6 +444,10 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
     return {"choices": picked, "catalog_version": catalog["catalog_version"],
             "catalog_source": catalog.get("_source", "BUILTIN"), "slots": slots,
             "roles_config": config, "roles_valid": validated is not None,
+            "implementer_chain": {"source": chain["source"] or "SLOTS", "steps": chain_steps,
+                                  "skipped": chain["skipped"],
+                                  "default_profile_ids": list((catalog.get("default_implementer_chain") or {})
+                                                              .get("profiles") or [])},
             "blockers": blockers, "warnings": warnings}
 
 
@@ -375,14 +489,22 @@ def group_summary(resolution: Mapping[str, Any]) -> dict[str, Any]:
     for group, slots in GROUP_SLOTS.items():
         rows = [resolution["slots"][s] for s in slots]
         main = [resolution["slots"][s] for s in GROUP_MAIN_SLOTS[group]]
+        chain_steps = (resolution.get("implementer_chain") or {}).get("steps") if group == "implementation" else None
+        models = ([row["display"] for row in chain_steps] if chain_steps
+                  else list(dict.fromkeys(f"{s['display']}" for s in main)))
         out[group] = {"choice": resolution["choices"][group],
-                      "models": list(dict.fromkeys(f"{s['display']}" for s in main)),
+                      "models": models,
                       "main": main, "all": rows,
                       "alternatives": [s for s in rows if s["status"] == "ALTERNATIVE"],
                       "unavailable": [s for s in rows if s["status"] == "UNAVAILABLE"],
                       "checkable": sorted({s["recommended_check_profile"] for s in rows
                                            if s.get("recommended_check_profile")} |
-                                          {s["profile_id"] for s in rows if s.get("availability") == "NOT_VERIFIED"})}
+                                          {s["profile_id"] for s in rows if s.get("availability") == "NOT_VERIFIED"} |
+                                          ({row["profile_id"] for row in chain_steps if row["checkable"]}
+                                           if chain_steps else set()) |
+                                          ({row["profile_id"] for row in (resolution.get("implementer_chain") or {})
+                                            .get("skipped", []) if row.get("checkable")}
+                                           if group == "implementation" else set()))}
     return out
 
 

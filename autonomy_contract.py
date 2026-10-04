@@ -706,7 +706,7 @@ ROLES = ("planner", "implementer", "review_prep", "reviewer", "final_reviewer")
 # *declared contract default* (recorded as binding_source), never a runtime
 # substitution for an unavailable model.
 OPTIONAL_ROLE_ALIASES = {"self_verifier": "implementer", "repairer": "implementer"}
-NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation"})
+NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation", "implementer_chain"})
 ROLE_BY_EXECUTOR = {"plan": "planner", "diagnose": "repairer", "execute": "implementer", "self_verify": "self_verifier",
                     "review": "reviewer", "repair": "repairer", "final_review": "final_reviewer",
                     "prepare_packet": "review_prep"}
@@ -751,6 +751,18 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
             else:
                 resolved_policy[key] = _binding(key, profile_id, profile, "AUTONOMY_ROLES.policy_profiles")
         resolved["policy_profiles"] = resolved_policy
+    if config.get("implementer_chain") is not None:
+        import autonomy_policy
+        try:
+            chain_ids = autonomy_policy.validate_chain(config["implementer_chain"])
+        except ValueError as exc:
+            raise AutonomyError(str(exc)) from exc
+        unknown = [pid for pid in chain_ids if pid not in profiles]
+        _require(not unknown, f"implementer_chain references unknown profiles: {unknown}")
+        _require(config.get("policy_profiles") is not None,
+                 "implementer_chain requires policy_profiles (the chain drives the implementation slots)")
+        resolved["implementer_chain"] = [_binding("implementer_chain", pid, profiles[pid], "AUTONOMY_ROLES.implementer_chain")
+                                         for pid in chain_ids]
     if config.get("routing") is not None:
         import model_router
         routing = config["routing"]
@@ -801,6 +813,9 @@ def agent_identities(roles: Mapping[str, Mapping[str, Any]]) -> set[str]:
     out: set[str] = set()
     bindings: list[Mapping[str, Any]] = []
     for key, value in roles.items():
+        if key == "implementer_chain" and isinstance(value, list):
+            bindings.extend(row for row in value if isinstance(row, Mapping) and "profile_id" in row)
+            continue
         if not isinstance(value, Mapping) or key in ("routing", "repair_escalation"):
             continue
         if "profile_id" in value:

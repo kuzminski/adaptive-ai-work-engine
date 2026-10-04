@@ -1,5 +1,15 @@
 # Changelog — AAW product app
 
+## Unreleased — Implementer chain chosen at start
+
+Details: `AAW_IMPLEMENTER_CHAIN_V0_1.md`. Lifecycle unchanged.
+- The implementer is no longer fixed: at the "Modele" step the user can pick any model as the implementer, or an
+  ordered escalation chain of models (from → to, any length 1–12). Default chain set by the system:
+  GPT-6 Luna high → very high → max → GPT-5.6 Terra high → very high → max → Claude Sonnet 5.5 medium → high.
+- New exact profiles: `TERRA_VERY_HIGH`, `TERRA_MAX`, `CLAUDE_SONNET_5_5_HIGH`.
+- The chain is frozen with the run (`roles.implementer_chain`) and drives start (by plan complexity), capability
+  escalation, repairs and the repair ladder. A step that is not runnable here is never replaced by another model.
+
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 
 Details: `AAW_QUOTA_ROUTING_AND_REPAIR_ESCALATION_V0_1.md`. Lifecycle unchanged.

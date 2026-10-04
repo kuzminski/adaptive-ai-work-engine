@@ -385,6 +385,7 @@ class AutonomyController:
         self.policy_active = bool(self.policy_bindings)
         if self.policy_active:
             ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
+        self._load_implementer_chain()
         self.quota_source, self._clock = quota_source, clock
         self._configure_routing()
         self._recovered: dict[str, Any] | None = None   # adopted result of a reconciled read-only call
@@ -450,6 +451,7 @@ class AutonomyController:
             self.policy_active = bool(self.policy_bindings)
             if self.policy_active:
                 ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
+            self._load_implementer_chain()
             self._configure_routing()
         self.state.setdefault("router_state", mr.empty_state())
         self.state.setdefault("executions", [])
@@ -619,6 +621,13 @@ class AutonomyController:
     def _policy_ids(self) -> dict[str, str]:
         return ap.profile_id_map(self.policy_bindings)
 
+    def _load_implementer_chain(self) -> None:
+        """The frozen implementer escalation chain (None = legacy tier slots), with its resolved bindings."""
+        rows = self.roles.get(ap.CHAIN_KEY) if self.policy_active else None
+        rows = [r for r in rows if isinstance(r, Mapping) and r.get("profile_id")] if isinstance(rows, list) else []
+        self.implementer_chain: list[str] | None = ap.validate_chain([r["profile_id"] for r in rows]) if rows else None
+        self.chain_bindings = {str(r["profile_id"]): dict(r) for r in rows}
+
     def _configure_routing(self) -> None:
         """Quota routing and repair escalation come from the frozen role config.
 
@@ -629,7 +638,7 @@ class AutonomyController:
         """
         explicit = self.roles.get("repair_escalation")
         if explicit is None and self.policy_active:
-            explicit = ap.default_repair_escalation(self._policy_ids())
+            explicit = ap.default_repair_escalation(self._policy_ids(), self.implementer_chain)
         self.escalation_cfg = rx.normalize_config(explicit)
         routing = self.roles.get("routing")
         self.routing_cfg = dict(routing) if isinstance(routing, Mapping) else None
@@ -663,7 +672,7 @@ class AutonomyController:
                 complexity_evidence.extend(f"FROZEN_CHARTER_RISK:{row['item_id']}:{row['reason']}"
                                            for row in risk_rows)
             return ap.select_implementation(ids, complexity, evidence=complexity_evidence,
-                                             human_override=mandate_override)
+                                             human_override=mandate_override, chain=self.implementer_chain)
         if name == "prepare_packet":
             return {"policy_version": ap.POLICY_VERSION, "profile_key": "review_pretreatment",
                     "profile_id": ids["review_pretreatment"], "selection_reason": "REVIEW_PRETREATMENT",
@@ -678,7 +687,8 @@ class AutonomyController:
             it = self._it()
             prior_attempt = self._luna_max_capability_attempt(it)
             return ap.select_repair(ids, attempt=int(ctx.get("attempt", 1)),
-                                    findings=ctx.get("findings", []), previous_attempt=prior_attempt)
+                                    findings=ctx.get("findings", []), previous_attempt=prior_attempt,
+                                    chain=self.implementer_chain)
         if name == "final_review":
             it = self._it()
             prior_findings = [f for review in it.get("reviews", []) for f in review.get("findings", [])]
@@ -690,7 +700,8 @@ class AutonomyController:
                                                 if e.get("executor") == "execute"), None),
                 uncertainty=bool((it.get("execution") or {}).get("uncertainties") or
                                  (it.get("execution") or {}).get("unresolved") or
-                                 any(review.get("uncertainties") for review in it.get("reviews", []))))
+                                 any(review.get("uncertainties") for review in it.get("reviews", []))),
+                chain=self.implementer_chain)
             current_refs = set(it.get("lineage", {}).get("roadmap_refs", []))
             risk_rows = [row for row in (self.state.get("directional_charter") or {}).get("risk_guidance", [])
                          if row.get("item_id") in current_refs]
@@ -718,13 +729,21 @@ class AutonomyController:
                         and f.get("blocking")), None)
         if not finding:
             return None
-        execution = next((e for e in reversed(self.state.get("executions", []))
-                          if e.get("executor") == "execute"
-                          and e.get("profile") == self._policy_ids()["implementer_hard"]), None)
+        if self.implementer_chain:
+            # The latest implementation/repair call by a chain step is the one whose capability failed.
+            execution = next((e for e in reversed(self.state.get("executions", []))
+                              if e.get("executor") in ("execute", "repair")
+                              and e.get("profile") in self.implementer_chain), None)
+            failed_profile = execution.get("profile") if execution else None
+        else:
+            execution = next((e for e in reversed(self.state.get("executions", []))
+                              if e.get("executor") == "execute"
+                              and e.get("profile") == self._policy_ids()["implementer_hard"]), None)
+            failed_profile = self._policy_ids()["implementer_hard"]
         evidence_ref = finding.get("evidence_ref")
         if not execution or not isinstance(evidence_ref, str) or not evidence_ref.strip():
             return None
-        return {"profile_id": self._policy_ids()["implementer_hard"], "outcome": "FAILED",
+        return {"profile_id": failed_profile, "outcome": "FAILED",
                 "finding_code": "IMPLEMENTATION_CAPABILITY_MISMATCH", "execution_id": execution.get("execution_id"),
                 "evidence_ref": evidence_ref}
 
@@ -775,8 +794,11 @@ class AutonomyController:
     def _binding_for(self, role: str, selection: Mapping[str, Any] | None) -> dict[str, Any]:
         if selection:
             bound = self.policy_bindings.get(selection.get("profile_key"))
+            chain_bound = self.chain_bindings.get(str(selection.get("profile_id")))
             if isinstance(bound, Mapping) and bound.get("profile_id") == selection.get("profile_id"):
                 binding = dict(bound)
+            elif chain_bound is not None and str(selection.get("profile_key", "")).startswith(ap.CHAIN_KEY):
+                binding = dict(chain_bound)
             else:
                 binding = self._catalog_binding(role, str(selection["profile_id"]))
             binding["role"] = role

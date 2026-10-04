@@ -184,7 +184,13 @@ def test_both_providers(env):
     assert all(p["status"] == pp.FOUND for p in detection["providers"])
     preview = prun.preview_task(form(env), detection=detection)
     assert preview["planner"]["profile_id"] == "OPUS_HIGH"           # Opus 5.5 unmapped → visible alternative
-    assert preview["implementer_policy"]["implementer_capability_escalation"]["profile_id"] == "OPUS_HIGH"
+    # the system default implementer chain (Luna 6 → Terra 5.6 → Sonnet 5.5): Sonnet steps need a local probe
+    chain = preview["implementer_chain"]
+    assert chain["source"] == "DEFAULT"
+    assert [s["profile_id"] for s in chain["steps"]] == [
+        "GPT6_LUNA_HIGH", "GPT6_LUNA_VERY_HIGH", "GPT6_LUNA_MAX", "TERRA_HIGH", "TERRA_VERY_HIGH", "TERRA_MAX"]
+    assert [s["profile_id"] for s in chain["skipped"]] == ["CLAUDE_SONNET_5_5_MEDIUM", "CLAUDE_SONNET_5_5_HIGH"]
+    assert preview["implementer_policy"]["implementer_capability_escalation"]["profile_id"] == "TERRA_HIGH"
     assert preview["implementer_policy"]["implementer_default"]["status"] == "RECOMMENDED"
 
 
@@ -239,9 +245,10 @@ def test_update_newer_older_invalid(env):
 
 
 def test_unavailable_recommended_profile_is_visible_and_required_slot_blocks():
-    codex = pr.resolve_choices({}, runnable=CODEX_RUNNABLE)
+    codex = pr.resolve_choices({"implementation": "BALANCED"}, runnable=CODEX_RUNNABLE)   # per-slot candidates, no chain
     assert codex["slots"]["initial_planner"]["status"] == "ALTERNATIVE"
     assert codex["slots"]["initial_planner"]["recommended_profile_id"] == "OPUS_5_5_HIGH"
+    assert codex["implementer_chain"]["source"] == "SLOTS"
     assert codex["slots"]["implementer_capability_escalation"]["status"] == "UNAVAILABLE"
     assert not codex["blockers"]                       # optional escalation slot: warning only
     assert any("eskalacja" in w for w in codex["warnings"])
