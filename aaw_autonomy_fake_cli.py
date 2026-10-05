@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic stand-in for the `claude` (or `gemini`) CLI, for autonomy adapter tests only.
+"""Deterministic stand-in for the `claude` (or `agy`) CLI, for autonomy adapter tests only.
 
 It is spawned by the *real* `autonomy_adapters.DirectRoleExecutor` path
 (`workflow_runner.run_process(dispatch=True)`), so a test exercises the real
@@ -17,10 +17,11 @@ The n-th call of a role uses step n (the last step repeats). A step may hold:
   exit_code   process exit code (default 0)
   session_id  provider session id to report (default: a fresh uuid4)
   sleep       seconds to sleep before answering
-  fenced      (gemini) wrap the JSON answer in a ```json fence with prose around it
+  fenced      (agy) no structured_output; the JSON answer is fenced inside prose in `response`
 
-Invoked as `gemini` (argv carries `--approval-mode`), it answers with the Gemini
-CLI headless JSON envelope `{"session_id", "response", "stats"}` instead.
+Invoked as `agy` (`--print` without Claude's `--no-session-persistence`), it reads the
+role prompt from the file named in the `--print` text and answers with the Antigravity
+print-mode JSON envelope `{"conversation_id", "status", "response", "usage", "structured_output"}`.
 """
 
 from __future__ import annotations
@@ -56,11 +57,16 @@ def _substitute(value, handoff):
 def main() -> int:
     scenario_path = Path(os.environ["AAW_FAKE_CLI_SCENARIO"])
     scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
-    prompt = sys.stdin.read()
+    argv = sys.argv[1:]
+    agy = "--print" in argv and "--no-session-persistence" not in argv
+    if agy:
+        import re
+        match = re.search(r"Read the file (.+?) completely", argv[argv.index("--print") + 1])
+        prompt = Path(match.group(1)).read_text(encoding="utf-8") if match else ""
+    else:
+        prompt = sys.stdin.read()
     role = next((r for r in ROLES if f"You are the AAW {r}" in prompt or f"independent AAW {r}" in prompt), "UNKNOWN")
-    gemini = "--approval-mode" in sys.argv[1:]
     body = prompt.split("HANDOFF:\n", 1)[1] if "HANDOFF:\n" in prompt else ""
-    body = body.split("\n\nOUTPUT_SCHEMA", 1)[0]
     handoff = json.loads(body) if body.strip() else {}
     calls_path = scenario_path.with_name(scenario_path.name + ".calls.jsonl")
     previous = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()] \
@@ -85,12 +91,16 @@ def main() -> int:
     if code:
         sys.stderr.write("fake provider failure\n")
         return code
-    if gemini:
-        answer = step["raw_text"] if "raw_text" in step else json.dumps(_substitute(step.get("output") or {}, handoff))
-        if step.get("fenced"):
-            answer = f"Here is the result:\n```json\n{answer}\n```\nDone."
-        sys.stdout.write(json.dumps({"session_id": session, "response": answer,
-                                     "stats": {"models": {"fake": {"tokens": {"total": 2}}}}}))
+    if agy:
+        output = _substitute(step.get("output") or {}, handoff)
+        envelope = {"conversation_id": session, "status": "success", "usage": {"input_tokens": 1, "output_tokens": 1}}
+        if "raw_text" in step:
+            envelope["response"] = step["raw_text"]
+        elif step.get("fenced"):
+            envelope["response"] = f"Here is the result:\n```json\n{json.dumps(output)}\n```\nDone."
+        else:
+            envelope.update(response=json.dumps(output), structured_output=output)
+        sys.stdout.write(json.dumps(envelope))
         return 0
     envelope = {"session_id": session, "usage": {"input_tokens": 1, "output_tokens": 1}, "total_cost_usd": 0.0,
                 "num_turns": 1, "is_error": False}

@@ -149,9 +149,9 @@ def test_no_cli_found_blocks_start_with_setup_help(env, monkeypatch):
 def test_only_claude(env):
     env.install("claude")
     detection = pp.detect_all()
-    claude, codex, gemini = detection["providers"]
+    claude, codex, agy = detection["providers"]
     assert (claude["status"], claude["version"], claude["login"]) == (pp.FOUND, "9.9.9", pp.LOGGED_IN)
-    assert codex["status"] == pp.NOT_FOUND and gemini["status"] == pp.NOT_FOUND
+    assert codex["status"] == pp.NOT_FOUND and agy["status"] == pp.NOT_FOUND
     assert set(claude["runnable_profiles"]) == {"SONNET_HIGH", "OPUS_HIGH"}
     preview = prun.preview_task(form(env), detection=detection)
     assert preview["can_start"], preview["blockers"]

@@ -14,9 +14,10 @@ Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. 
   repairer goes straight to it with diagnosis first (EFFORT_UP skipped). Next iterations are planned by
   GPT-6.1 Sol medium (new slot `continuation_planner`) instead of Sol 5.6 light.
 - Review pretreatment is off by default (one model call per review round with no effect on the verdict).
-- **Gemini CLI** support (detection, login status, "Sprawdź modele", role dispatch); profiles `GEMINI_3_1_PRO`,
-  `GEMINI_3_FLASH`, usable after a local probe. Routing alternatives are limited to profiles runnable on this
-  machine.
+- **Antigravity CLI (`agy`)** support — successor of the Gemini CLI, which Google shut down (detection, login
+  status via `agy -p /usage`, "Sprawdź modele", role dispatch with `--json-schema`); profiles `AGY_GEMINI_3_1_PRO`,
+  `AGY_GEMINI_FLASH`, usable after a local probe. The interim Gemini CLI harness is removed. Routing
+  alternatives are limited to profiles runnable on this machine.
 - Required-evidence matching tolerates naming variants ("Unit-tests (pytest)" substantiates "unit tests").
 
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)

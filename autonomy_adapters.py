@@ -46,9 +46,14 @@ from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, d
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
-SUPPORTED_HARNESSES = ("codex", "claude", "gemini")
-# Gemini CLI (headless): the full handoff goes on stdin; `--prompt` text is appended to it.
-GEMINI_HEADLESS_PROMPT = "Follow the AAW role instructions and handoff above. Reply with the JSON object only."
+SUPPORTED_HARNESSES = ("codex", "claude", "agy")
+# Antigravity CLI (`agy`, successor of the Gemini CLI). In print mode it does not read stdin when the
+# prompt is given by flag, and a handoff with a diff exceeds the Windows command-line limit, so the
+# full role prompt is written to a file in the system temp directory (readable by agy by default)
+# and the `--print` prompt only points at it.
+AGY_PROMPT_FILE = "aaw_role_prompt.md"
+AGY_HEADLESS_PROMPT = ("Read the file {path} completely and do exactly what it says: it holds your AAW role "
+                       "instructions and the full handoff. Your final answer must be the JSON object it asks for.")
 # Provider-session variables a parent Claude Code session exports. Inherited by
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
@@ -386,7 +391,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
 # ── the executor ────────────────────────────────────────────────────────────
 
 def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Path, final_path: Path,
-          schema: Mapping[str, Any], max_turns: int) -> tuple[list[str], bool]:
+          schema: Mapping[str, Any], max_turns: int, prompt_path: Path | None = None) -> tuple[list[str], bool]:
     """Same direct-CLI invocation shape as `workflow_runner.execute_llm_node`.
 
     Returns (argv, prompt_on_stdin). The prompt always goes on stdin: a review
@@ -399,13 +404,17 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
                 "--model", runtime["model"], "--config", f'model_reasoning_effort="{runtime["effort"]}"',
                 "--cd", worktree, "--output-schema", str(schema_path), "--output-last-message", str(final_path),
                 "--json", "-"], True
-    if runtime["harness"] == "gemini":
-        # Headless Gemini CLI: `plan` approval mode is read-only; write roles need shell for checks, so they
-        # auto-approve tools (the controller's Git boundary check after the phase stays the authority).
-        # `--skip-trust` lets the CLI run in the fresh, untrusted AAW worktree without an interactive prompt.
-        return [str(runtime["executable"]), "--model", runtime["model"], "--output-format", "json",
-                "--approval-mode", "plan" if read_only else "yolo", "--skip-trust",
-                "--prompt", GEMINI_HEADLESS_PROMPT], True
+    if runtime["harness"] == "agy":
+        # Headless Antigravity CLI. Read-only roles keep the default permission mode: workspace reads are
+        # granted, edits and commands need an approval nobody can give in print mode, so they are denied.
+        # Write roles need a shell for their checks and auto-approve tools; the controller's Git boundary
+        # check after the phase stays the authority. `--json-schema` enforces the role's output contract
+        # (`structured_output`). Every option precedes `--print`: agy reads all trailing arguments as prompt.
+        argv = [str(runtime["executable"]), "--model", runtime["model"], "--output-format", "json",
+                "--json-schema", str(schema_path)]
+        if not read_only:
+            argv.append("--dangerously-skip-permissions")
+        return argv + ["--print", AGY_HEADLESS_PROMPT.format(path=prompt_path)], False
     argv = [str(runtime["executable"]), "--print", "--no-session-persistence",
             "--permission-mode", "plan" if read_only else "acceptEdits",
             "--model", runtime["model"], "--effort", runtime["effort"], "--output-format", "json",
@@ -419,10 +428,9 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
     return argv, True
 
 
-GEMINI_AUTH_EXIT = 41  # Gemini CLI FatalAuthenticationError
 _RATE_PATTERNS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "quota", "too many requests",
                   "resource_exhausted", "limit reached", "overloaded")
-_AUTH_PATTERNS = ("not logged in", "unauthorized", "authentication", "invalid api key",
+_AUTH_PATTERNS = ("not signed in", "sign in to", "/login", "not logged in", "unauthorized", "authentication", "invalid api key",
                   "login required", "please log in", "token expired")
 
 
@@ -440,7 +448,7 @@ def classify_failure(rc: int | None, stdout: str | None, stderr: str | None) -> 
             value = float(match.group(1))
             minutes = value / 60.0 if (match.group(2) or "s").startswith("s") else value
         return "RATE_LIMIT", minutes
-    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text) or rc == GEMINI_AUTH_EXIT:
+    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text):
         return "AUTH", None
     return None, None
 
@@ -471,14 +479,15 @@ class DirectRoleExecutor:
             return adapter.invoke(ctx, runtime, handoff)
         prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
                   "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
-        if runtime["harness"] == "gemini":
-            prompt += ("\n\nOUTPUT_SCHEMA (your final message must be ONE JSON object valid against it, no prose, "
-                       "no code fence):\n" + json.dumps(schema, separators=(",", ":")))
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="aaw_autonomy_role_") as temp:
             schema_path, final_path = Path(temp) / "schema.json", Path(temp) / "final.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
-            argv, on_stdin = _argv(runtime, self.name, worktree, schema_path, final_path, schema, self.max_turns)
+            prompt_path = Path(temp) / AGY_PROMPT_FILE
+            if runtime["harness"] == "agy":
+                prompt_path.write_text(prompt, encoding="utf-8")
+            argv, on_stdin = _argv(runtime, self.name, worktree, schema_path, final_path, schema, self.max_turns,
+                                   prompt_path=prompt_path)
             try:
                 rc, stdout, stderr = wr.run_process(argv, cwd=Path(worktree), stdin=prompt if on_stdin else None,
                                                     timeout=self.timeout, provider=runtime["provider"],
@@ -491,7 +500,7 @@ class DirectRoleExecutor:
                 raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started,
                                       failure_class="UNAVAILABLE" if not recorder.started else None) from exc
             session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
-            if runtime["harness"] == "gemini" and raw is not None and not core_shape_ok(self.name, raw):
+            if runtime["harness"] == "agy" and raw is not None and not core_shape_ok(self.name, raw):
                 provider_meta["schema_rejected"] = True
                 raw = None
         elapsed = round(time.monotonic() - started, 3)
@@ -523,13 +532,18 @@ class DirectRoleExecutor:
 
     @staticmethod
     def _parse(harness: str, rc: int, stdout: str, final_path: Path) -> tuple[Any, dict, Any, dict]:
-        if harness == "gemini":
+        if harness == "agy":
+            # agy --output-format json: {conversation_id, status, response, usage, structured_output}
             envelope = _json_object(stdout) or {}
+            raw = envelope.get("structured_output") if isinstance(envelope.get("structured_output"), dict) else None
             text = envelope.get("response") if isinstance(envelope.get("response"), str) else None
-            raw = _json_object(text) if rc == 0 and text else None
-            meta = {"error": envelope.get("error"), "warnings": envelope.get("warnings")}
-            stats = envelope.get("stats") if isinstance(envelope.get("stats"), dict) else {}
-            return envelope.get("session_id"), dict(stats), raw, meta
+            if raw is None and rc == 0 and text:
+                raw = _json_object(text)
+            if rc != 0:
+                raw = None
+            meta = {"status": envelope.get("status"), "error": envelope.get("error")}
+            usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+            return envelope.get("conversation_id"), dict(usage), raw, meta
         if harness == "codex":
             _, session, usage = wr.parse_codex_events(stdout)
             raw = None

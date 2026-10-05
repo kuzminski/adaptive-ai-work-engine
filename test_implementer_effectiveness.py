@@ -1,5 +1,5 @@
 """AAW implementer effectiveness V0.1: work packets, difficulty routing, final self-audit,
-deterministic simple-error checks, and the Gemini CLI provider path."""
+deterministic simple-error checks, and the Antigravity CLI (agy) provider path."""
 
 import json
 import os
@@ -234,17 +234,17 @@ def test_review_pretreatment_is_off_by_default():
     assert "prepare_packet" in aa.build_direct_executors(review_pretreatment=True)
 
 
-# ── Gemini CLI provider ─────────────────────────────────────────────────────
+# ── Antigravity CLI (agy) provider ──────────────────────────────────────────
 
 @pytest.fixture
-def fake_gemini(tmp_path, monkeypatch):
+def fake_agy(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     script = ROOT / "aaw_autonomy_fake_cli.py"
     if os.name == "nt":
-        (bin_dir / "gemini.cmd").write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+        (bin_dir / "agy.cmd").write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
     else:
-        launcher = bin_dir / "gemini"
+        launcher = bin_dir / "agy"
         launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
@@ -252,7 +252,7 @@ def fake_gemini(tmp_path, monkeypatch):
     monkeypatch.setenv("AAW_FAKE_CLI_SCENARIO", str(scenario))
     profiles = {p["profile_id"]: p for p in json.loads((ROOT / "IMPLEMENTER_PROFILES.json").read_text())["profiles"]}
     cfg = {"allow_same_model_fresh_context": True,
-           "roles": {r: {"profile_id": "GEMINI_3_1_PRO"} for r in ac.ROLES + tuple(ac.OPTIONAL_ROLE_ALIASES)}}
+           "roles": {r: {"profile_id": "AGY_GEMINI_3_1_PRO"} for r in ac.ROLES + tuple(ac.OPTIONAL_ROLE_ALIASES)}}
     roles = ac.validate_roles(cfg, profiles)
 
     def calls():
@@ -288,63 +288,70 @@ def single_item_mandate():
     return m
 
 
-def test_gemini_cli_runs_every_role_through_the_real_adapter_path(tmp_path, fake_gemini):
-    fake_gemini["write"]({"PLANNER": [{"output": PLAN_OUT, "fenced": True}],
-                          "IMPLEMENTER": [{"output": IMPL_OUT, "write_files": {"src/export/core.py": "x = 1\n"}}],
-                          "SELF-VERIFIER": [{"output": VERIFY_OUT}], "REVIEWER": [{"output": PASS_OUT}],
-                          "FINAL REVIEWER": [{"output": PASS_OUT}]})
+def test_agy_runs_every_role_through_the_real_adapter_path(tmp_path, fake_agy):
+    fake_agy["write"]({"PLANNER": [{"output": PLAN_OUT, "fenced": True}],
+                       "IMPLEMENTER": [{"output": IMPL_OUT, "write_files": {"src/export/core.py": "x = 1\n"}}],
+                       "SELF-VERIFIER": [{"output": VERIFY_OUT}], "REVIEWER": [{"output": PASS_OUT}],
+                       "FINAL REVIEWER": [{"output": PASS_OUT}]})
     env = DirEnv(tmp_path / "wt")
     c = ctl.AutonomyController.start("RUN1", single_item_mandate(), executors=aa.build_direct_executors(timeout=60),
-                                     env=env, roles=fake_gemini["roles"], stats_root=tmp_path / "stats")
+                                     env=env, roles=fake_agy["roles"], stats_root=tmp_path / "stats")
     state = c.run()
     assert state["status"] == ac.AWAITING_HUMAN and state["hold"]["promotable"], state["escalation"]
-    calls = fake_gemini["calls"]()
+    calls = fake_agy["calls"]()
     assert [x["role"] for x in calls] == ["PLANNER", "IMPLEMENTER", "SELF-VERIFIER", "REVIEWER", "FINAL REVIEWER"]
     by_role = {x["role"]: x["argv"] for x in calls}
-    for role, mode in (("PLANNER", "plan"), ("IMPLEMENTER", "yolo"), ("REVIEWER", "plan")):
+    for role, writes in (("PLANNER", False), ("IMPLEMENTER", True), ("REVIEWER", False)):
         argv = by_role[role]
-        assert argv[argv.index("--approval-mode") + 1] == mode
-        assert "--skip-trust" in argv and argv[argv.index("--model") + 1] == "gemini-3.1-pro-preview"
-        assert argv[argv.index("--output-format") + 1] == "json"
+        assert ("--dangerously-skip-permissions" in argv) is writes
+        assert argv[argv.index("--model") + 1] == "gemini-3.1-pro-high"
+        assert argv[argv.index("--output-format") + 1] == "json" and "--json-schema" in argv
+        assert argv[-2] == "--print" and "Read the file" in argv[-1]   # every option precedes --print
     assert all(e["provider_session_id"] for e in state["executions"])
 
 
-def test_gemini_answer_missing_required_fields_is_rejected_not_trusted(tmp_path, fake_gemini):
-    fake_gemini["write"]({"PLANNER": [{"output": PLAN_OUT}],
-                          "IMPLEMENTER": [{"output": {"summary": "done"}}]})
+def test_agy_answer_missing_required_fields_is_rejected_not_trusted(tmp_path, fake_agy):
+    fake_agy["write"]({"PLANNER": [{"output": PLAN_OUT}],
+                       "IMPLEMENTER": [{"output": {"summary": "done"}}]})
     env = DirEnv(tmp_path / "wt")
     c = ctl.AutonomyController.start("RUN1", single_item_mandate(), executors=aa.build_direct_executors(timeout=60),
-                                     env=env, roles=fake_gemini["roles"], stats_root=tmp_path / "stats")
+                                     env=env, roles=fake_agy["roles"], stats_root=tmp_path / "stats")
     state = c.run()
     assert state["status"] == ac.AWAITING_HUMAN and state["escalation"]["code"] == ac.E_EXECUTOR
 
 
-def test_gemini_parse_extracts_json_from_prose_and_fences():
-    envelope = json.dumps({"session_id": "S1", "response": "ok:\n```json\n{\"a\": 1}\n```", "stats": {"x": 1}})
-    session, usage, raw, meta = aa.DirectRoleExecutor._parse("gemini", 0, envelope, Path("unused"))
-    assert (session, usage, raw) == ("S1", {"x": 1}, {"a": 1})
-    assert aa.classify_failure(41, "", "")[0] == "AUTH"
+def test_agy_parse_prefers_structured_output_and_falls_back_to_the_response_text():
+    envelope = json.dumps({"conversation_id": "C1", "status": "success", "usage": {"x": 1},
+                           "structured_output": {"a": 1}, "response": "{}"})
+    assert aa.DirectRoleExecutor._parse("agy", 0, envelope, Path("unused"))[:3] == ("C1", {"x": 1}, {"a": 1})
+    fenced = json.dumps({"conversation_id": "C2", "response": "ok:\n```json\n{\"b\": 2}\n```"})
+    assert aa.DirectRoleExecutor._parse("agy", 0, fenced, Path("unused"))[2] == {"b": 2}
+    assert aa.DirectRoleExecutor._parse("agy", 1, envelope, Path("unused"))[2] is None
 
 
-def test_gemini_detection_reports_login_without_reading_credentials(monkeypatch, tmp_path):
-    monkeypatch.setenv("GEMINI_API_KEY", "dummy-value-not-read")
-    spec = next(p for p in pp.PROVIDERS if p.provider_id == "gemini")
-    row = pp.detect_provider(spec, runner=lambda argv, timeout: (0, "0.62.0\n", ""),
-                             which=lambda harness: "/usr/bin/gemini")
-    assert (row["status"], row["version"], row["login"]) == (pp.FOUND, "0.62.0", pp.LOGGED_IN)
-    assert "GEMINI_API_KEY" in row["login_detail"] and "dummy" not in row["login_detail"]
+def test_agy_detection_login_and_probe():
+    spec = next(p for p in pp.PROVIDERS if p.provider_id == "antigravity")
+
+    def runner(argv, timeout):
+        return (0, "1.2.17\n", "") if argv[1:] == ["--version"] else (0, '{"buckets": []}', "")
+    row = pp.detect_provider(spec, runner=runner, which=lambda harness: "/usr/bin/agy")
+    assert (row["status"], row["version"], row["login"]) == (pp.FOUND, "1.2.17", pp.LOGGED_IN)
     ids = {p["profile_id"] for p in row["profiles"]}
-    assert {"GEMINI_3_1_PRO", "GEMINI_3_FLASH"} <= ids
-    assert all(p["probe_required"] for p in row["profiles"] if p["profile_id"].startswith("GEMINI"))
-    argv = pp.probe_argv("gemini", "gemini", "gemini-3-flash-preview")
-    assert argv[argv.index("--approval-mode") + 1] == "plan" and "--prompt" in argv
+    assert {"AGY_GEMINI_3_1_PRO", "AGY_GEMINI_FLASH"} <= ids
+    assert all(p["probe_required"] for p in row["profiles"] if p["profile_id"].startswith("AGY_"))
+    logged_out = pp.detect_provider(spec, runner=lambda argv, t: (0, "1.2.17", "") if "--version" in argv
+                                    else (1, "", "Not signed in. Run agy to sign in."), which=lambda h: "/usr/bin/agy")
+    assert logged_out["login"] == pp.NOT_LOGGED_IN
+    argv = pp.probe_argv("agy", "agy", "gemini-3.7-flash-high")
+    assert argv[-2] == "--print" and "--dangerously-skip-permissions" not in argv
+    assert pp.classify_probe("agy", 0, json.dumps({"response": pp.PROBE_TOKEN}), "")[0] == pp.PROBE_ACCEPTED
 
 
 def test_product_routing_offers_only_alternatives_this_machine_can_run():
-    routing = {"profiles": {"GEMINI_3_1_PRO": {"available": False, "unavailable_reason": "default off"},
+    routing = {"profiles": {"AGY_GEMINI_3_1_PRO": {"available": False, "unavailable_reason": "default off"},
                             "GPT6_LUNA_HIGH": {}, "ANTIGRAVITY_FREE": {}}}
-    out = pr._routing_for_machine(routing, {"GEMINI_3_1_PRO", "GPT6_LUNA_HIGH"})
-    assert out["profiles"]["GEMINI_3_1_PRO"]["available"] is True
-    assert "unavailable_reason" not in out["profiles"]["GEMINI_3_1_PRO"]
+    out = pr._routing_for_machine(routing, {"AGY_GEMINI_3_1_PRO", "GPT6_LUNA_HIGH"})
+    assert out["profiles"]["AGY_GEMINI_3_1_PRO"]["available"] is True
+    assert "unavailable_reason" not in out["profiles"]["AGY_GEMINI_3_1_PRO"]
     assert out["profiles"]["ANTIGRAVITY_FREE"]["available"] is False
-    assert routing["profiles"]["GEMINI_3_1_PRO"]["available"] is False      # the shipped block is not mutated
+    assert routing["profiles"]["AGY_GEMINI_3_1_PRO"]["available"] is False      # the shipped block is not mutated
