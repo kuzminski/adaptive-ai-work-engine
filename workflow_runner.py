@@ -365,6 +365,11 @@ def harness_executable(harness: str) -> str | None:
         root = Path(local) / "OpenAI" / "Codex" / "bin" if local else Path()
         candidates = sorted(root.glob("*/codex.exe"), key=lambda path: path.stat().st_mtime, reverse=True) if root.is_dir() else []
         return str(candidates[0]) if candidates else None
+    if harness == "gemini":
+        # npm's global shim on Windows when %APPDATA%\npm is not on PATH for this process.
+        appdata = os.environ.get("APPDATA")
+        candidate = Path(appdata) / "npm" / "gemini.cmd" if appdata else None
+        return str(candidate) if candidate and candidate.is_file() else None
     return None
 
 

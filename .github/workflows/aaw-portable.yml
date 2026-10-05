@@ -26,6 +26,7 @@ on:
       - "model_router.py"
       - "repair_escalation.py"
       - "provider_adapters.py"
+      - "work_packet.py"
       - "test_*.py"
       - "PRODUCT_UI/**"
       - "packaging/**"

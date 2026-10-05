@@ -12,12 +12,12 @@ Gotowa aplikacja (Windows 10/11 x64), bez instalacji. Strona wydania:
 2. Rozpakuj (prawy przycisk → „Wyodrębnij wszystkie…”).
 3. Otwórz folder `AAW` i uruchom `AAW.exe` — aplikacja otworzy się w przeglądarce.
 4. Wskaż projekt (folder z repozytorium Git).
-5. AAW wykryje Claude/Codex.
+5. AAW wykryje Claude/Codex/Gemini.
 6. Wpisz cel i kliknij **START**.
 
 Wymagania (instalowane osobno, raz):
 - [Git for Windows](https://git-scm.com/downloads);
-- Claude CLI i/lub Codex CLI — zainstalowane i zalogowane na Twoim koncie.
+- Claude CLI i/lub Codex CLI (opcjonalnie Gemini CLI) — zainstalowane i zalogowane na Twoim koncie.
 
 Python, kompilacja ani terminal **nie są potrzebne** do uruchomienia AAW.
 Instrukcja krok po kroku: **[SZYBKI_START.txt](SZYBKI_START.txt)**
@@ -60,6 +60,7 @@ operator-led workflows, not yet for unattended production automation.
 | Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASED (0.2.0) — see `AAW_PRODUCT_MVP_V0_2.md` |
 | Dynamic planner | PLANNED |
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
+| Implementer effectiveness (work packets, final self-audit, simple-error checks, difficulty routing, Gemini CLI) | IMPLEMENTED (phase 1) — see `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md` |
 
 ## Product app (MVP V0.2 — release `0.2.0`)
 
@@ -69,7 +70,7 @@ For a normal user: see **Pobierz dla Windows** at the top — the
 `.github/workflows/aaw-portable.yml` on a `v*` tag (or a manual run with
 `release_tag`) after its Windows build and validation pass. The app opens in the browser on 127.0.0.1 and
 a 7-step wizard leads from the project folder through AI-tool detection
-(Claude CLI / Codex CLI — each needs its own login; AAW stores no passwords)
+(Claude CLI / Codex CLI / Gemini CLI — each needs its own login; AAW stores no passwords)
 and model confirmation to the goal and START. You see the active phase, can
 STOP SAFELY / STOP NOW / RESUME, and get a Human Gate at the end. No automatic
 merge or push. From a source checkout: `python AAW.py`. Details:

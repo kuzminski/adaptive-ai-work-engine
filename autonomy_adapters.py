@@ -29,13 +29,16 @@ for implementation and independent review.
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import provider_adapters as pa
+import work_packet as wp
 import workflow_runner as wr
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
@@ -43,7 +46,9 @@ from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, d
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
-SUPPORTED_HARNESSES = ("codex", "claude")
+SUPPORTED_HARNESSES = ("codex", "claude", "gemini")
+# Gemini CLI (headless): the full handoff goes on stdin; `--prompt` text is appended to it.
+GEMINI_HEADLESS_PROMPT = "Follow the AAW role instructions and handoff above. Reply with the JSON object only."
 # Provider-session variables a parent Claude Code session exports. Inherited by
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
@@ -112,12 +117,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "implementation_complexity": {"type": "string", "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
                  "complexity_evidence": _STRS,
                  "semantic_verification_required": {"type": "boolean"},
-                 "semantic_verification_reason": {"type": ["string", "null"]}}},
+                 "semantic_verification_reason": {"type": ["string", "null"]},
+                 "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
                 "properties": {"summary": {"type": "string"}, "changed_files": _STRS,
                                "checks": {"type": "array", "items": _CHECK},
-                               "deviations": _STRS, "uncertainties": _STRS}},
+                               "deviations": _STRS, "uncertainties": _STRS,
+                               "self_audit": copy.deepcopy(wp.SELF_AUDIT_SCHEMA)}},
     "self_verify": {"type": "object", "additionalProperties": False, "required": ["summary", "checks"],
                     "properties": {"summary": {"type": "string"}, "checks": {"type": "array", "items": _CHECK}}},
     "review": {"type": "object", "additionalProperties": False, "required": ["verdict", "summary", "findings"],
@@ -145,6 +152,7 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                "required": ["summary", "addressed_findings", "changed_files", "checks", "uncertainties"],
                "properties": {"summary": {"type": "string"}, "addressed_findings": _STRS, "changed_files": _STRS,
                               "checks": {"type": "array", "items": _CHECK}, "uncertainties": _STRS,
+                              "self_audit": copy.deepcopy(wp.SELF_AUDIT_SCHEMA),
                               "diagnosis": _DIAGNOSIS, "evidence_refs": _STRS,
                               "reclassifications": {"type": "array", "items": {
                                   "type": "object", "additionalProperties": False,
@@ -166,6 +174,9 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "properties": {"summary": {"type": "string"}, "diagnosis": _DIAGNOSIS}},
 }
 OUTPUT_SCHEMAS["final_review"] = OUTPUT_SCHEMAS["review"]
+# The keys a role result really needs (before Codex's "every key is required" rewrite below).
+# A provider without native schema enforcement (Gemini CLI) is validated against these.
+CORE_REQUIRED: dict[str, list[str]] = {name: list(schema.get("required", [])) for name, schema in OUTPUT_SCHEMAS.items()}
 
 
 def _require_all_schema_properties(node: Any) -> None:
@@ -204,7 +215,7 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "choices with AUTO / AUTO_WITHIN_SCOPE kinds. skipped_items PERMANENTLY removes a roadmap item from this "
              "run: list an item there only with a reason why it should never be done autonomously; never list an item "
              "merely because it is waiting for its dependencies (it stays pending for a later iteration). "
-             "Do not modify any file."),
+             + wp.PLANNER_RULES + " Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
                 "your changes uncommitted. Do not run Git commands: the controller owns and verifies Git boundaries. "
@@ -214,7 +225,7 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                 "name. For every test or command check, the summary must state the exact command, its exit code and "
                 "the reported result counts, so a reviewer can verify it from this record alone. "
                 "Do not delete files such as __pycache__. "
-                "Report deviations from the plan and known limitations (uncertainties)."),
+                "Report deviations from the plan and known limitations (uncertainties)." + wp.IMPLEMENTER_RULES),
     "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
                     "REQUIRED_EVIDENCE only where semantic verification is needed; run no mechanical checks that are "
                     "already recorded. Do not run Git commands; the controller verifies Git boundaries. "
@@ -232,7 +243,9 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                "return PASS, REPAIR_REQUIRED, or ESCALATE with evidence references. Do not modify any file."),
     "repair": ("You are the AAW REPAIRER. Address only FINDINGS, inside EXACT_ALLOWED_REPAIR_SCOPE. Do not expand "
                "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
-               "finding keys you addressed and the checks you ran."),
+               "finding keys you addressed and the checks you ran. Re-run WORK_PACKET.verification_commands that "
+               "your change can affect, and end with the FINAL SELF-AUDIT over AUDIT_CHECKLIST (report "
+               "self_audit; an honest FAIL is better than a false PASS)."),
 }
 ROLE_INSTRUCTIONS["repair"] += (
     " If REPAIR_PACKET is present, start from it and do not re-read the whole repository; if MODE is "
@@ -317,6 +330,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
         architect = {"DIRECTIONAL_CHARTER_TEMPLATE": directional_charter_template(mandate),
                      "REQUIRED_HUMAN_GATE_CONDITIONS": list(REQUIRED_CHARTER_GATE_CONDITIONS)} if initial else {}
         return {**common, **architect, "DECISION_KINDS": dict(LEVEL_BY_KIND),
+                "REQUIRED_EVIDENCE": contract.get("required_evidence", []),
                 "MANDATE": mandate, "ITERATION_INDEX": ctx["iteration_index"],
                 "PLANNING_STAGE": ctx.get("planning_stage"),
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
@@ -328,7 +342,10 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
         out = {**common, "PLAN": ctx["plan"], "CONSTRAINTS": contract.get("constraints", []),
                "FORBIDDEN_CHANGES": contract.get("forbidden_changes", []),
                "REQUIRED_EVIDENCE": contract.get("required_evidence", []),
-               "FORBIDDEN_AREAS": mandate["roadmap_mandate"]["autonomy_bounds"].get("forbidden_areas", [])}
+               "FORBIDDEN_AREAS": mandate["roadmap_mandate"]["autonomy_bounds"].get("forbidden_areas", []),
+               "WORK_PACKET": (ctx.get("plan") or {}).get("work_packet")}
+        if name in ("execute", "repair"):
+            out["AUDIT_CHECKLIST"] = [dict(row) for row in wp.AUDIT_CHECKLIST]
         if name == "self_verify":
             out.update({"CHANGED_FILES": ctx.get("changed_files", []), "DIFF": _bounded(ctx.get("diff")),
                         "IMPLEMENTATION_RESULT": it.get("execution")})
@@ -343,7 +360,8 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 out = {key: out[key] for key in ("ROLE", "AAW_RUN_ID", "ITERATION_ID", "EXECUTION_ID", "WORKTREE_PATH",
                                                  "SOURCE_REFERENCES", "CONSTRAINTS", "FORBIDDEN_CHANGES",
                                                  "REQUIRED_EVIDENCE", "FORBIDDEN_AREAS", "FINDINGS", "ATTEMPT",
-                                                 "EXACT_ALLOWED_REPAIR_SCOPE")}
+                                                 "EXACT_ALLOWED_REPAIR_SCOPE", "WORK_PACKET", "AUDIT_CHECKLIST")
+                       if key in out}
                 out.update({"PLAN": {"goal": ctx["plan"].get("goal")}, "REPAIR_PACKET": packet,
                             "MODE": ctx.get("repair_mode"), "STEP": ctx.get("step")})
         return out
@@ -381,6 +399,13 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
                 "--model", runtime["model"], "--config", f'model_reasoning_effort="{runtime["effort"]}"',
                 "--cd", worktree, "--output-schema", str(schema_path), "--output-last-message", str(final_path),
                 "--json", "-"], True
+    if runtime["harness"] == "gemini":
+        # Headless Gemini CLI: `plan` approval mode is read-only; write roles need shell for checks, so they
+        # auto-approve tools (the controller's Git boundary check after the phase stays the authority).
+        # `--skip-trust` lets the CLI run in the fresh, untrusted AAW worktree without an interactive prompt.
+        return [str(runtime["executable"]), "--model", runtime["model"], "--output-format", "json",
+                "--approval-mode", "plan" if read_only else "yolo", "--skip-trust",
+                "--prompt", GEMINI_HEADLESS_PROMPT], True
     argv = [str(runtime["executable"]), "--print", "--no-session-persistence",
             "--permission-mode", "plan" if read_only else "acceptEdits",
             "--model", runtime["model"], "--effort", runtime["effort"], "--output-format", "json",
@@ -394,6 +419,7 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
     return argv, True
 
 
+GEMINI_AUTH_EXIT = 41  # Gemini CLI FatalAuthenticationError
 _RATE_PATTERNS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "quota", "too many requests",
                   "resource_exhausted", "limit reached", "overloaded")
 _AUTH_PATTERNS = ("not logged in", "unauthorized", "authentication", "invalid api key",
@@ -414,7 +440,7 @@ def classify_failure(rc: int | None, stdout: str | None, stderr: str | None) -> 
             value = float(match.group(1))
             minutes = value / 60.0 if (match.group(2) or "s").startswith("s") else value
         return "RATE_LIMIT", minutes
-    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text):
+    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text) or rc == GEMINI_AUTH_EXIT:
         return "AUTH", None
     return None, None
 
@@ -445,6 +471,9 @@ class DirectRoleExecutor:
             return adapter.invoke(ctx, runtime, handoff)
         prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
                   "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
+        if runtime["harness"] == "gemini":
+            prompt += ("\n\nOUTPUT_SCHEMA (your final message must be ONE JSON object valid against it, no prose, "
+                       "no code fence):\n" + json.dumps(schema, separators=(",", ":")))
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="aaw_autonomy_role_") as temp:
             schema_path, final_path = Path(temp) / "schema.json", Path(temp) / "final.json"
@@ -462,6 +491,9 @@ class DirectRoleExecutor:
                 raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started,
                                       failure_class="UNAVAILABLE" if not recorder.started else None) from exc
             session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
+            if runtime["harness"] == "gemini" and raw is not None and not core_shape_ok(self.name, raw):
+                provider_meta["schema_rejected"] = True
+                raw = None
         elapsed = round(time.monotonic() - started, 3)
         update_execution(descriptor_path, execution["execution_id"],
                          provider_session_id=str(session) if session else None,
@@ -491,6 +523,13 @@ class DirectRoleExecutor:
 
     @staticmethod
     def _parse(harness: str, rc: int, stdout: str, final_path: Path) -> tuple[Any, dict, Any, dict]:
+        if harness == "gemini":
+            envelope = _json_object(stdout) or {}
+            text = envelope.get("response") if isinstance(envelope.get("response"), str) else None
+            raw = _json_object(text) if rc == 0 and text else None
+            meta = {"error": envelope.get("error"), "warnings": envelope.get("warnings")}
+            stats = envelope.get("stats") if isinstance(envelope.get("stats"), dict) else {}
+            return envelope.get("session_id"), dict(stats), raw, meta
         if harness == "codex":
             _, session, usage = wr.parse_codex_events(stdout)
             raw = None
@@ -518,9 +557,42 @@ class DirectRoleExecutor:
         return envelope.get("session_id"), dict(envelope.get("usage") or {}), raw, meta
 
 
-def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30) -> dict[str, DirectRoleExecutor]:
-    """The production executor set for `AutonomyController` (no `prepare_packet`:
-    the deterministic packet is used as-is)."""
-    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns)
-            for name in ("plan", "execute", "self_verify", "prepare_packet", "review", "repair", "final_review",
-                         "diagnose")}
+def _json_object(text: str | None) -> dict[str, Any] | None:
+    """The JSON object in a model's text answer: whole text, a fenced block, or the outermost braces."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    candidates = [text.strip()]
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1))
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start:end + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def core_shape_ok(name: str, raw: Any) -> bool:
+    """Minimal structural check for providers without native schema enforcement."""
+    return isinstance(raw, dict) and all(key in raw for key in CORE_REQUIRED.get(name, []))
+
+
+def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30,
+                           review_pretreatment: bool = False) -> dict[str, DirectRoleExecutor]:
+    """The production executor set for `AutonomyController`.
+
+    Review pretreatment is OFF by default: it is a full model call per review
+    round that may only re-index evidence the deterministic packet already
+    carries (it can never change a verdict), so it cost time and quota on every
+    REVIEW without changing outcomes. Pass `review_pretreatment=True` to keep it.
+    """
+    names = ["plan", "execute", "self_verify", "review", "repair", "final_review", "diagnose"]
+    if review_pretreatment:
+        names.insert(3, "prepare_packet")
+    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns) for name in names}

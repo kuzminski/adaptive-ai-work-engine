@@ -327,16 +327,18 @@ def test_10_repair_limit_escalates_instead_of_looping(tmp_path):
 
 
 def test_10_identical_findings_climb_the_repair_ladder_before_stopping_as_no_progress(tmp_path):
-    # A single repair that leaves the same finding no longer stops the run: the ladder
-    # (CURRENT -> EFFORT_UP -> DIFFICULT_IMPLEMENTER) is tried first; only its exhaustion is a Human Gate.
+    # A single repair that leaves the same finding no longer stops the run: the ladder is tried first;
+    # only its exhaustion is a Human Gate. The shipped ladder skips EFFORT_UP (no second, longer attempt by the
+    # same weak model family) and goes straight to the strong implementer; this harness has no diagnose executor,
+    # so PLANNER_DIAGNOSIS is unavailable and the ladder ends there.
     h = Harness(tmp_path, mandate=mandate_fixture(max_repair_attempts=5)).defaults().script("plan", plan(["A"]))
     h.scripts["final_review"] = [{"verdict": "REPAIR_REQUIRED", "findings": [
         {"finding_key": "SAME", "severity": "HIGH", "summary": "x"}]}]
     h.script("repair", {"summary": "tried", "checks": ok_checks()})
     state = h.controller().run()
-    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and h.calls.count("repair") == 3
+    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and h.calls.count("repair") == 2
     stages = [r["stage"] for r in state["iterations"][0]["repairs"]]
-    assert stages == ["CURRENT", "EFFORT_UP", "DIFFICULT_IMPLEMENTER"]
+    assert stages == ["CURRENT", "DIFFICULT_IMPLEMENTER"]
     assert "exhausted" in state["escalation"]["detail"]
 
 

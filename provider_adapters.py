@@ -10,7 +10,11 @@ path in `autonomy_adapters`) has to implement so that decision can be honoured:
     preflight()       None if a profile is runnable now, else the reason
     invoke()          run one role call and return the structured result
 
-Google Antigravity (FREE) is the first such provider. Its trust level is
+Google models are served today through the Gemini CLI, a built-in direct
+CLI harness (`gemini`) in `autonomy_adapters` with detection and model probes
+in `product_providers` (see AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md).
+
+Google Antigravity (FREE) is the first adapter-contract provider. Its trust level is
 EXPERIMENTAL. Live integration is NOT_TESTED here: no Antigravity CLI is
 installed in the development environment, so `AntigravityAdapter` implements
 capability detection and the contract, and refuses to dispatch (a clean,

@@ -63,14 +63,16 @@ SLOT_LABELS = {
     "implementer_default": "Implementacja",
     "implementer_harder": "Implementacja — trudniejsza",
     "implementer_hard": "Implementacja — bardzo trudna",
+    "implementer_strong": "Implementacja — widocznie trudna (silny model od razu)",
     "implementer_capability_escalation": "Implementacja — eskalacja możliwości",
     "review_pretreatment": "Przygotowanie review",
     "primary_reviewer": "Review",
     "repair_default": "Naprawa",
     "repair_hard": "Naprawa — trudna",
-    "final_review_default": "Final review / planowanie kolejnych iteracji",
+    "final_review_default": "Final review",
     "final_review_hard": "Final review — wysokie ryzyko",
     "final_review_critical": "Final review — krytyczne",
+    "continuation_planner": "Planowanie kolejnych iteracji (pakiet pracy)",
 }
 
 
@@ -325,7 +327,7 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
     if routing:
         # Quota/trust/capability routing and provider failover ship with the engine's defaults; the repair
         # escalation ladder is derived from the policy profiles above (autonomy_policy.default_repair_escalation).
-        config["routing"] = routing
+        config["routing"] = _routing_for_machine(routing, runnable)
     validated = None
     try:
         validated = ac.validate_roles(config, profiles)
@@ -347,6 +349,27 @@ def _routing_defaults() -> dict[str, Any] | None:
     return routing if isinstance(routing, dict) else None
 
 
+def _routing_for_machine(routing: Mapping[str, Any], runnable: set[str]) -> dict[str, Any]:
+    """Routing alternatives limited to what this machine can run now.
+
+    The router never probes an alternative up front, so a profile that is
+    installed but not verified here (e.g. Gemini before „Sprawdź modele”) must
+    not be offered to it; a probe-confirmed one is enabled even if the shipped
+    routing block declares it unavailable by default.
+    """
+    out = json.loads(json.dumps(routing))
+    for profile_id, row in (out.get("profiles") or {}).items():
+        if not isinstance(row, dict):
+            continue
+        if profile_id in runnable:
+            row["available"] = True
+            row.pop("unavailable_reason", None)
+        else:
+            row["available"] = False
+            row.setdefault("unavailable_reason", "not runnable on this machine (AAW product detection/probe)")
+    return out
+
+
 def _why_unavailable(profile_id: str, mappings: Mapping[str, str], states: Mapping[str, Mapping[str, Any]]) -> str | None:
     own = states.get(profile_id) or {}
     mapped = states.get(mappings.get(profile_id) or "") or {}
@@ -359,9 +382,9 @@ def _why_unavailable(profile_id: str, mappings: Mapping[str, str], states: Mappi
     return None
 
 
-GROUP_SLOTS = {"planning": ("initial_planner",),
+GROUP_SLOTS = {"planning": ("initial_planner", "continuation_planner"),
                "implementation": ("implementer_default", "repair_default", "review_pretreatment",
-                                  "implementer_harder", "implementer_hard", "repair_hard",
+                                  "implementer_harder", "implementer_hard", "implementer_strong", "repair_hard",
                                   "implementer_capability_escalation"),
                "review": ("primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")}
 GROUP_MAIN_SLOTS = {"planning": ("initial_planner",),

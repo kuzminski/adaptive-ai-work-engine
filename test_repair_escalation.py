@@ -19,10 +19,17 @@ from test_autonomy_policy_v0_3 import initial_plan
 ROOT = Path(__file__).parent
 HIGH, VHIGH, MAX = "GPT6_LUNA_HIGH", "GPT6_LUNA_VERY_HIGH", "GPT6_LUNA_MAX"
 SONNET, OPUS = "SONNET_5_5_MEDIUM", "OPUS_5_5_HIGH"
+STRONG = "SOL_6_1_MEDIUM"
+# The V0.2 ladder (effort up within the Luna family, then Sonnet). The shipped default now skips EFFORT_UP and
+# hands a surviving finding straight to the STRONG implementer; the mechanism itself stays configurable and tested.
+CLASSIC_LADDER = {"enabled": True, "stages": ["CURRENT", "EFFORT_UP", "DIFFICULT_IMPLEMENTER", "PLANNER_DIAGNOSIS"],
+                  "max_effort_steps": 1, "max_attempts_per_stage": 2, "effort_ladder": [HIGH, VHIGH, MAX],
+                  "roles": {"default_implementer": HIGH, "difficult_implementer": SONNET, "planner": OPUS,
+                            "reviewer": "SOL_6_1_LIGHT", "final_reviewer": "SOL_5_6_LIGHT"}}
 AC8 = "AC8 — required post-install checks"
 
 
-def roles_with(*, repair_default=None, routing=None, escalation=None, drop_routing=False):
+def roles_with(*, repair_default=None, routing=None, escalation=None, drop_routing=False, classic=False):
     config = json.loads((ROOT / "AUTONOMY_ROLES.json").read_text(encoding="utf-8"))
     profiles = {p["profile_id"]: p for p in json.loads((ROOT / "IMPLEMENTER_PROFILES.json").read_text())["profiles"]}
     if repair_default:
@@ -33,6 +40,8 @@ def roles_with(*, repair_default=None, routing=None, escalation=None, drop_routi
         config.pop("routing")
     if escalation is not None:
         config["repair_escalation"] = escalation
+    elif classic:
+        config["repair_escalation"] = json.loads(json.dumps(CLASSIC_LADDER))
     return ac.validate_roles(config, profiles)
 
 
@@ -124,7 +133,7 @@ def test_1_finding_resolved_by_repair_needs_no_escalation(tmp_path):
 # ── 2-4. the ladder: effort up, then more effort, then the difficult implementer ─
 
 def test_2_surviving_finding_climbs_from_high_to_very_high(tmp_path):
-    rig = stuck(Rig(tmp_path, roles=roles_with(repair_default=HIGH)))
+    rig = stuck(Rig(tmp_path, roles=roles_with(repair_default=HIGH, classic=True)))
     state = rig.controller().run()
     rows = repair_rows(state)
     assert [(r["stage"], r["profile_id"]) for r in rows[:2]] == [("CURRENT", HIGH), ("EFFORT_UP", VHIGH)]
@@ -135,13 +144,24 @@ def test_2_surviving_finding_climbs_from_high_to_very_high(tmp_path):
 
 
 def test_3_very_high_remaining_climbs_to_max(tmp_path):
-    rig = stuck(Rig(tmp_path))             # default repair profile is very-high
+    rig = stuck(Rig(tmp_path, roles=roles_with(classic=True)))             # default repair profile is very-high
     state = rig.controller().run()
     assert [(r["stage"], r["profile_id"]) for r in repair_rows(state)[:2]] == [("CURRENT", VHIGH), ("EFFORT_UP", MAX)]
 
 
+def test_3b_shipped_ladder_hands_a_surviving_finding_straight_to_the_strong_implementer(tmp_path):
+    rig = stuck(Rig(tmp_path))
+    state = rig.controller().run()
+    rows = repair_rows(state)
+    # no second, longer attempt by the same weak model family: fresh strong model, diagnosis first
+    assert [(r["stage"], r["profile_id"]) for r in rows[:2]] == [("CURRENT", VHIGH), ("DIFFICULT_IMPLEMENTER", STRONG)]
+    assert rows[1]["mode"] == rx.MODE_DIAGNOSE_THEN_REPAIR
+    assert [r["stage"] for r in rows][-1] == "PLANNER_DIAGNOSIS"
+    assert state["escalation"]["code"] == ac.E_NO_PROGRESS and "exhausted" in state["escalation"]["detail"]
+
+
 def test_4_max_remaining_escalates_to_the_difficult_implementer_with_diagnosis_first(tmp_path):
-    rig = stuck(Rig(tmp_path, roles=roles_with(repair_default=MAX)))
+    rig = stuck(Rig(tmp_path, roles=roles_with(repair_default=MAX, classic=True)))
     rig.script("diagnose", {"summary": "d", "diagnosis": {"root_cause": "off-by-one in the export window"}})
     state = rig.controller().run()
     rows = repair_rows(state)
@@ -249,7 +269,7 @@ def test_7b_a_classification_without_evidence_or_touching_an_acceptance_criterio
 # ── 8. only an exhausted ladder reaches the Human Gate ──────────────────────
 
 def test_8_human_gate_only_after_the_whole_ladder_is_exhausted(tmp_path):
-    rig = stuck(Rig(tmp_path))
+    rig = stuck(Rig(tmp_path, roles=roles_with(classic=True)))
     rig.script("diagnose", {"summary": "d", "diagnosis": {"root_cause": "cause one"}},
                {"summary": "d", "diagnosis": {"root_cause": "cause two"}},
                {"summary": "d", "diagnosis": {"root_cause": "cause three"}})
@@ -272,7 +292,7 @@ def test_8_human_gate_only_after_the_whole_ladder_is_exhausted(tmp_path):
 
 
 def test_8b_ledger_records_every_required_field(tmp_path):
-    rig = stuck(Rig(tmp_path))
+    rig = stuck(Rig(tmp_path, roles=roles_with(classic=True)))
     rig.controller().run()
     first = next(e for e in rig.ledger() if e["entry_type"] == "ESCALATION")
     for key in ("finding_ids", "previous_model_effort", "new_model_effort", "reason", "previous_result",
@@ -318,7 +338,7 @@ def test_repeating_the_previous_answer_is_flagged_and_gets_no_credit(tmp_path):
 
 
 def test_changed_code_alone_with_the_same_finding_still_counts_as_no_progress(tmp_path):
-    rig = Rig(tmp_path)
+    rig = Rig(tmp_path, roles=roles_with(classic=True))
     rig.h.scripts["review"] = [dict(FINDING)]
 
     def churn(ctx):
@@ -492,7 +512,7 @@ def test_router_disabled_keeps_the_policy_profile_and_writes_no_routing_events(t
     rig = stuck(Rig(tmp_path, roles=roles_with(routing=routing), quota=telemetry(**{"openai-codex": 1})))
     state = rig.controller().run()
     assert not rig.journal("ROUTING_DECISION")
-    assert all(e["profile"] in (VHIGH, MAX, SONNET, OPUS) for e in state["executions"] if e["executor"] == "repair")
+    assert all(e["profile"] in (VHIGH, MAX, SONNET, OPUS, STRONG) for e in state["executions"] if e["executor"] == "repair")
 
 
 def test_no_routing_block_is_backward_compatible(tmp_path):
