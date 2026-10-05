@@ -14,7 +14,7 @@ datas += [(str(path), "PRODUCT_UI") for path in (ROOT / "PRODUCT_UI").iterdir() 
 # Engine and product modules are plain top-level modules; several are imported
 # lazily inside functions, so they are listed explicitly.
 hidden = ["aaw_paths", "autonomy_adapters", "autonomy_contract", "autonomy_controller", "autonomy_policy",
-          "autonomy_run_lock", "execution_contract", "execution_ledger", "local_preprocess", "model_catalog", "model_router", "repair_escalation", "provider_adapters",
+          "autonomy_run_lock", "execution_contract", "execution_ledger", "local_preprocess", "model_catalog", "model_router", "repair_escalation", "provider_adapters", "work_packet",
           "process_observation", "routing_contract", "run_cancellation", "run_recovery", "workflow_runner",
           "workflow_schema", "product_home", "product_providers", "product_recommendations", "product_runs",
           "product_server", "product_view", "product_version", "tkinter", "tkinter.filedialog"]

@@ -7,7 +7,9 @@ token of its own. This module answers, for each supported CLI:
   * FOUND / NOT_FOUND (and where),
   * the CLI version (`<cli> --version`),
   * the login status, *only* through the CLI's own read-only status command
-    (`claude auth status`, `codex login status`). Credential files are never
+    (`claude auth status`, `codex login status`) or, for Gemini CLI (which has
+    no status command), from the presence of an API-key environment variable
+    or of its cached-login file (existence only). Credential files are never
     opened. Anything that cannot be determined safely is reported UNKNOWN,
   * which AAW profiles (IMPLEMENTER_PROFILES) bind to that CLI and whether
     each is runnable now (`workflow_runner.profile_availability`, the same
@@ -53,7 +55,7 @@ NOT_FOUND = "NOT_FOUND"
 
 PROVIDER_NOTICE = ("AAW korzysta z lokalnie zainstalowanych CLI. Provider wymaga własnego aktywnego "
                    "konta/loginu. AAW nie przechowuje haseł ani kluczy.")
-SETUP_NOTICE = ("AAW potrzebuje co najmniej jednego obsługiwanego CLI AI (Claude CLI lub Codex CLI), "
+SETUP_NOTICE = ("AAW potrzebuje co najmniej jednego obsługiwanego CLI AI (Claude CLI, Codex CLI lub Gemini CLI), "
                 "zainstalowanego i zalogowanego na Twoim koncie. Instalacja i logowanie odbywają się poza AAW — "
                 "AAW tylko wykrywa CLI i z niego korzysta.")
 
@@ -132,6 +134,21 @@ def _codex_login(rc: int, out: str, err: str) -> tuple[str, str]:
     return LOGIN_UNKNOWN, "nie można bezpiecznie ustalić statusu logowania"
 
 
+GEMINI_KEY_ENV = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_GCA")
+
+
+def _gemini_login() -> tuple[str, str]:
+    """Gemini CLI has no read-only auth status command: report what is visible without reading secrets."""
+    named = [name for name in GEMINI_KEY_ENV if os.environ.get(name)]
+    if named:
+        return LOGGED_IN, f"uwierzytelnianie przez zmienną środowiskową ({named[0]})"
+    cached = os.path.join(os.path.expanduser("~"), ".gemini", "oauth_creds.json")
+    if os.path.isfile(cached):  # existence only; the file is never opened
+        return LOGGED_IN, "zapisane logowanie Google (Gemini CLI)"
+    return LOGIN_UNKNOWN, ("nie wykryto logowania Gemini CLI — uruchom raz  gemini  i zaloguj się kontem Google "
+                           "albo ustaw GEMINI_API_KEY")
+
+
 @dataclass(frozen=True)
 class ProviderSpec:
     provider_id: str
@@ -141,6 +158,7 @@ class ProviderSpec:
     login_args: tuple[str, ...] | None
     login_parser: Callable[[int, str, str], tuple[str, str]] | None
     setup_help: Mapping[str, str] = field(default_factory=dict)
+    login_check: Callable[[], tuple[str, str]] | None = None   # for a CLI without a status command
 
 
 PROVIDERS: list[ProviderSpec] = [
@@ -163,6 +181,16 @@ PROVIDERS: list[ProviderSpec] = [
                              "Potem wróć tutaj i kliknij „Wykryj ponownie”.",
                     "verify": "codex login status",
                     "docs": "https://github.com/openai/codex"}),
+    ProviderSpec(
+        provider_id="gemini", display_name="Gemini CLI", harness="gemini",
+        version_args=("--version",), login_args=None, login_parser=None, login_check=_gemini_login,
+        setup_help={"install": "Zainstaluj Gemini CLI według instrukcji: https://github.com/google-gemini/gemini-cli "
+                               "(np. z Node.js: npm install -g @google/gemini-cli).",
+                    "login": "Zaloguj się raz: otwórz terminal, wpisz  gemini  i wybierz logowanie kontem Google "
+                             "(albo ustaw zmienną GEMINI_API_KEY). Potem wróć tutaj, kliknij „Wykryj ponownie” "
+                             "i „Sprawdź modele”.",
+                    "verify": "gemini --version",
+                    "docs": "https://github.com/google-gemini/gemini-cli"}),
 ]
 
 
@@ -222,6 +250,8 @@ def detect_provider(spec: ProviderSpec, *, runner: Runner | None = None,
     if spec.login_args and spec.login_parser:
         rc, out, err = runner([str(executable), *spec.login_args], timeout)
         row["login"], row["login_detail"] = spec.login_parser(rc, out, err)
+    elif spec.login_check:
+        row["login"], row["login_detail"] = spec.login_check()
     row["profiles"] = _profiles_for(spec.harness)
     row["runnable_profiles"] = [p["profile_id"] for p in row["profiles"] if p.get("runnable")]
     return row
@@ -254,6 +284,9 @@ def probe_argv(harness: str, executable: str, model: str, *, minimal: bool = Tru
     if harness == "codex":
         return [executable, "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only",
                 "--model", model, "--config", 'model_reasoning_effort="low"', prompt]
+    if harness == "gemini":
+        return [executable, "--model", model, "--output-format", "json", "--approval-mode", "plan", "--skip-trust",
+                "--prompt", prompt]
     argv = [executable, "--print", "--no-session-persistence", "--model", model, "--effort", "low",
             "--output-format", "json", "--max-turns", "1", "--permission-mode", "plan"]
     if minimal:  # no tools and a one-line system prompt keep the probe to a few hundred tokens
@@ -267,8 +300,8 @@ _MODEL_REJECTED = re.compile(
     r"(unknown|invalid|unsupported) model", re.IGNORECASE)
 _TRANSIENT = re.compile(r"overloaded|rate.?limit|\b429\b|\b5\d\d\b|timed? ?out|connection (error|refused|reset)|"
                         r"network|ENOTFOUND|ECONNRESET|getaddrinfo|offline", re.IGNORECASE)
-_LOGGED_OUT = re.compile(r"not logged in|please log ?in|login required|unauthori[sz]ed|\b401\b|invalid api key",
-                         re.IGNORECASE)
+_LOGGED_OUT = re.compile(r"not logged in|please log ?in|login required|unauthori[sz]ed|\b401\b|invalid api key|"
+                         r"set an auth method|GEMINI_API_KEY environment variable", re.IGNORECASE)
 
 
 def classify_probe(harness: str, rc: int, out: str, err: str) -> tuple[str, str]:
@@ -280,6 +313,16 @@ def classify_probe(harness: str, rc: int, out: str, err: str) -> tuple[str, str]
             data = json.loads(out.strip().splitlines()[-1]) if out.strip() else None
         except (json.JSONDecodeError, IndexError):
             data = None
+    if harness == "gemini":
+        try:
+            data = json.loads(out) if out.strip() else None
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            text = f"{text}\n{data['error'].get('message', '')}"
+        if rc == 0 and isinstance(data, dict) and PROBE_TOKEN in str(data.get("response") or ""):
+            return PROBE_ACCEPTED, "CLI przyjęło dokładny identyfikator modelu i model odpowiedział"
+        data = None
     if rc == 0 and PROBE_TOKEN in (out or ""):
         if not isinstance(data, dict) or (data.get("is_error") is False):
             return PROBE_ACCEPTED, "CLI przyjęło dokładny identyfikator modelu i model odpowiedział"

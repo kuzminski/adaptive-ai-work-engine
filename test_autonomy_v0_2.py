@@ -556,8 +556,9 @@ def test_real_adapter_path_records_spawn_session_and_close_per_role(tmp_path, fa
     assert state["status"] == ac.AWAITING_HUMAN and state["hold"]["promotable"], state["escalation"]
     assert (env.path / "src/export/core.py").exists()
     calls = fake_cli["calls"]()
-    assert [x["role"] for x in calls] == ["PLANNER", "IMPLEMENTER", "SELF-VERIFIER", "REVIEW-PRETREATMENT",
-                                           "REVIEWER", "REVIEW-PRETREATMENT", "FINAL REVIEWER"]
+    # No REVIEW-PRETREATMENT calls: the deterministic packet goes to the reviewers as-is (one model call per
+    # review round saved; pretreatment could never change a verdict).
+    assert [x["role"] for x in calls] == ["PLANNER", "IMPLEMENTER", "SELF-VERIFIER", "REVIEWER", "FINAL REVIEWER"]
     assert not any(x["inherited_session_env"] for x in calls)  # parent session id did not leak
     life = el.ExecutionLedger.for_run("RUN1", tmp_path / "stats").lifecycle()
     calls_by_execution = {call["execution_id"]: call for call in calls}
@@ -575,7 +576,7 @@ def test_real_adapter_path_records_spawn_session_and_close_per_role(tmp_path, fa
         assert e["provider_session_id"] == call["session_id"]
         artifact = json.loads(Path(close["result_refs"][0]).read_text())
         assert artifact["recorded_by"] == aa.ADAPTER_ID and artifact["model"] == "claude-sonnet-5"
-    assert len({e["provider_session_id"] for e in state["executions"]}) == 7
+    assert len({e["provider_session_id"] for e in state["executions"]}) == 5
     assert "MANDATE" in calls[0]["handoff_keys"] and "PACKET" in calls[3]["handoff_keys"]
     assert "RAW_EVIDENCE_MANIFEST" in calls[4]["handoff_keys"]
     assert "HISTORY" not in calls[4]["handoff_keys"]  # reviewers get packet + territory, not prior conversation

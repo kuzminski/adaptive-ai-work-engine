@@ -203,6 +203,9 @@ def test_both_providers_detection_summary(env):
     detection = prun.detection_snapshot(refresh=True)
     assert detection["any_ready"] and detection["setup_notice"]
     for provider in detection["providers"]:
+        if provider["harness"] == "gemini":
+            assert provider["status"] == pp.NOT_FOUND and provider["setup_help"]["install"]
+            continue
         assert provider["status"] == pp.FOUND and provider["version"] == "9.9.9" and provider["login"] == pp.LOGGED_IN
         assert provider["models"] and all("state" in m and "label" in m for m in provider["models"])
         assert provider["setup_help"]["docs"].startswith("https://")

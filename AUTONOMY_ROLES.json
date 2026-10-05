@@ -31,6 +31,7 @@
     "implementer_default": "GPT6_LUNA_HIGH",
     "implementer_harder": "GPT6_LUNA_VERY_HIGH",
     "implementer_hard": "GPT6_LUNA_MAX",
+    "implementer_strong": "SOL_6_1_MEDIUM",
     "implementer_capability_escalation": "SONNET_5_5_MEDIUM",
     "review_pretreatment": "GPT6_LUNA_VERY_HIGH",
     "primary_reviewer": "SOL_6_1_LIGHT",
@@ -38,7 +39,8 @@
     "repair_hard": "GPT6_LUNA_MAX",
     "final_review_default": "SOL_5_6_LIGHT",
     "final_review_hard": "SONNET_5_5_MEDIUM",
-    "final_review_critical": "OPUS_5_5_MEDIUM"
+    "final_review_critical": "OPUS_5_5_MEDIUM",
+    "continuation_planner": "SOL_6_1_MEDIUM"
   },
   "routing": {
     "_comment": "Quota/trust/capability routing around the policy's preferred profile (model_router.py). With UNKNOWN telemetry the preferred profile is kept; hard provider failures (timeout/rate limit/auth) route to an adequate alternative.",
@@ -255,11 +257,55 @@
           "code_read"
         ],
         "cost_weight": 0.5
+      },
+      "SOL_6_1_MEDIUM": {
+        "pool": "openai-codex",
+        "trust": "PRODUCTION",
+        "capability_class": 5,
+        "capabilities": [
+          "code_edit",
+          "shell",
+          "structured_output",
+          "code_read",
+          "review",
+          "planning"
+        ],
+        "cost_weight": 1.2
+      },
+      "GEMINI_3_1_PRO": {
+        "pool": "google-gemini",
+        "trust": "SECONDARY",
+        "capability_class": 4,
+        "capabilities": [
+          "code_edit",
+          "shell",
+          "structured_output",
+          "code_read",
+          "review",
+          "planning"
+        ],
+        "cost_weight": 0.8,
+        "available": false,
+        "unavailable_reason": "Gemini CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
+      },
+      "GEMINI_3_FLASH": {
+        "pool": "google-gemini",
+        "trust": "SECONDARY",
+        "capability_class": 3,
+        "capabilities": [
+          "code_edit",
+          "shell",
+          "structured_output",
+          "code_read"
+        ],
+        "cost_weight": 0.4,
+        "available": false,
+        "unavailable_reason": "Gemini CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
       }
     }
   },
   "repair_escalation": {
-    "_comment": "Bounded repair ladder (repair_escalation.py): CURRENT -> EFFORT_UP -> DIFFICULT_IMPLEMENTER -> PLANNER_DIAGNOSIS -> Human Gate.",
+    "_comment": "Bounded repair ladder (repair_escalation.py): CURRENT -> DIFFICULT_IMPLEMENTER (strong model, diagnosis first) -> PLANNER_DIAGNOSIS -> Human Gate. EFFORT_UP is skipped (max_effort_steps 0): another, longer attempt by the same weak model family rarely converges.",
     "enabled": true,
     "stages": [
       "CURRENT",
@@ -267,7 +313,7 @@
       "DIFFICULT_IMPLEMENTER",
       "PLANNER_DIAGNOSIS"
     ],
-    "max_effort_steps": 1,
+    "max_effort_steps": 0,
     "max_attempts_per_stage": 2,
     "effort_ladder": [
       "GPT6_LUNA_HIGH",
@@ -276,7 +322,7 @@
     ],
     "roles": {
       "default_implementer": "GPT6_LUNA_HIGH",
-      "difficult_implementer": "SONNET_5_5_MEDIUM",
+      "difficult_implementer": "SOL_6_1_MEDIUM",
       "planner": "OPUS_5_5_HIGH",
       "reviewer": "SOL_6_1_LIGHT",
       "final_reviewer": "SOL_5_6_LIGHT"
