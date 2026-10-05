@@ -57,11 +57,11 @@ operator-led workflows, not yet for unattended production automation.
 | ORCA supervision | EXPERIMENTAL |
 | Local Qwen preprocessing | EXPERIMENTAL |
 | Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
-| Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASE CANDIDATE — see `AAW_PRODUCT_MVP_V0_2.md` |
+| Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASED (0.2.0) — see `AAW_PRODUCT_MVP_V0_2.md` |
 | Dynamic planner | PLANNED |
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 
-## Product app (MVP V0.2 — release candidate `0.2.0-rc1`)
+## Product app (MVP V0.2 — release `0.2.0`)
 
 For a normal user: see **Pobierz dla Windows** at the top — the
 `AAW-Windows-x64.zip` asset of the GitHub Release, unzip, run `AAW\AAW.exe`

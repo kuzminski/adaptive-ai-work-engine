@@ -14,7 +14,8 @@ Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
 - Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
 - UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
   (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
-## Unreleased — adaptive model routing + bounded repair escalation
+
+## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 
 Details: `AAW_QUOTA_ROUTING_AND_REPAIR_ESCALATION_V0_1.md`. Lifecycle unchanged.
 - Quota/trust/capability routing around the policy's preferred profile (`model_router.py`), provider failover,
