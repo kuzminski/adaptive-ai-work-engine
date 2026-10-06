@@ -256,6 +256,15 @@ def _clean_list(values: Any, limit: int = MAX_DIRECTIONS) -> list[str]:
     return rows[:limit]
 
 
+def _clean_chain(value: Any) -> list[str] | None:
+    """The user's own implementer chain (ordered profile IDs) or None for the system default."""
+    if value in (None, "", []):
+        return None
+    if not isinstance(value, (list, tuple)):
+        raise ProductError("Łańcuch implementatora musi być uporządkowaną listą profili.")
+    return [str(v).strip() for v in value if str(v).strip()] or None
+
+
 def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
     goal = str(form.get("goal") or "").strip()
     if len(goal) < 5:
@@ -269,6 +278,7 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
         "planning": form.get("planning") or None,
         "implementation": form.get("implementation") or None,
         "review": form.get("review") or None,
+        "implementer_chain": _clean_chain(form.get("implementer_chain")),
         "advanced": {
             "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 20),
             "required_evidence": _clean_list(advanced.get("required_evidence"), 10),
@@ -346,15 +356,17 @@ def verify_models(profile_ids: Sequence[str] | None = None) -> dict[str, Any]:
     return {**result, "providers": detection}
 
 
-def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None,
+                  implementer_chain: Sequence[str] | None = None) -> dict[str, Any]:
     """The three simple levels → the actual models (wizard step 'model setup'); no goal needed."""
     settings = product_home.load_settings()
     detection = detection or detection_snapshot()
     picked = {g: (choices or {}).get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
     states = pp.profile_states(detection)
     resolution = pr.resolve_choices(picked, runnable=pp.runnable_profiles(detection), detection=detection,
-                                    states=states)
+                                    states=states, implementer_chain=_clean_chain(implementer_chain))
     return {"choices": resolution["choices"], "groups": pr.group_summary(resolution),
+            "implementer_chain": resolution["implementer_chain"],
             "blockers": resolution["blockers"], "warnings": resolution["warnings"],
             "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]}}
 
@@ -368,7 +380,7 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
     choices = {g: form[g] or settings.get(g) for g in pr.CHOICE_GROUPS}
     resolution = pr.resolve_choices(choices, runnable=pp.runnable_profiles(detection),
                                     overrides=form["advanced"]["profile_overrides"], detection=detection,
-                                    states=pp.profile_states(detection))
+                                    states=pp.profile_states(detection), implementer_chain=form["implementer_chain"])
     mandate = build_mandate(form, "PREVIEW", settings)
     try:
         ac.validate_mandate(mandate)
@@ -417,6 +429,7 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
         "review_policy": {k: resolution["slots"][k] for k in (
             "primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")},
         "choices": resolution["choices"],
+        "implementer_chain": resolution["implementer_chain"],
         "groups": pr.group_summary(resolution),
         "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]},
         "providers": [{"display_name": p["display_name"], "status": p["status"], "version": p["version"],
@@ -498,7 +511,7 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
         "workspace": {"repo": str(repo_top), "worktree": str(worktree), "branch": branch,
                       "base_commit": base_commit, "project_name": repo_top.name},
         "resolution": {k: resolution[k] for k in ("choices", "catalog_version", "catalog_source", "slots",
-                                                   "warnings")},
+                                                   "warnings", "implementer_chain")},
         "roles_config": resolution["roles_config"],
         "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 1800)), "max_turns": 30},
         "authority_note": "Product input record. The engine state (AUTONOMY/autonomy_state.json), its journal and "
@@ -787,7 +800,7 @@ def prepare_continuation(run_id: str, *, mode: str) -> dict[str, Any]:
     form = dict(task["form"])
     prefill = {"repo": workspace["repo"], "base": base,
                "planning": form.get("planning"), "implementation": form.get("implementation"),
-               "review": form.get("review")}
+               "review": form.get("review"), "implementer_chain": form.get("implementer_chain")}
     if mode == "direction":
         prefill.update(goal=form["goal"], first_iteration="", directions=[])
     else:

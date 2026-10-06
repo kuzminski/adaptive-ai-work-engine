@@ -198,3 +198,14 @@ button.stop-now { background: var(--panel); color: var(--bad); border: 2px solid
 button.resume { font-size: 15px; padding: 10px 20px; }
 .gate .why { font-size: 16px; font-weight: 600; }
 .ctl-help, .gate .kv > div { overflow-wrap: anywhere; }
+
+/* implementer chain editor (wizard step "Modele") */
+.chain { margin: 10px 0 6px; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }
+.chain-head { font-weight: 700; margin-bottom: 8px; }
+.chain-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.chain-step { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chain-n { flex: 0 0 24px; height: 24px; border-radius: 50%; background: var(--info-bg); color: var(--accent); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.chain-step select { flex: 1 1 260px; min-width: 0; width: auto; }
+.chain-btns { display: inline-flex; gap: 4px; }
+.chain-btns button { padding: 4px 10px; }
+.chain-actions { margin-top: 8px; display: flex; gap: 12px; align-items: center; }

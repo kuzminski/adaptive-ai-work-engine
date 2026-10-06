@@ -122,8 +122,13 @@ def test_verify_models_activates_exact_mapping_and_run_uses_exact_model_id(env):
         "CLAUDE_OPUS_5_5_HIGH", "RECOMMENDED", "OPUS_5_5_HIGH")
     assert planner["runtime_model_id"] == "claude-opus-5-5" and planner["effort"] == "high"
     assert preview["review_policy"]["final_review_critical"]["profile_id"] == "CLAUDE_OPUS_5_5_MEDIUM"
+    # Claude-only after verification: the system default chain keeps its Sonnet 5.5 steps, in order.
+    chain = preview["implementer_chain"]
+    assert chain["source"] == "DEFAULT"
+    assert [s["profile_id"] for s in chain["steps"]] == ["CLAUDE_SONNET_5_5_MEDIUM", "CLAUDE_SONNET_5_5_HIGH"]
+    assert preview["implementer_policy"]["implementer_default"]["profile_id"] == "CLAUDE_SONNET_5_5_MEDIUM"
     assert preview["implementer_policy"]["implementer_capability_escalation"]["profile_id"] == \
-        "CLAUDE_SONNET_5_5_MEDIUM"
+        "CLAUDE_SONNET_5_5_HIGH"
     run_id = start(env, directions=[])
     view = wait_for(run_id, settled)
     assert view["status"] == pv.S_GATE
@@ -420,3 +425,69 @@ def test_not_logged_in_provider_has_no_usable_models(env, monkeypatch, harness):
     assert provider["login"] == pp.NOT_LOGGED_IN and provider["runnable_profiles"] == []
     assert all(m["state"] in (pp.A_LOGGED_OUT, pp.A_POLICY) for m in provider["models"])
     assert not detection["any_ready"]
+
+
+# ── implementer chain chosen at start ────────────────────────────────────────
+
+def test_user_can_pick_any_single_model_as_the_whole_implementer(env):
+    env.install("codex")
+    detection = prun.detection_snapshot(refresh=True)
+    preview = prun.preview_task(form(env, implementer_chain=["TERRA_HIGH"]), detection=detection)
+    assert preview["can_start"], preview["blockers"]
+    assert preview["implementer_chain"]["source"] == "USER"
+    assert [s["profile_id"] for s in preview["implementer_chain"]["steps"]] == ["TERRA_HIGH"]
+    run_id = start(env, directions=[], implementer_chain=["TERRA_HIGH"])
+    view = wait_for(run_id, settled)
+    assert view["status"] == pv.S_GATE
+    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text(encoding="utf-8"))
+    assert [b["profile_id"] for b in state["roles"]["implementer_chain"]] == ["TERRA_HIGH"]   # frozen with the run
+    impl = [e for e in state["executions"] if e["executor"] in ("execute", "self_verify")]
+    assert impl and {e["profile"] for e in impl} == {"TERRA_HIGH"}
+    assert json.loads((prun.product_dir(run_id) / "task.json").read_text(encoding="utf-8"))["form"]["implementer_chain"] == ["TERRA_HIGH"]
+    implementer_call = next(c for c in env.calls() if c["role"] == "IMPLEMENTER")
+    assert "gpt-5.6-terra" in implementer_call["argv"]                 # the CLI really got the chosen exact model
+    assert_no_merge_push(env)
+
+
+def test_default_run_freezes_the_system_chain_and_starts_on_its_first_step(env):
+    env.install("codex")
+    run_id = start(env, directions=[])
+    view = wait_for(run_id, settled)
+    assert view["status"] == pv.S_GATE
+    state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text(encoding="utf-8"))
+    chain = [b["profile_id"] for b in state["roles"]["implementer_chain"]]
+    assert chain[:6] == ["GPT6_LUNA_HIGH", "GPT6_LUNA_VERY_HIGH", "GPT6_LUNA_MAX", "TERRA_HIGH", "TERRA_VERY_HIGH",
+                         "TERRA_MAX"]
+    assert next(e for e in state["executions"] if e["executor"] == "execute")["profile"] == "GPT6_LUNA_HIGH"
+
+
+def test_invalid_user_chain_blocks_start_and_setup_endpoint_reports_the_chain(env):
+    env.install("codex")
+    detection = prun.detection_snapshot(refresh=True)
+    bad = prun.preview_task(form(env, implementer_chain=["TERRA_HIGH", "NOPE"]), detection=detection)
+    assert not bad["can_start"] and any("nieznane profile" in b for b in bad["blockers"])
+    with pytest.raises(prun.ProductError):
+        prun.start_task(form(env, implementer_chain=["TERRA_HIGH", "NOPE"]), detection=detection)
+    with pytest.raises(prun.ProductError):
+        prun.normalize_form(form(env, implementer_chain="TERRA_HIGH"))
+    setup = prun.resolve_setup({}, detection=detection, implementer_chain=["TERRA_MAX", "TERRA_HIGH"])
+    assert setup["implementer_chain"]["source"] == "USER"
+    assert setup["groups"]["implementation"]["models"] == [
+        s["display"] for s in setup["implementer_chain"]["steps"]]
+    default = prun.resolve_setup({}, detection=detection)
+    assert default["implementer_chain"]["source"] == "DEFAULT"
+    assert default["implementer_chain"]["default_profile_ids"][0] == "GPT6_LUNA_HIGH"
+
+
+def test_verifying_sonnet_55_adds_its_steps_to_the_default_chain(env):
+    env.install("claude", "codex")
+    detection = prun.detection_snapshot(refresh=True)
+    before = prun.resolve_setup({}, detection=detection)
+    assert [s["profile_id"] for s in before["implementer_chain"]["skipped"]] == [
+        "CLAUDE_SONNET_5_5_MEDIUM", "CLAUDE_SONNET_5_5_HIGH"]
+    assert {"CLAUDE_SONNET_5_5_MEDIUM", "CLAUDE_SONNET_5_5_HIGH"} <= set(before["groups"]["implementation"]["checkable"])
+    prun.verify_models(before["groups"]["implementation"]["checkable"])
+    after = prun.resolve_setup({}, detection=prun.detection_snapshot())
+    assert [s["profile_id"] for s in after["implementer_chain"]["steps"]][-2:] == [
+        "CLAUDE_SONNET_5_5_MEDIUM", "CLAUDE_SONNET_5_5_HIGH"]
+    assert not after["implementer_chain"]["skipped"]

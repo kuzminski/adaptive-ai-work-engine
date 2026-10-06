@@ -1,6 +1,6 @@
 # Changelog — AAW product app
 
-## Unreleased — implementer effectiveness (phase 1)
+## 0.4.0 — 2026-10-06 — Implementer effectiveness (phase 1) + Antigravity CLI (includes 0.3.0)
 
 Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. Lifecycle unchanged.
 - Plans carry a mandatory **work packet** (files to read/change, small ordered steps with per-step verification,
@@ -13,12 +13,31 @@ Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. 
   request) go to GPT-6.1 Sol medium up front (new slot `implementer_strong`); a finding that survives the weak
   repairer goes straight to it with diagnosis first (EFFORT_UP skipped). Next iterations are planned by
   GPT-6.1 Sol medium (new slot `continuation_planner`) instead of Sol 5.6 light.
+- With an implementer chain (the default since 0.3.0, or one chosen at start) the chain stays the authority:
+  difficulty routing only raises the starting step (packet route HARDER → at least step 2, STRONG → at least
+  step 3) and `implementer_strong` maps to chain step 3; GPT-6.1 Sol medium is used up front only by the
+  model sets without a chain (Szybka / Zbalansowana / Silna).
 - Review pretreatment is off by default (one model call per review round with no effect on the verdict).
 - **Antigravity CLI (`agy`)** support — successor of the Gemini CLI, which Google shut down (detection, login
   status via `agy -p /usage`, "Sprawdź modele", role dispatch with `--json-schema`); profiles `AGY_GEMINI_3_1_PRO`,
   `AGY_GEMINI_FLASH`, usable after a local probe. The interim Gemini CLI harness is removed. Routing
   alternatives are limited to profiles runnable on this machine.
 - Required-evidence matching tolerates naming variants ("Unit-tests (pytest)" substantiates "unit tests").
+
+## 0.3.0 — 2026-10-04 — Implementer chain chosen at start (includes 0.2.1)
+
+Details: `AAW_IMPLEMENTER_CHAIN_V0_1.md`. Lifecycle unchanged.
+- The implementer is no longer fixed: at the "Modele" step the user can pick any model as the implementer, or an
+  ordered escalation chain of models (from → to, any length 1–12). Default chain set by the system:
+  GPT-6 Luna high → very high → max → GPT-5.6 Terra high → very high → max → Claude Sonnet 5.5 medium → high.
+- New exact profiles: `TERRA_VERY_HIGH`, `TERRA_MAX`, `CLAUDE_SONNET_5_5_HIGH`.
+- The chain is frozen with the run (`roles.implementer_chain`) and drives start (by plan complexity), capability
+  escalation, repairs and the repair ladder. A step that is not runnable here is never replaced by another model.
+
+## 0.2.1 — 2026-10-04 — antivirus false-positive mitigation
+- `AAW.exe` now carries a Windows version resource (company, product, description, version).
+- CI builds the PyInstaller bootloader from source and scans the built app with Microsoft Defender (informational).
+- Start guides explain what to do when Defender quarantines the file.
 
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 

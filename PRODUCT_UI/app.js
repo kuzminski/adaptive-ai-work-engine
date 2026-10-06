@@ -188,7 +188,7 @@ const EXAMPLES = [
 function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
-          planning: s.planning, implementation: s.implementation, review: s.review, base: null, setup: null, preview: null,
+          planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
           advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", profile_overrides: {}}};
 }
 function stepperHtml(step) {
@@ -312,14 +312,63 @@ function groupHtml(group, setup) {
   return `<div class="group"><div class="group-head">${names[group]}</div>
     <div class="seg" data-group="${group}">${c.options.map((o) => `<button type="button" data-value="${esc(o.value)}" class="${f[group] === o.value ? "on" : ""}">${esc(o.label)}${o.value === c.default ? " ★" : ""}</button>`).join("")}</div>
     <div class="choice-desc">${esc(desc)}</div>
-    <div class="models-under">${g ? g.main.map(slotLine).join("") : `<span class="muted small">…</span>`}
+    ${group === "implementation" ? chainHtml(setup) : ""}
+    <div class="models-under">${g ? (group === "implementation" && setup.implementer_chain && setup.implementer_chain.source !== "SLOTS" ? "" : g.main.map(slotLine).join("")) : `<span class="muted small">…</span>`}
       ${g && g.all.length > g.main.length ? `<details><summary class="small">Pozostałe etapy (${g.all.length - g.main.length})</summary>${g.all.filter((s) => !g.main.includes(s) && !g.main.some((m) => m.slot === s.slot)).map(slotLine).join("")}</details>` : ""}
     </div></div>`;
 }
+const CHAIN_SLOTS = ["implementer_default", "implementer_harder", "implementer_hard", "implementer_capability_escalation", "repair_default", "repair_hard", "review_pretreatment"];
+function setupPayload() {
+  const f = formState;
+  return {choices: {planning: f.planning, implementation: f.implementation, review: f.review}, implementer_chain: f.implementer_chain};
+}
 async function loadSetup() {
   const f = formState;
-  f.setup = await api("/api/setup/resolve", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+  f.setup = await api("/api/setup/resolve", setupPayload());
   return f.setup;
+}
+// Selectable profiles for the implementer chain: every profile with an exact runtime model.
+function chainProfiles() {
+  const out = [];
+  for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id && r.runtime_model_id) out.push(r);
+  return out;
+}
+// The chain being edited: the user's own, or the effective one resolved by the system (default).
+function effectiveChain() {
+  const f = formState;
+  if (f.implementer_chain) return f.implementer_chain.slice();
+  const c = f.setup && f.setup.implementer_chain;
+  return c && c.steps && c.steps.length ? c.steps.map((x) => x.profile_id) : [];
+}
+function chainHtml(setup) {
+  const f = formState;
+  const c = setup && setup.implementer_chain;
+  const source = f.implementer_chain ? "USER" : (c ? c.source : "SLOTS");
+  const rows = effectiveChain();
+  const steps = (c && c.steps) || [];
+  const profiles = chainProfiles();
+  const tag = {USER: "ręczny", DEFAULT: "domyślny AAW", SLOTS: "wg poziomu"}[source] || source;
+  const opt = (id, current) => {
+    const p = profiles.find((x) => x.profile_id === id);
+    const taken = rows.includes(id) && id !== current;
+    return `<option value="${esc(id)}" ${id === current ? "selected" : ""} ${taken ? "disabled" : ""}>${esc(p ? (p.display_name || id) : id)} — ${esc(p ? p.runtime_model_id : "brak ID")} / ${esc(p ? p.effort : "")}${p && !p.runnable ? " (niedostępny)" : ""}</option>`;
+  };
+  const list = rows.map((id, i) => {
+    const st = steps.find((x) => x.profile_id === id);
+    const avail = st && !st.runnable ? ` <span class="slot-status UNAVAILABLE">niedostępny</span>` : (st && st.availability === "NOT_VERIFIED" ? ` <span class="slot-status ALTERNATIVE">niesprawdzony</span>` : "");
+    return `<li class="chain-step"><span class="chain-n">${i + 1}</span>
+      <select data-chain-step="${i}">${profiles.map((p) => opt(p.profile_id, id)).join("")}${profiles.some((p) => p.profile_id === id) ? "" : opt(id, id)}</select>${avail}
+      <span class="chain-btns"><button type="button" data-chain-up="${i}" ${i === 0 ? "disabled" : ""} title="Wyżej">↑</button><button type="button" data-chain-down="${i}" ${i === rows.length - 1 ? "disabled" : ""} title="Niżej">↓</button><button type="button" data-chain-del="${i}" ${rows.length <= 1 ? "disabled" : ""} title="Usuń krok">✕</button></span></li>`;
+  }).join("");
+  const skipped = (c && c.skipped || []).map((x) => `<div class="small muted">pominięty (niedostępny tu): ${esc(x.display)}${x.reason ? " — " + esc(x.reason) : ""}</div>`).join("");
+  return `<div class="chain"><div class="chain-head">Łańcuch implementatora <span class="slot-status ${source === "DEFAULT" ? "RECOMMENDED" : "OVERRIDE"}">${esc(tag)}</span></div>
+    ${rows.length ? `<ol class="chain-list">${list}</ol>` : `<div class="small muted">Etapy implementacji wynikają z wybranego poziomu (poniżej). Kliknij „Własny łańcuch”, aby samemu wybrać model(e) implementatora.</div>`}
+    ${skipped}
+    <div class="chain-actions">
+      ${rows.length ? `<button type="button" id="chain-add" ${rows.length >= 12 ? "disabled" : ""}>+ Dodaj krok eskalacji</button>` : `<button type="button" id="chain-custom">Własny łańcuch</button>`}
+      ${f.implementer_chain ? `<button type="button" id="chain-default" class="link">Przywróć domyślny</button>` : ""}
+    </div>
+    <p class="small muted">Krok 1 to implementator na starcie; kolejne kroki to eskalacja, gdy poprzedni model nie wystarcza (rosnąca trudność zadania, błąd możliwości, naprawy). Jeden krok = jeden model na całą implementację. Krok niedostępny nigdy nie jest podmieniany po cichu.</p></div>`;
 }
 async function stepModels(box) {
   const f = formState;
@@ -341,6 +390,34 @@ async function stepModels(box) {
         f[group] = b.dataset.value; await loadSetup(); draw();
       }));
     }
+    const setChain = async (ids) => {
+      f.implementer_chain = ids && ids.length ? ids : null;
+      if (f.implementer_chain) CHAIN_SLOTS.forEach((k) => delete f.advanced.profile_overrides[k]);
+      try { await loadSetup(); } catch (e) { toast(e.message, 8000); }
+      draw();
+    };
+    box.querySelectorAll("[data-chain-step]").forEach((sel) => (sel.onchange = () => {
+      const ids = effectiveChain(); ids[Number(sel.dataset.chainStep)] = sel.value; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-up]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainUp); [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-down]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainDown); [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-del]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(); ids.splice(Number(b.dataset.chainDel), 1); setChain(ids);
+    }));
+    on("chain-add", () => {
+      const ids = effectiveChain();
+      const next = chainProfiles().find((p) => !ids.includes(p.profile_id) && p.runnable) || chainProfiles().find((p) => !ids.includes(p.profile_id));
+      if (next) setChain([...ids, next.profile_id]);
+    });
+    on("chain-custom", () => {
+      const first = s && s.groups.implementation.main[0];
+      if (first) setChain([first.profile_id]);
+    });
+    on("chain-default", () => setChain(null));
     box.querySelectorAll("[data-slot]").forEach((sel) => (sel.onchange = () => {
       if (sel.value) f.advanced.profile_overrides[sel.dataset.slot] = sel.value; else delete f.advanced.profile_overrides[sel.dataset.slot];
     }));
@@ -348,7 +425,7 @@ async function stepModels(box) {
       e.target.disabled = true;
       document.getElementById("verify-status").textContent = "Sprawdzam… (zwykle kilka–kilkanaście sekund na model)";
       try {
-        const r = await api("/api/models/verify", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+        const r = await api("/api/models/verify", setupPayload());
         boot.providers = r.providers; f.setup = r.setup;
         const res = r.results.map((x) => `${x.model}: ${{ACCEPTED: "OK", REJECTED: "odrzucony", UNKNOWN: "nie ustalono"}[x.status]}`).join(", ");
         toast(res ? `Wynik: ${res}` : "Brak modeli do sprawdzenia.", 9000);
@@ -360,13 +437,18 @@ async function stepModels(box) {
   try { await loadSetup(); } catch (e) { box.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   draw();
 }
+function chainActive() {
+  const c = formState.setup && formState.setup.implementer_chain;
+  return !!(formState.implementer_chain || (c && c.source !== "SLOTS"));
+}
 function advancedSlotsHtml() {
   const profiles = [];
   for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id) profiles.push(r);
   const f = formState;
   const opts = (slot) => `<option value="">(wg poziomu)</option>` + profiles.map((p) => `<option value="${esc(p.profile_id)}" ${f.advanced.profile_overrides[slot] === p.profile_id ? "selected" : ""}>${esc(p.profile_id)} — ${esc(p.runtime_model_id || "brak ID")} / ${esc(p.effort)}${p.runnable ? "" : " (niedostępny)"}</option>`).join("");
   return `<p class="muted">Tylko dla zaawansowanych: wymusza dokładny profil dla etapu. Niedostępny profil zablokuje START albo zatrzyma run w Human Gate — nigdy nie zostanie podmieniony.</p>
-    <table>${Object.entries(boot.slot_labels).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
+    ${chainActive() ? `<p class="small muted">Etapy implementacji i napraw wynikają z łańcucha implementatora powyżej, dlatego nie można ich tu nadpisać osobno.</p>` : ""}
+    <table>${Object.entries(boot.slot_labels).filter(([slot]) => !(chainActive() && CHAIN_SLOTS.includes(slot))).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
 }
 
 function stepGoal(box) {
@@ -407,7 +489,7 @@ function formPayload() {
   const f = formState, a = f.advanced;
   const lines = (t) => String(t || "").split("\n").map((x) => x.trim()).filter(Boolean);
   return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: lines(f.directions),
-          planning: f.planning, implementation: f.implementation, review: f.review, base: f.base,
+          planning: f.planning, implementation: f.implementation, review: f.review, implementer_chain: f.implementer_chain, base: f.base,
           advanced: {acceptance_criteria: lines(a.acceptance_criteria), required_evidence: lines(a.required_evidence),
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
@@ -424,7 +506,7 @@ async function stepStart(box) {
   catch (e) { box.innerHTML = `<h2>7. Podsumowanie i START</h2><div class="note bad">${esc(e.message)}</div>`; return; }
   f.preview = p;
   const g = p.groups;
-  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
+  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(key === "implementation" && p.implementer_chain.source !== "SLOTS" ? " → " : ", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
   const a = f.advanced;
   box.innerHTML = `<h2>7. Podsumowanie i START</h2>
     ${p.blockers.map((b) => `<div class="note bad"><strong>Nie można wystartować:</strong> ${esc(b)}</div>`).join("")}

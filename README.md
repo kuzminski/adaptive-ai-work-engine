@@ -62,7 +62,7 @@ operator-led workflows, not yet for unattended production automation.
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 | Implementer effectiveness (work packets, final self-audit, simple-error checks, difficulty routing, Antigravity CLI) | IMPLEMENTED (phase 1) — see `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md` |
 
-## Product app (MVP V0.2 — release `0.2.0`)
+## Product app (MVP V0.2 — release `0.4.0`)
 
 For a normal user: see **Pobierz dla Windows** at the top — the
 `AAW-Windows-x64.zip` asset of the GitHub Release, unzip, run `AAW\AAW.exe`

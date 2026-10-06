@@ -167,6 +167,38 @@
       "curated": true
     },
     {
+      "profile_id": "TERRA_VERY_HIGH",
+      "display_name": "Terra / very high",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR"
+      ],
+      "description": "Implementacja wymagająca dłuższego rozumowania (krok łańcucha implementatora).",
+      "ui_hint": "Trudniejsza implementacja",
+      "harness": "codex",
+      "runtime_model_id": "gpt-5.6-terra",
+      "effort": "xhigh",
+      "availability": "VERIFIED",
+      "curated": true
+    },
+    {
+      "profile_id": "TERRA_MAX",
+      "display_name": "Terra / max",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR"
+      ],
+      "description": "Implementacja wymagająca dłuższego rozumowania (krok łańcucha implementatora).",
+      "ui_hint": "Trudniejsza implementacja",
+      "harness": "codex",
+      "runtime_model_id": "gpt-5.6-terra",
+      "effort": "max",
+      "availability": "VERIFIED",
+      "curated": true
+    },
+    {
       "profile_id": "SOL_MEDIUM",
       "display_name": "Sol / medium",
       "suitable_for": [
@@ -495,6 +527,22 @@
       "availability": "VERIFIED",
       "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "exact_runtime_mapping_of": "SONNET_5_5_MEDIUM",
+      "curated": true
+    },
+    {
+      "profile_id": "CLAUDE_SONNET_5_5_HIGH",
+      "display_name": "Claude Sonnet 5.5 / high (exact)",
+      "suitable_for": [
+        "IMPLEMENT",
+        "REVIEW",
+        "REPAIR"
+      ],
+      "description": "Claude Sonnet 5.5 (high), dokładny ID runtime; użyty dopiero po sprawdzeniu na tym komputerze.",
+      "harness": "claude",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "effort": "high",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "curated": true
     },
     {
