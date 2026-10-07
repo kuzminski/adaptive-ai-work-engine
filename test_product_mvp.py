@@ -382,7 +382,7 @@ def test_stop_during_execute_waits_then_pauses_and_resume_completes(env):
     assert stopping
     prun.resume_task(run_id)
     view = wait_for(run_id, settled)
-    assert view["status"] == pv.S_GATE
+    assert view["status"] == pv.S_GATE, (view.get("status_detail"), view.get("worker_exit"))
     assert len([c for c in env.calls() if c["role"] == "IMPLEMENTER"]) == 1     # never replayed
     assert_no_merge_push(env)
 
@@ -409,7 +409,7 @@ def test_stop_during_review_cancels_read_only_call_and_resume_replays_with_new_i
     assert any(b["kind"] == "CANCELLED" for t in view["timeline"] for b in t["briefs"])
     prun.resume_task(run_id)
     view = wait_for(run_id, settled)
-    assert view["status"] == pv.S_GATE
+    assert view["status"] == pv.S_GATE, (view.get("status_detail"), view.get("worker_exit"))
     state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text())
     reviews = [e for e in state["executions"] if e["executor"] == "review"]
     assert reviews[-1]["retry_of_execution_id"] == cancelled_id

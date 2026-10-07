@@ -105,3 +105,17 @@ def test_the_live_block_is_computed_once_per_change_and_not_at_all_for_the_home_
     seed_run("AAW_TASK_CACHE02", ["Dodaj C", "Dodaj D"], length=2)  # another run's evidence changes history: recompute
     pv.run_view("AAW_TASK_CACHE01")
     assert len(calls) == 2
+
+
+def test_the_ui_scripts_share_one_global_scope_so_top_level_names_must_not_clash():
+    """app.js and experience.js are plain <script>s: a duplicate top-level name silently replaces the other one
+    (a live-view helper once shadowed the implementer-chain editor and the run page never rendered)."""
+    import re
+    from pathlib import Path
+    names: dict[str, str] = {}
+    pattern = re.compile(r"^(?:async\s+)?function\s+([A-Za-z0-9_$]+)|^(?:const|let|var)\s+([A-Za-z0-9_$]+)", re.M)
+    for script in sorted(Path("PRODUCT_UI").glob("*.js")):
+        for match in pattern.finditer(script.read_text(encoding="utf-8")):
+            name = match.group(1) or match.group(2)
+            assert name not in names, f"{name} is declared in both {names[name]} and {script.name}"
+            names[name] = script.name

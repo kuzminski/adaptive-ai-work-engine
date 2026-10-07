@@ -44,7 +44,7 @@ function journeyHtml(stages) {
     <span class="dot">${mark[s.state] ?? ""}${s.state === "pending" ? i + 1 : ""}</span>
     <span class="s-label">${esc(s.label)}</span><span class="s-detail">${esc(s.detail || "")}</span></li>`).join("")}</ol>`;
 }
-function chainHtml(c, unit) {
+function liveChainHtml(c, unit) {
   if (!c) return "";
   const filled = c.slots.filter((s) => s.state !== "pending").length;
   const slot = (s) => {
@@ -100,7 +100,7 @@ function liveHtml(v) {
   return `<div class="panel live"><div class="live-head"><h2>Na żywo: od pomysłu do decyzji</h2>
       <span class="small muted">odświeżane co ${running ? "1,5 s" : "5 s"}</span></div>
     ${journeyHtml(l.journey)}${now}
-    <div class="live-grid"><div>${chainHtml(l.chain, unit)}${l.deferred_open ? `<div class="small muted" style="margin-top:8px">Drobne uwagi odłożone na polerowanie: <strong>${esc(l.deferred_open)}</strong></div>` : ""}</div>
+    <div class="live-grid"><div>${liveChainHtml(l.chain, unit)}${l.deferred_open ? `<div class="small muted" style="margin-top:8px">Drobne uwagi odłożone na polerowanie: <strong>${esc(l.deferred_open)}</strong></div>` : ""}</div>
       <div>${meterHtml(l.meter)}</div></div>
     ${["RUNNING", "STOPPING", "PAUSED", "INTERRUPTED", "STARTING"].includes(v.status) ? forecastHtml(l.forecast) : ""}${feed}</div>`;
 }
