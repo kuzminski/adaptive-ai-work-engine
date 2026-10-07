@@ -40,6 +40,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import aaw_experience as ex
 import autonomy_contract as ac
 import autonomy_run_lock as rl
 import product_home
@@ -313,6 +314,18 @@ def split_directions(values: Any) -> list[str]:
     return rows
 
 
+def _clean_recommendation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or not value.get("profile_id"):
+        return None
+    return {"source": "EXPERIENCE", "slot": str(value.get("slot") or "implementer_default")[:60],
+            "profile_id": str(value["profile_id"])[:80], "kind": str(value.get("kind") or "")[:40],
+            "previous_profile_id": str(value.get("previous_profile_id") or "")[:80] or None,
+            "n": value.get("n") if isinstance(value.get("n"), int) else None,
+            "rate": value.get("rate") if isinstance(value.get("rate"), (int, float)) else None,
+            "cost_per_solved": value.get("cost_per_solved") if isinstance(value.get("cost_per_solved"), (int, float)) else None,
+            "confirmed_by_user": True}
+
+
 def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
     goal = str(form.get("goal") or "").strip()
     if len(goal) < 5:
@@ -342,12 +355,20 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
             # AAW keeps going while the roadmap offers justified work; False restores "stop when the
             # listed points are done". Missing key = the autonomous default.
             "continue_autonomously": advanced.get("continue_autonomously") is not False,
+            # Chain mode (long chains, one serious review, polish at the end): the default; False restores the
+            # classic review after every iteration.
+            "chain_mode": advanced.get("chain_mode") is not False,
+            # Per-run override of the exploration setting (None = follow the setting).
+            "exploration": advanced.get("exploration") if isinstance(advanced.get("exploration"), bool) else None,
+            # Audit record when the user applied a recommended model for a task kind (UI-confirmed, never automatic).
+            "recommendation": _clean_recommendation(advanced.get("recommendation")),
             "profile_overrides": {k: str(v) for k, v in (advanced.get("profile_overrides") or {}).items() if v},
         },
         "base": form.get("base") if isinstance(form.get("base"), dict) else None,
     }
 
 
+HUMAN_GATE = re.compile(r"^\s*\[(?:człowiek|czlowiek|human)\]\s*", re.IGNORECASE)
 CONTINUATION_ITEM_ID = "CONTINUE"
 CONTINUATION_TITLE = (
     "Continue autonomously toward the objective. After the listed points are done, inspect the real state of the "
@@ -366,7 +387,12 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
     first = form["first_iteration"] or form["goal"]
     items = [{"item_id": "STEP_1", "title": first}]
     for index, direction in enumerate(form["directions"], start=2):
-        items.append({"item_id": f"STEP_{index}", "title": direction, "depends_on": ["STEP_1"]})
+        gated = bool(HUMAN_GATE.match(direction))
+        item = {"item_id": f"STEP_{index}", "title": HUMAN_GATE.sub("", direction, count=1).strip() or direction,
+                "depends_on": ["STEP_1"]}
+        if gated:
+            item["human_required"] = True        # AAW will not do it; it stays on the list for the Human Gate
+        items.append(item)
     advanced = form["advanced"]
     continuous = advanced.get("continue_autonomously", True) is not False
     if continuous:
@@ -409,6 +435,54 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
             },
         },
     }
+
+
+_COST_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
+def exploration_setup(form: Mapping[str, Any], settings: Mapping[str, Any], resolution: Mapping[str, Any],
+                      detection: Mapping[str, Any], rows: Sequence[Mapping[str, Any]] | None = None
+                      ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Opt-in exploration for ONE new run: (what the user is told, the config frozen into the run or None).
+
+    Candidates are profiles that this machine runs now, that the catalog recommends for implementation, that are not the
+    default implementer and cost no more than it. `wanted` lists, per task kind, the candidates whose benchmark cell has
+    fewer than 3 trials. Nothing is chosen here for any particular iteration - the controller decides under its hard rules.
+    """
+    advanced = form["advanced"]
+    requested = settings.get("exploration_enabled") if advanced.get("exploration") is None else bool(advanced["exploration"])
+    info: dict[str, Any] = {"enabled": False, "requested": bool(requested), "reason": None, "candidates": [], "thin_cells": [],
+                            "max_percent": int(settings.get("exploration_max_percent", 20)),
+                            "max_per_run": int(settings.get("exploration_max_per_run", 3))}
+    if not requested:
+        info["reason"] = "wyłączona"
+        return info, None
+    default = resolution["slots"]["implementer_default"]
+    rank = _COST_RANK.get(default.get("cost_class"), 1)
+    runnable = pp.runnable_profiles(detection)
+    candidates = []
+    for row in pr.effective_catalog().get("profiles", []):
+        pid = row.get("profile")
+        if (pid and pid != default["profile_id"] and pid in runnable and row.get("status") in ("RECOMMENDED", "SUPPORTED")
+                and {"implementer_default", "repair_default"} & set(row.get("recommended_roles") or [])
+                and _COST_RANK.get(row.get("cost_class"), 1) <= rank):
+            candidates.append(pid)
+    if not candidates:
+        info["reason"] = "brak innego uruchamialnego modelu o tym samym lub niższym koszcie"
+        return info, None
+    history = rows if rows is not None else ex.scan(runs_root())["rows"]
+    plan = ex.exploration_plan(history, candidates)
+    names = {pid: pr.profile_display(pid) for pid in candidates}
+    info.update(candidates=[{"profile_id": pid, "label": names[pid]} for pid in candidates],
+                thin_cells=[{**c, "label": names[c["profile_id"]]} for c in plan["cells"][:12]],
+                skipped_poor=plan["skipped_poor"])
+    if not plan["wanted"]:
+        info["reason"] = "wszystkie komórki benchmarku mają już dość prób"
+        return info, None
+    info.update(enabled=True, reason="włączona")
+    return info, {"enabled": True, "max_percent": info["max_percent"], "max_per_run": info["max_per_run"],
+                  "candidates": [c for c in candidates if any(c in v for v in plan["wanted"].values())],
+                  "wanted": plan["wanted"], "exclude_kinds": ["INFRA"], "first_explored_eligible": 2}
 
 
 def detection_snapshot(refresh: bool = False) -> dict[str, Any]:
@@ -490,8 +564,9 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
                     "branch": repo.get("branch"), "head": repo.get("head"), "base": form["base"]},
         "goal": form["goal"],
         "first_iteration": form["first_iteration"] or form["goal"],
-        "roadmap": [{"item_id": i["item_id"], "title": i["title"], "recurring": i.get("recurring") is True}
-                    for i in mandate["roadmap_mandate"]["items"]],
+        "roadmap": [{"item_id": i["item_id"], "title": i["title"], "recurring": i.get("recurring") is True,
+                     "human_required": i.get("human_required") is True} for i in mandate["roadmap_mandate"]["items"]],
+        "exploration": exploration_setup(form, settings, resolution, detection)[0],
         "continuous": any(i.get("recurring") for i in mandate["roadmap_mandate"]["items"]),
         "acceptance_criteria": mandate["iteration_contract"]["acceptance_criteria"],
         "limits": mandate["roadmap_mandate"]["autonomy_bounds"],
@@ -579,6 +654,12 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
             raise ProductError(info["message"])
         repo_top, base_commit = Path(info["top"]), info["head"]
     _git(repo_top, "worktree", "add", "-q", "-b", branch, str(worktree), base_commit)
+    roles_config = dict(resolution["roles_config"])
+    if form["advanced"].get("chain_mode") is False:
+        roles_config["chain"] = {"enabled": False}
+    exploring = exploration_setup(form, settings, resolution, detection or detection_snapshot())[1]
+    if exploring:
+        roles_config["exploration"] = exploring
     task = {
         "schema_version": TASK_SCHEMA, "run_id": run_id, "created_at": now(),
         "form": form, "mandate_input": mandate,
@@ -586,7 +667,7 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
                       "base_commit": base_commit, "project_name": repo_top.name},
         "resolution": {k: resolution[k] for k in ("choices", "catalog_version", "catalog_source", "slots",
                                                    "warnings")},
-        "roles_config": resolution["roles_config"],
+        "roles_config": roles_config,
         "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 3600)), "max_turns": 30},
         "authority_note": "Product input record. The engine state (AUTONOMY/autonomy_state.json), its journal and "
                           "the ledger are the only run authority; this file is never read by the engine.",

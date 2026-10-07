@@ -24,6 +24,7 @@ AC8 = "AC8 — required post-install checks"
 
 def roles_with(*, repair_default=None, routing=None, escalation=None, drop_routing=False):
     config = json.loads((ROOT / "AUTONOMY_ROLES.json").read_text(encoding="utf-8"))
+    config.pop("chain", None)   # these tests pin the classic per-iteration cycle
     profiles = {p["profile_id"]: p for p in json.loads((ROOT / "IMPLEMENTER_PROFILES.json").read_text())["profiles"]}
     if repair_default:
         config["policy_profiles"]["repair_default"] = repair_default

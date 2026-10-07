@@ -99,9 +99,12 @@ def env(tmp_path, monkeypatch):
 
 
 def form(env, **extra):
+    # These suites exercise the classic review-after-every-iteration lifecycle; chain mode has its own tests
+    # (test_autonomy_chain.py) and the product switch is `advanced.chain_mode`.
+    advanced = {"chain_mode": False, **extra.pop("advanced", {})}
     return {"repo": str(env.repo), "goal": "Build a tiny greeting module",
             "first_iteration": "Add greet(name) with a unit test",
-            "directions": ["multi-language greetings"], **extra}
+            "directions": ["multi-language greetings"], "advanced": advanced, **extra}
 
 
 def wait_for(run_id, predicate, timeout=90, interval=0.15):

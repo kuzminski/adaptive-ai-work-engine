@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import aaw_experience as ex
+import aaw_telemetry as tel
 import autonomy_contract as ac
 import autonomy_run_lock as rl
 import product_home
@@ -444,6 +446,10 @@ def timeline(state: Mapping[str, Any], briefs: Mapping[str, list[dict[str, Any]]
         repairs = len(it.get("repairs") or [])
         if it.get("status") == "ACCEPTED":
             label = ("REPAIR → " * repairs) + "PASS"
+        elif it.get("status") == "PROVISIONAL":
+            # chain mode: done for planning purposes, the serious review of the whole chain decides for good
+            label = ("REPAIR → " * repairs) + ("PASS (wstępnie)" if state.get("status") == ac.RUNNING
+                                               else "PASS wstępnie — bez review serii")
         elif escalation.get("iteration_id") == it["iteration_id"] or it.get("status") == "ESCALATED":
             label = ("REPAIR → " * repairs) + "ESKALACJA"
         elif state.get("status") == ac.RUNNING:
@@ -509,6 +515,10 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         for c in it.get("classified", []):     # not masked: a classified limitation stays visible to the human
             warnings.append(f"Sklasyfikowane ograniczenie (it. {it['index']}): {c.get('id')} — "
                             f"{c.get('classification')}: {c.get('description')} [dowód: {c.get('evidence_ref')}]")
+    for f in state.get("deferred_findings", []):
+        if f.get("status") == "OPEN":
+            warnings.append(f"Odroczona drobna uwaga ({f.get('severity')}): {f.get('summary')}"
+                            + (f" [{f.get('file')}]" if f.get("file") else ""))
     for execution_id, entry in ledger.items():
         close = (entry.get("closed") or [{}])[-1].get("payload", {}) if entry.get("closed") else {}
         if entry.get("state") in ("INTENT_ONLY", "STARTED_NOT_CLOSED"):
@@ -566,7 +576,7 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
     }
 
 
-def run_view(run_id: str) -> dict[str, Any]:
+def run_view(run_id: str, *, include_live: bool = True) -> dict[str, Any]:
     task = prun.load_task(run_id)
     state = _state(run_id)
     status = classify(run_id, state or {})  # one read: status and gate always describe the same state
@@ -580,6 +590,8 @@ def run_view(run_id: str) -> dict[str, Any]:
                          "resume": status["status"] in (S_PAUSED, S_INTERRUPTED),
                          "lock_token": status["lock"]["owner_token"]},
             "status_detail": status.get("detail"),
+            "setup_notes": {"recommendation": (form.get("advanced") or {}).get("recommendation"),
+                            "exploration": ((task.get("roles_config") or {}).get("exploration") or None)},
             "stop_request": status.get("stop_request"),
             "stop_effect": product_home.read_json(prun.product_dir(run_id) / "stop_effect.json"),
             "worker_exit": status.get("worker_exit")}
@@ -592,20 +604,182 @@ def run_view(run_id: str) -> dict[str, Any]:
     direction = {"goal": form.get("goal"), "first_iteration": form.get("first_iteration"),
                  "directions_text": mandate_rm.get("direction_text") or "\n".join(mandate_rm.get("possible_directions", [])),
                  "frozen": True}
+    process = process_view(run_id, state, status, events)
+    live, settlement = None, None
+    try:
+        if include_live:
+            live, settlement = _live_and_settlement(run_id, state, events)
+            process["eta"] = (live["forecast"] or {}).get("estimate")
+    except Exception as exc:       # the experience layer must never hide a run
+        live = {"error": f"{type(exc).__name__}: {exc}"}
+    gate = human_gate(run_id, state, task, ledger)
+    if gate is not None and settlement is not None:
+        gate["settlement"] = settlement
     return {**base, "direction": direction, "working_roadmap": state.get("working_roadmap"),
             "working_roadmap_history": state.get("working_roadmap_history", []),
-            "process": process_view(run_id, state, status, events),
-            "timeline": timeline(state, briefs, status), "gate": human_gate(run_id, state, task, ledger),
+            "process": process, "live": live,
+            "timeline": timeline(state, briefs, status), "gate": gate,
             "last_activity": events[-1].get("occurred_at") if events else state.get("updated_at"),
             "engine": {"status": state.get("status"), "phase": state.get("phase"),
                        "policy_preset": state.get("policy_preset"), "contract": state.get("contract")}}
+
+
+# ── experience (the benchmark that builds itself) ────────────────────────────
+
+def _names(rows: list[dict[str, Any]]) -> dict[str, str]:
+    import product_recommendations as pr
+    return {pid: pr.profile_display(pid) for pid in {r["profile_id"] for r in rows if r.get("profile_id")}}
+
+
+def _history(exclude_run: str | None = None) -> dict[str, Any]:
+    data = ex.scan(prun.runs_root())
+    if exclude_run:
+        data["rows"] = [r for r in data["rows"] if r["run_id"] != exclude_run]
+    return data
+
+
+def _records(run_id: str, state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    adir = prun.autonomy_dir(run_id)
+    return tel.read_records(adir / "telemetry.jsonl") or tel.reconstruct_from_state(state, adir / "RESULTS", tel.load_pricing())
+
+
+_LIVE_CACHE: dict[str, tuple[tuple, tuple]] = {}
+
+
+def _live_and_settlement(run_id: str, state: Mapping[str, Any], events: list[dict[str, Any]]):
+    """Live block + settlement, recomputed only when the run or any run's evidence changed (the page polls every 1.5 s)."""
+    adir = prun.autonomy_dir(run_id)
+    key = (state.get("updated_at"), state.get("status"), len(events), ex._stamp(adir / "telemetry.jsonl"),
+           ex.scan_stamp(prun.runs_root()))
+    hit = _LIVE_CACHE.get(run_id)
+    if hit and hit[0] == key:
+        return hit[1]
+    result = _compute_live_and_settlement(run_id, state, events)
+    _LIVE_CACHE[run_id] = (key, result)
+    return result
+
+
+def _compute_live_and_settlement(run_id: str, state: Mapping[str, Any], events: list[dict[str, Any]]):
+    records = _records(run_id, state)
+    rows = ex.rows_from_state(state, records)
+    history = _history(run_id)["rows"]
+    live = ex.live_view(state, events, records, rows, history)
+    settlement = None
+    if state.get("status") != ac.RUNNING and rows:
+        everything = history + rows
+        settlement = ex.settlement(rows, ex.benchmark(everything, names=_names(everything)))
+    return live, settlement
+
+
+def experience_view(query: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """What the user's own runs say. `demo=<persona>` returns a clearly labelled synthetic preview instead."""
+    query = query or {}
+    scope = query.get("scope") if query.get("scope") in ("implementation", "total") else "implementation"
+    demo = query.get("demo")
+    if demo:
+        rows = ex.demo_rows(demo if demo in ex.PERSONAS else "backend")
+        names = dict(ex.DEMO_NAMES)
+        bench = ex.benchmark(rows, scope=scope, names=names)
+        return {"demo": True, "persona": demo, "personas": {k: v[0] for k, v in ex.PERSONAS.items()}, "scope": scope,
+                "benchmark": bench, "recommendations": ex.recommendations(bench, rows),
+                "horizon": ex.horizon([{"outcome": o, "iterations": n, "why": w} for o, n, w in
+                                       [("FINISHED", 9, None), ("FINISHED", 6, None), ("FINISHED", 14, None),
+                                        ("ESCALATED", 4, "REVIEW_ESCALATED"), ("FINISHED", 8, None), ("CAP", 40, None)]]),
+                "structure": None, "runs": [], "kinds": {k: ex.KIND_LABEL[k] for k in ex.KINDS}}
+    data = _history()
+    rows = data["rows"]
+    names = _names(rows)
+    bench = ex.benchmark(rows, scope=scope, names=names)
+    return {"exploration": _exploration_block(rows), "demo": False, "persona": None, "personas": {k: v[0] for k, v in ex.PERSONAS.items()}, "scope": scope,
+            "benchmark": bench, "recommendations": ex.recommendations(bench, rows, data["records"], data["summaries"]),
+            "horizon": ex.horizon(data["summaries"]),
+            "structure": ex.cost_structure(data["records"]) if data["records"] else None,
+            "runs": sorted(data["summaries"], key=lambda s: str(s.get("started_at")), reverse=True)[:12],
+            "kinds": {k: ex.KIND_LABEL[k] for k in ex.KINDS}}
+
+
+def _chain_length(chain_mode: Any = None) -> int | None:
+    if chain_mode is False:
+        return None
+    import product_recommendations as pr
+    cfg = pr._chain_defaults() or {}
+    return int(cfg["length"]) if cfg.get("enabled") and isinstance(cfg.get("length"), int) else None
+
+
+def _exploration_block(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Whether exploration is on, how many trials it has produced, and which cells it would fill."""
+    try:
+        import product_home as ph
+        import product_recommendations as pr
+        detection = prun.detection_snapshot()
+        settings = ph.load_settings()
+        resolution = pr.resolve_choices({g: settings.get(g) for g in pr.CHOICE_GROUPS}, runnable=prun.pp.runnable_profiles(detection),
+                                        detection=detection, states=prun.pp.profile_states(detection))
+        info, _ = prun.exploration_setup({"advanced": {"exploration": True}}, settings, resolution, detection, rows)
+        return {**info, "setting_enabled": bool(settings.get("exploration_enabled")),
+                "explored_trials": sum(1 for r in rows if r.get("explored"))}
+    except Exception:
+        return None
+
+
+def forecast_view(body: Mapping[str, Any]) -> dict[str, Any]:
+    """Before START: what the user's history says about this goal and the whole roadmap, and - if their own data
+    supports it - which model to use for this kind of work (a proposal the UI applies only after confirmation)."""
+    data = _history()
+    names = _names(data["rows"])
+    bench = ex.benchmark(data["rows"], names=names)
+    directions = [str(d) for d in (body.get("directions") or [])]
+    out = ex.forecast_for_goal(str(body.get("goal") or ""), directions, bench, data["rows"])
+    rec = out.get("recommended")
+    if rec:
+        detection = prun.detection_snapshot()
+        current = str(body.get("current_profile_id") or "") or None
+        import product_recommendations as pr
+        rec["apply"] = {"slot": "implementer_default", "profile_id": rec["profile_id"],
+                        "runnable": rec["profile_id"] in prun.pp.runnable_profiles(detection),
+                        "differs": rec["profile_id"] != current, "current_profile_id": current,
+                        "current_label": pr.profile_display(current) if current else None, "kind": out["kind"]}
+    first = str(body.get("first_iteration") or body.get("goal") or "").strip()
+    items = ([{"title": first, "kind": ex.classify_task(first)["kind"]}] if first else []) + [
+        {"title": prun.HUMAN_GATE.sub("", d, count=1).strip() or d, "human_required": bool(prun.HUMAN_GATE.match(d)),
+         "kind": ex.classify_task(prun.HUMAN_GATE.sub("", d, count=1))["kind"]} for d in directions]
+    out["roadmap"] = ex.forecast_for_roadmap(
+        items, data["rows"], horizon_stats=ex.horizon(data["summaries"]), chain_length=_chain_length(body.get("chain_mode")),
+        max_iterations=int(body.get("max_iterations") or ac.DEFAULT_MAX_ITERATIONS),
+        continuous=bool(body.get("continuous", True))) if items else None
+    return out
+
+
+def intake_view(body: Mapping[str, Any]) -> dict[str, Any]:
+    """Idea -> scope and roadmap with its forecast. One user-initiated call to the planner this run would use anyway."""
+    import product_intake as pi
+    import product_recommendations as pr
+    detection = prun.detection_snapshot()
+    settings = product_home.load_settings()
+    choices = {g: body.get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
+    resolution = pr.resolve_choices(choices, runnable=prun.pp.runnable_profiles(detection), detection=detection,
+                                    states=prun.pp.profile_states(detection))
+    planner = resolution["slots"]["initial_planner"]
+    if planner["status"] == "UNAVAILABLE" or planner["profile_id"] not in prun.pp.runnable_profiles(detection):
+        raise prun.ProductError("Model planisty nie jest teraz dostępny — wybierz inny poziom planowania w kroku „Modele”.")
+    repo = None
+    if body.get("repo"):
+        info = prun.inspect_repo(str(body["repo"]))
+        repo = info.get("top") if info.get("ready") else None
+    data = _history()
+    try:
+        return pi.propose(str(body.get("idea") or ""), repo=repo, planner_profile_id=planner["profile_id"], history=data,
+                          chain_length=_chain_length(body.get("chain_mode")), max_iterations=ac.DEFAULT_MAX_ITERATIONS,
+                          continuous=True, timeout=pi.DEFAULT_TIMEOUT_S)
+    except pi.IntakeError as exc:
+        raise prun.ProductError(str(exc)) from exc
 
 
 def home_view() -> dict[str, Any]:
     sections: dict[str, list[dict[str, Any]]] = {"running": [], "paused": [], "attention": [], "completed": []}
     for run_id in prun.list_run_ids():
         try:
-            view = run_view(run_id)
+            view = run_view(run_id, include_live=False)        # the Home cards need no live block
         except Exception as exc:  # one broken run must not hide the others
             sections["attention"].append({"run_id": run_id, "status": "UNREADABLE", "status_label": "Nieczytelne",
                                           "goal": str(exc)[:200]})

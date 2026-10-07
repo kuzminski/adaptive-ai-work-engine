@@ -1,0 +1,16 @@
+{
+  "id": "T07_room_booking",
+  "difficulty": "HARD",
+  "title": "Implement priority room assignment with eviction",
+  "goal": "Implement shop.rooms.assign exactly as specified in its docstring.",
+  "acceptance_criteria": [
+    "bookings are processed by (start, -priority, id); a room is free at time s when its running booking ends at or before s (touching intervals do not conflict)",
+    "a booking takes the lowest-index free room",
+    "with no free room, the running booking with strictly lower priority than the new one is evicted: lowest priority first, then the latest end, then the highest room index; the new booking takes that room and the victim is appended to `rejected`; with no such victim the new booking is rejected",
+    "assign returns {'assignments': {booking_id: room_index}, 'rejected': [ids in order of rejection]}; evicted bookings are not in assignments",
+    "ValueError for rooms < 1, a booking with start >= end, or duplicate booking ids"
+  ],
+  "constraints": ["standard library only", "deterministic output"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

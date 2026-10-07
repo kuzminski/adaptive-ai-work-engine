@@ -54,14 +54,17 @@ REJECTED = "REJECTED"
 TRANSITIONS: dict[str, frozenset[str]] = {
     PLAN: frozenset({EXECUTE, AWAITING_HUMAN}),
     EXECUTE: frozenset({SELF_VERIFY, AWAITING_HUMAN}),
-    SELF_VERIFY: frozenset({AWAITING_REVIEW, REPAIR, AWAITING_HUMAN}),
+    # Chain mode (autonomy_chain): inside a chain an iteration may be accepted provisionally right after
+    # self-verification or its light review, and a chain whose roadmap ends is closed by a serious review
+    # entered from ROADMAP_CHECK. Without a `chain` config these edges are never taken.
+    SELF_VERIFY: frozenset({AWAITING_REVIEW, REPAIR, ROADMAP_CHECK, AWAITING_HUMAN}),
     AWAITING_REVIEW: frozenset({REVIEW, AWAITING_HUMAN}),
-    REVIEW: frozenset({REPAIR, FINAL_REVIEW, AWAITING_HUMAN}),
+    REVIEW: frozenset({REPAIR, FINAL_REVIEW, ROADMAP_CHECK, AWAITING_HUMAN}),
     # Every repair returns through self-verification and primary review before
     # a fresh final review; the same bounded repair/no-progress gates apply.
     REPAIR: frozenset({SELF_VERIFY, FINAL_REVIEW, AWAITING_HUMAN}),
     FINAL_REVIEW: frozenset({REPAIR, ROADMAP_CHECK, AWAITING_HUMAN}),
-    ROADMAP_CHECK: frozenset({PLAN, AWAITING_HUMAN}),
+    ROADMAP_CHECK: frozenset({PLAN, AWAITING_REVIEW, AWAITING_HUMAN}),
     AWAITING_HUMAN: frozenset({HUMAN_APPROVED, REJECTED}),
     HUMAN_APPROVED: frozenset({PROMOTE}),
     PROMOTE: frozenset({PROMOTED}),
@@ -720,7 +723,7 @@ ROLES = ("planner", "implementer", "review_prep", "reviewer", "final_reviewer")
 # *declared contract default* (recorded as binding_source), never a runtime
 # substitution for an unavailable model.
 OPTIONAL_ROLE_ALIASES = {"self_verifier": "implementer", "repairer": "implementer"}
-NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation"})
+NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation", "chain", "exploration"})
 ROLE_BY_EXECUTOR = {"plan": "planner", "diagnose": "repairer", "execute": "implementer", "self_verify": "self_verifier",
                     "review": "reviewer", "repair": "repairer", "final_review": "final_reviewer",
                     "prepare_packet": "review_prep"}
@@ -787,6 +790,18 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
                                                                                known_profiles=profiles)
         except repair_escalation.EscalationError as exc:
             raise AutonomyError(str(exc)) from exc
+    if config.get("chain") is not None:
+        import autonomy_chain
+        try:
+            resolved["chain"] = autonomy_chain.normalize_config(config["chain"])
+        except autonomy_chain.ChainConfigError as exc:
+            raise AutonomyError(f"chain config invalid: {exc}") from exc
+    if config.get("exploration") is not None:
+        import autonomy_explore
+        try:
+            resolved["exploration"] = autonomy_explore.normalize_config(config["exploration"], known_profiles=profiles)
+        except autonomy_explore.ExplorationConfigError as exc:
+            raise AutonomyError(f"exploration config invalid: {exc}") from exc
     same = resolved["reviewer"]["runtime_model_id"] == resolved["implementer"]["runtime_model_id"]
     _require(not same or config.get("allow_same_model_fresh_context") is True,
              "reviewer must not share the implementer's runtime model unless allow_same_model_fresh_context is true")
@@ -815,7 +830,7 @@ def agent_identities(roles: Mapping[str, Mapping[str, Any]]) -> set[str]:
     out: set[str] = set()
     bindings: list[Mapping[str, Any]] = []
     for key, value in roles.items():
-        if not isinstance(value, Mapping) or key in ("routing", "repair_escalation"):
+        if not isinstance(value, Mapping) or key in ("routing", "repair_escalation", "chain", "exploration"):
             continue
         if "profile_id" in value:
             bindings.append(value)

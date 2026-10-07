@@ -1,0 +1,20 @@
+{
+  "schema_version": "AAW_MODEL_PRICING_V1",
+  "unit": "USD_PER_MILLION_TOKENS",
+  "as_of": "2026-10-05",
+  "purpose": "API LIST-PRICE equivalents used to turn telemetry tokens into comparable dollars. AAW normally runs on subscription quota (NO_EXTRA_PAID_USAGE), so this is a relative cost yardstick, not a bill. A cost reported by the provider (Claude CLI total_cost_usd) always wins over an estimate. null = unknown: the call stays UNPRICED and the price-independent proxy_units are used instead.",
+  "verification": "NOT_VERIFIED: every row below was read from secondary sources (price aggregators / blogs), not from the provider's own price list. Check against the provider's pricing page before relying on a decision; set verified to true once done.",
+  "models": {
+    "gpt-6-luna":      {"input": 0.10, "cached_input": 0.01, "cache_write": 0.125, "output": 0.50, "verified": false, "source": "secondary: price aggregators 2026-10; short-context (<=272K) standard tier"},
+    "gpt-6.1-sol":     {"input": 2.00, "cached_input": 0.10, "cache_write": null,  "output": 10.00, "verified": false, "source": "secondary: price aggregators 2026-10; short-context standard tier"},
+    "gpt-5.6-sol":     {"input": 2.00, "cached_input": 0.20, "cache_write": 2.50,  "output": 10.00, "verified": false, "source": "secondary: price aggregators 2026-10"},
+    "claude-opus-5-5": {"input": 4.00, "cached_input": 0.20, "cache_write": 5.00,  "output": 20.00, "verified": false, "source": "secondary: price aggregators 2026-10; 5-minute cache write"},
+    "claude-sonnet-5-5": {"input": 2.00, "cached_input": 0.20, "cache_write": null, "output": 10.00, "verified": false, "source": "secondary: price aggregators 2026-10"},
+    "gpt-6-astra":     {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"},
+    "gpt-5.6-luna":    {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"},
+    "gpt-5.6-terra":   {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"},
+    "claude-sonnet-5": {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"},
+    "claude-opus-5":   {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"},
+    "claude-fable-5-1": {"input": null, "cached_input": null, "cache_write": null, "output": null, "verified": false, "source": "unknown"}
+  }
+}

@@ -36,11 +36,15 @@ import hashlib
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import aaw_telemetry as tel
+import autonomy_chain as chain
 import autonomy_contract as ac
+import autonomy_explore as explore
 import autonomy_policy as ap
 import autonomy_run_lock as rl
 import execution_contract as xc
@@ -388,6 +392,8 @@ class AutonomyController:
         if self.policy_active:
             ap.validate_policy_ids(ap.profile_id_map(self.policy_bindings))
         self.quota_source, self._clock = quota_source, clock
+        self.telemetry = tel.TelemetryWriter(self.dir / "telemetry.jsonl")
+        self._pricing = tel.load_pricing()
         self._configure_routing()
         self._recovered: dict[str, Any] | None = None   # adopted result of a reconciled read-only call
         self._retry_of: str | None = None                # execution a replayed read-only call supersedes
@@ -419,6 +425,8 @@ class AutonomyController:
             "planning": None, "executions": [], "workspace": self.env.describe(),
             "workspace_checkpoint": self.env.checkpoint(), "router_state": mr.empty_state(),
             "started_at": _now(), "updated_at": _now(), "main_merge_allowed": False,
+            "chain_state": {"chain_id": 1, "closed_chains": 0}, "chain_plan": [], "deferred_findings": [],
+            "polish_pending": False, "polish_done": False, "exploration": explore.empty_state(),
         }
         self.journal.append("MANDATE_FROZEN", payload={
             "mandate_id": frozen["mandate_id"], "mandate_hash": frozen["mandate_hash"],
@@ -456,6 +464,12 @@ class AutonomyController:
         self.state.setdefault("router_state", mr.empty_state())
         self.state.setdefault("executions", [])
         self.state.setdefault("planning", None)
+        self.state.setdefault("chain_state", {"chain_id": 1, "closed_chains": 0})
+        self.state.setdefault("chain_plan", [])
+        self.state.setdefault("deferred_findings", [])
+        self.state.setdefault("polish_pending", False)
+        self.state.setdefault("polish_done", False)
+        self.state.setdefault("exploration", explore.empty_state())
         self.journal.append("RUN_RESUMED", phase=self.state["phase"], payload={
             "status": self.state["status"], "in_flight": self.state.get("in_flight"),
             "controller_lock": self._lock_ref()})
@@ -635,6 +649,10 @@ class AutonomyController:
         self.escalation_cfg = rx.normalize_config(explicit)
         routing = self.roles.get("routing")
         self.routing_cfg = dict(routing) if isinstance(routing, Mapping) else None
+        # Chain mode (autonomy_chain) comes from the same frozen role config; absent = classic per-iteration review.
+        self.chain_cfg = chain.normalize_config(self.roles.get("chain"))
+        # Opt-in controlled exploration (autonomy_explore): frozen with the run like every other role config.
+        self.explore_cfg = explore.normalize_config(self.roles.get("exploration"))
 
     def _policy_selection(self, name: str, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
         supplied = ctx.get("model_selection")
@@ -664,8 +682,9 @@ class AutonomyController:
                     complexity = floor
                 complexity_evidence.extend(f"FROZEN_CHARTER_RISK:{row['item_id']}:{row['reason']}"
                                            for row in risk_rows)
-            return ap.select_implementation(ids, complexity, evidence=complexity_evidence,
-                                             human_override=mandate_override)
+            selection = ap.select_implementation(ids, complexity, evidence=complexity_evidence,
+                                                 human_override=mandate_override)
+            return self._maybe_explore(selection, plan, risk_flagged=bool(risk_rows))
         if name == "prepare_packet":
             return {"policy_version": ap.POLICY_VERSION, "profile_key": "review_pretreatment",
                     "profile_id": ids["review_pretreatment"], "selection_reason": "REVIEW_PRETREATMENT",
@@ -710,8 +729,84 @@ class AutonomyController:
                                             for row in risk_rows)],
                                       "escalated_from": previous_profile})
             selection["iteration_id"] = it["iteration_id"]
-            return selection
+            return self._chain_final_floor(selection, ids)
         return None
+
+    def _maybe_explore(self, selection: dict[str, Any], plan: Mapping[str, Any], *, risk_flagged: bool) -> dict[str, Any]:
+        """Opt-in: let a candidate profile implement a small share of ordinary iterations (autonomy_explore).
+
+        One decision per iteration (stored, so a replay never changes it); every decision that explores is journaled.
+        Anything that is not clearly safe leaves the policy's own selection untouched.
+        """
+        cfg = self.explore_cfg
+        if not cfg["enabled"] or risk_flagged or not self.state.get("iterations"):
+            return selection
+        it = self._it()
+        state = self.state.setdefault("exploration", explore.empty_state())
+        stored = state["decisions"].get(it["iteration_id"])
+        if stored is not None:
+            return explore.selection(stored["profile_id"], default_profile_id=selection["profile_id"], kind=stored["kind"],
+                                     policy_version=ap.POLICY_VERSION) if stored.get("profile_id") else selection
+        import aaw_experience
+        kind = aaw_experience.classify_task(plan.get("goal"), touched=plan.get("touched_areas") or [],
+                                            criteria=plan.get("acceptance_criteria") or [])["kind"]
+        reviewer = self.roles.get("reviewer") or {}
+        independent = reviewer.get("review_independence") == "DIFFERENT_MODEL"
+
+        def candidate_ok(profile_id: str) -> bool:
+            binding = self._catalog_binding("implementer", profile_id)
+            if binding.get("availability") == "KNOWN_BUT_UNAVAILABLE":
+                return False
+            if independent and binding.get("runtime_model_id") == reviewer.get("runtime_model_id"):
+                return False
+            preflight = getattr(self.executors.get("execute"), "preflight", None)
+            return not (callable(preflight) and preflight(binding))
+
+        decision = explore.decide(
+            cfg, state, kind=kind, tier=selection.get("tier"), reason=selection.get("selection_reason"),
+            iteration_index=int(it.get("index", 1)),
+            critical=bool(self.state["mandate"]["roadmap_mandate"]["autonomy_bounds"].get("critical_scope")),
+            candidate_ok=candidate_ok)
+        state["eligible"] = decision["eligible_after"]
+        record = {"kind": kind, "profile_id": decision["profile_id"] if decision["explore"] else None,
+                  "code": decision["code"]}
+        state["decisions"][it["iteration_id"]] = record
+        if decision["explore"]:
+            state["explored"] = int(state.get("explored", 0)) + 1
+            self.journal.append("EXPLORATION_SELECTED", iteration_id=it["iteration_id"], phase=self.state["phase"], payload={
+                "kind": kind, "profile_id": decision["profile_id"], "default_profile_id": selection["profile_id"],
+                "explored": state["explored"], "max_per_run": cfg["max_per_run"], "eligible": state["eligible"]})
+            self._save()
+            return explore.selection(decision["profile_id"], default_profile_id=selection["profile_id"], kind=kind,
+                                     policy_version=ap.POLICY_VERSION)
+        if decision["code"] == "NO_RUNNABLE_CANDIDATE":
+            self.journal.append("EXPLORATION_SKIPPED", iteration_id=it["iteration_id"], phase=self.state["phase"],
+                                payload={"kind": kind, "code": decision["code"]})
+        self._save()
+        return selection
+
+    def _chain_final_floor(self, selection: dict[str, Any], ids: Mapping[str, str]) -> dict[str, Any]:
+        """The serious review of a chain never runs below `close_final_floor` (unless that profile cannot run)."""
+        mode = self._review_mode()
+        if mode != chain.CLOSE:
+            return selection
+        order = {"DEFAULT": 0, "HARD": 1, "CRITICAL": 2}
+        floor = self.chain_cfg["close_final_floor"]
+        if order[floor] <= order[selection["tier"]]:
+            return selection
+        key = {"DEFAULT": "final_review_default", "HARD": "final_review_hard", "CRITICAL": "final_review_critical"}[floor]
+        candidate = {**selection, "profile_key": key, "profile_id": ids[key], "tier": floor,
+                     "selection_reason": "CHAIN_CLOSE_FLOOR", "escalated_from": selection["profile_id"],
+                     "complexity_risk_evidence": [*selection["complexity_risk_evidence"],
+                                                  f"CHAIN_CLOSE:{(self._it().get('chain') or {}).get('chain_id')}"]}
+        preflight = getattr(self.executors.get("final_review"), "preflight", None)
+        reason = preflight(self._binding_for("final_reviewer", candidate)) if callable(preflight) else None
+        if reason:
+            self.journal.append("CHAIN_FLOOR_UNAVAILABLE", iteration_id=self._iteration_id(), phase=self.state["phase"],
+                                payload={"floor": floor, "profile_id": ids[key], "reason": reason,
+                                         "kept": selection["profile_id"]})
+            return selection
+        return candidate
 
     def _luna_max_capability_attempt(self, iteration: Mapping[str, Any]) -> dict[str, Any] | None:
         findings = [f for review in iteration.get("reviews", []) + iteration.get("final_reviews", [])
@@ -1014,6 +1109,7 @@ class AutonomyController:
                "execution": {"execution_id": execution_id, "descriptor_path": descriptor_path, "node_id": node_id,
                              "iteration_id": iteration_id, "run_id": self.run_id, "recorder": recorder,
                              "result_path": result_path, "stats_root": self.stats_root}}
+        started_clock = time.monotonic()
         try:
             with process_observation.observation_scope(recorder.observe_start):
                 result = executor(ctx)
@@ -1035,6 +1131,7 @@ class AutonomyController:
             self.state["in_flight"] = None
             ref.update(self._execution_observations(descriptor_path, recorder))
             self.state["executions"].append(ref)
+            self._emit_telemetry(ref, result_path, time.monotonic() - started_clock, "FAILED")
             if exc.retryable and descriptor.get("retry_of_execution_id") is None:
                 self.state["in_flight"] = None
                 self._retry_of = execution_id
@@ -1066,6 +1163,7 @@ class AutonomyController:
                        observation_source="IN_PROCESS_ADAPTER_RETURN", outcome="RETURNED",
                        result_refs=[str(result_path)])
         ref.update(self._execution_observations(descriptor_path, recorder))
+        self._emit_telemetry(ref, result_path, time.monotonic() - started_clock, "COMPLETED")
         self.state["last_pool"] = self._pool_of(binding)
         if self.state.get("router_state") is not None and self.state["last_pool"]:
             self.state["router_state"] = mr.record_success(self.state["router_state"], self.state["last_pool"])
@@ -1077,6 +1175,25 @@ class AutonomyController:
                            iteration_id)
             return None
         return result
+
+    def _emit_telemetry(self, ref: Mapping[str, Any], result_path: Path | None, wall_s: float, outcome: str) -> None:
+        """One AAW_TELEMETRY_V1 record per executor call. Never raises: telemetry must not stop a run."""
+        try:
+            result: Mapping[str, Any] = {}
+            if result_path and Path(result_path).is_file():
+                try:
+                    result = json.loads(Path(result_path).read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    result = {}
+            iteration = (self.state["iterations"][-1]
+                         if self.state.get("iterations") and self.state.get("phase") != ac.PLAN else None)
+            chain_ctx = (iteration or {}).get("chain") or (
+                {"chain_id": (self.state.get("chain_state") or {}).get("chain_id")} if self.chain_cfg["enabled"] else None)
+            self.telemetry.append(tel.build_record(
+                run_id=self.run_id, execution=ref, result=result, wall_s=round(wall_s, 3), outcome=outcome,
+                iteration=iteration, chain=chain_ctx, pricing=self._pricing, at=_now()))
+        except Exception:
+            self.telemetry.errors += 1
 
     def _execution_observations(self, descriptor_path: Path, recorder: LifecycleRecorder) -> dict[str, Any]:
         try:
@@ -1177,19 +1294,30 @@ class AutonomyController:
                 self._escalate(ac.E_MANDATE_TAMPERED, "frozen directional charter hash does not match", None)
                 return
         role = "initial_planner" if initial_architect else "continuation_planner" if self.policy_active else "planner"
-        plan = self._call("plan", role, {
-            "iteration_index": index, "planning_stage": "INITIAL_ARCHITECT" if initial_architect else "NEXT_ITERATION_PLAN",
-            "roadmap": json.loads(json.dumps(self.state["roadmap"])), "history": history,
-            "workspace": self.env.describe(),
-            "directional_charter": self.state.get("directional_charter"),
-            "directional_charter_hash": self.state.get("directional_charter_hash"),
-            "working_roadmap": self.state.get("working_roadmap"),
-            "iteration_contract": self.state["mandate"]["iteration_contract"] if index == 1 else None})
-        if self.state["status"] != ac.RUNNING:
-            return
-        if not isinstance(plan, dict):
-            self._escalate(ac.E_PLAN_INVALID, "planner returned no structured plan", None)
-            return
+        plan, source = None, "PLANNER"
+        if not initial_architect:
+            plan, source = self._chain_plan_for(index)
+            if source == "POLISH_EMPTY":
+                self.state["planning"] = None
+                self._await_human(ac.HOLD_ROADMAP_EXHAUSTED, "no polishable deferred findings remain")
+                return
+        chain_stubs = None
+        if plan is None:
+            plan = self._call("plan", role, {
+                "iteration_index": index, "planning_stage": "INITIAL_ARCHITECT" if initial_architect else "NEXT_ITERATION_PLAN",
+                "roadmap": json.loads(json.dumps(self.state["roadmap"])), "history": history,
+                "workspace": self.env.describe(),
+                "directional_charter": self.state.get("directional_charter"),
+                "directional_charter_hash": self.state.get("directional_charter_hash"),
+                "working_roadmap": self.state.get("working_roadmap"),
+                "chain": self._chain_planning_view(index),
+                "iteration_contract": self.state["mandate"]["iteration_contract"] if index == 1 else None})
+            if self.state["status"] != ac.RUNNING:
+                return
+            if not isinstance(plan, dict):
+                self._escalate(ac.E_PLAN_INVALID, "planner returned no structured plan", None)
+                return
+            chain_stubs = plan.pop("chain_plan", None)   # future iterations never reach the implementer's PLAN
         if initial_architect:
             try:
                 charter = ac.validate_directional_charter(plan.get("directional_charter"), self.state["mandate"])
@@ -1206,10 +1334,14 @@ class AutonomyController:
                 "roadmap_items": [item["item_id"] for item in charter["roadmap_items"]],
                 "initial_planner_execution_id": next((e.get("execution_id") for e in reversed(self.state["executions"])
                                                        if e.get("role") == "initial_planner"), None)})
-        verdict = ac.check_plan(plan, self.state["mandate"], self.state["roadmap"], index,
-                                expected_mandate_hash=self.state["mandate_hash"],
-                                expected_directional_charter_hash=self.state.get("directional_charter_hash")
-                                if self.policy_active else None)
+        if source == "POLISH":
+            # Controller-authored: no roadmap link by design; the mandate's areas were enforced when it was built.
+            verdict = {"decision": ac.ACCEPT, "code": None, "reasons": [], "levels": [], "skipped": []}
+        else:
+            verdict = ac.check_plan(plan, self.state["mandate"], self.state["roadmap"], index,
+                                    expected_mandate_hash=self.state["mandate_hash"],
+                                    expected_directional_charter_hash=self.state.get("directional_charter_hash")
+                                    if self.policy_active else None)
         self.journal.append("SCOPE_CHECK", phase=ac.PLAN, payload={
             "iteration_index": index, "decision": verdict["decision"], "code": verdict["code"],
             "reasons": verdict["reasons"], "levels": verdict["levels"],
@@ -1230,24 +1362,32 @@ class AutonomyController:
                               "every autonomous roadmap item was individually skipped with a reason")
             return
         iteration_id = self.state["planning"]["iteration_id"]
-        plan_execution = next((e for e in reversed(self.state["executions"]) if e.get("executor") == "plan"), {})
+        plan_execution = (next((e for e in reversed(self.state["executions"]) if e.get("executor") == "plan"), {})
+                          if source == "PLANNER" else {})
+        chain_info = self._chain_info(source)
         self.state["iterations"].append({
             "iteration_id": iteration_id, "index": index, "status": "IN_PROGRESS", "outcome": None,
             "lineage": {"mandate_id": self.state["mandate"]["mandate_id"], "mandate_hash": self.state["mandate_hash"],
                         "directional_charter_hash": self.state.get("directional_charter_hash"),
-                        "source": ("ITERATION_CONTRACT" if index == 1 else
+                        "source": ("POLISH_BACKLOG" if source == "POLISH" else
+                                   "CHAIN_PLAN" if source == "CHAIN_STUB" else
+                                   "ITERATION_CONTRACT" if index == 1 else
                                    "FROZEN_DIRECTIONAL_CHARTER" if self.policy_active else "ROADMAP_MANDATE"),
                         "roadmap_refs": list(plan.get("roadmap_refs", [])),
                         "parent_iteration_id": self.state["iterations"][-1]["iteration_id"] if index > 1 else None,
                         "scope_justification": plan["scope_justification"]},
-            "plan": plan, "planned_by": {"role": plan_execution.get("role"), "profile_id": plan_execution.get("profile"),
-                                          "runtime_model_id": plan_execution.get("model"), "effort": plan_execution.get("effort")},
+            "plan": plan, "chain": chain_info,
+            "planned_by": ({"role": plan_execution.get("role"), "profile_id": plan_execution.get("profile"),
+                            "runtime_model_id": plan_execution.get("model"), "effort": plan_execution.get("effort")}
+                           if source == "PLANNER" else {"role": source.lower(), "profile_id": None,
+                                                        "runtime_model_id": None, "effort": None}),
             "executed_by": self._role_audit()["implementer"],
             "execution": None, "self_verify": [], "checks": [], "evidence_state": {}, "repairs": [],
             "repair_attempts": 0, "reviews": [], "final_reviews": [], "packet": None, "repair_origin": None,
             "started_at": _now(), "finished_at": None,
             "plan_execution_id": plan_execution.get("execution_id")})
         self.state["planning"] = None
+        self._after_iteration_planned(source, plan, chain_info, chain_stubs)
         self._record_working_roadmap(plan, index, iteration_id)
         self.journal.append("ITERATION_PLANNED", iteration_id=iteration_id, phase=ac.PLAN, payload={
             "index": index, "goal": plan["goal"], "roadmap_refs": plan.get("roadmap_refs", []),
@@ -1274,6 +1414,178 @@ class AutonomyController:
                  "next_step": next_step.strip() if isinstance(next_step, str) and next_step.strip() else None}
         self.state["working_roadmap"] = entry
         self.state.setdefault("working_roadmap_history", []).append(entry)
+
+    # CHAIN MODE (autonomy_chain) -----------------------------------------------
+    #
+    # Long implementation chains, one serious review per chain: iterations inside a chain are accepted
+    # PROVISIONALLY after self-verification (+ one cheap review that only a CRITICAL defect can fail);
+    # the chain's last iteration runs the full REVIEW + FINAL_REVIEW over the whole diff; defects below
+    # the repair threshold go to `state["deferred_findings"]` and are polished at the end of the run.
+    # With `chain.enabled` false none of this runs and the classic per-iteration cycle is unchanged.
+
+    def _review_mode(self) -> str | None:
+        if not self.chain_cfg["enabled"] or not self.state.get("iterations"):
+            return None
+        return (self._it().get("chain") or {}).get("review_mode")
+
+    def _chain_info(self, source: str) -> dict[str, Any] | None:
+        if not self.chain_cfg["enabled"]:
+            return None
+        provisional = [i for i in self.state["iterations"] if i.get("status") == "PROVISIONAL"]
+        position = len(provisional) + 1
+        mode = chain.POLISH if source == "POLISH" else chain.review_mode_for(self.chain_cfg, position)
+        return {"chain_id": self.state["chain_state"]["chain_id"], "position": position,
+                "length": self.chain_cfg["length"], "review_mode": mode}
+
+    def _chain_planning_view(self, index: int) -> dict[str, Any] | None:
+        """What the planner is told when its output may be a whole chain (chain_plan)."""
+        if not (self.chain_cfg["enabled"] and self.chain_cfg["plan_batching"]):
+            return None
+        position = sum(1 for i in self.state["iterations"] if i.get("status") == "PROVISIONAL") + 1
+        return {"length": self.chain_cfg["length"], "position_of_this_iteration": position,
+                "slots_after_this": max(self.chain_cfg["length"] - position, 0),
+                "stub_fields": list(chain.STUB_KEYS)}
+
+    def _chain_plan_for(self, index: int) -> tuple[dict[str, Any] | None, str]:
+        """A controller-made plan (polish pass or chain-plan stub), or (None, "PLANNER") to call the planner."""
+        cfg = self.chain_cfg
+        if not cfg["enabled"]:
+            return None, "PLANNER"
+        charter_hash = self.state.get("directional_charter_hash") if self.policy_active else None
+        if self.state.get("polish_pending"):
+            plan, selected, out_of_scope = chain.build_polish_plan(
+                self.state["mandate"], self.state["deferred_findings"], charter_hash=charter_hash,
+                max_findings=cfg["polish"]["max_findings"])
+            self.state["polish_pending"] = False
+            if plan is None:
+                self.state["polish_done"] = True
+                return None, "POLISH_EMPTY"
+            self.journal.append("POLISH_PLANNED", phase=ac.PLAN, payload={
+                "selected": [r["finding_key"] for r in selected],
+                "out_of_scope": [r["finding_key"] for r in out_of_scope]})
+            return plan, "POLISH"
+        queue = self.state.get("chain_plan") or []
+        position = sum(1 for i in self.state["iterations"] if i.get("status") == "PROVISIONAL") + 1
+        if index > 1 and position > 1 and queue and cfg["plan_batching"]:
+            plan = chain.stub_to_plan(queue[0], mandate_hash=self.state["mandate_hash"], charter_hash=charter_hash)
+            verdict = ac.check_plan(plan, self.state["mandate"], self.state["roadmap"], index,
+                                    expected_mandate_hash=self.state["mandate_hash"],
+                                    expected_directional_charter_hash=charter_hash)
+            if verdict["decision"] == ac.ACCEPT:
+                return plan, "CHAIN_STUB"
+            # The roadmap moved under the outline: drop it and let the planner decide. Never an escalation.
+            self.journal.append("CHAIN_PLAN_STUB_REJECTED", phase=ac.PLAN, payload={
+                "code": verdict["code"], "reasons": verdict["reasons"], "dropped": len(queue)})
+            self.state["chain_plan"] = []
+            self._save()
+        return None, "PLANNER"
+
+    def _after_iteration_planned(self, source: str, plan: Mapping[str, Any], info: Mapping[str, Any] | None,
+                                 stubs: Any) -> None:
+        if source == "CHAIN_STUB":
+            self.state["chain_plan"] = list(self.state.get("chain_plan") or [])[1:]
+        elif source == "POLISH":
+            self.state["polish_done"] = True
+            self._it()["polish_findings"] = list(plan.get("polish_findings", []))
+        elif info and self.chain_cfg["plan_batching"]:
+            kept = chain.clean_stubs(stubs, max(self.chain_cfg["length"] - info["position"], 0))
+            self.state["chain_plan"] = kept
+            self.journal.append("CHAIN_PLAN_RECORDED", iteration_id=self._iteration_id(), phase=ac.PLAN, payload={
+                "chain_id": info["chain_id"], "offered": len(stubs) if isinstance(stubs, list) else 0,
+                "kept": len(kept), "goals": [k["goal"][:120] for k in kept]})
+
+    def _mark_roadmap_done(self, it: dict[str, Any]) -> None:
+        for item_id in it["lineage"]["roadmap_refs"]:
+            row = self.state["roadmap"][item_id]
+            if row.get("recurring") is True:
+                # A standing item records progress but stays pending: ending it is the planner's
+                # explicit, reasoned skip (or an execution fuse), never a side effect of one PASS.
+                row.setdefault("iterations", []).append(it["iteration_id"])
+                row["last_iteration_id"] = it["iteration_id"]
+                continue
+            self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
+        ac.refresh_dependency_states(self.state["roadmap"])
+
+    def _accept_provisional(self, how: str) -> None:
+        """Inside a chain: the iteration is done for planning purposes; the chain-close review decides for good."""
+        it = self._it()
+        it["status"], it["outcome"], it["finished_at"] = "PROVISIONAL", "PASS_PROVISIONAL", _now()
+        it["provisional_by"] = how
+        self._mark_roadmap_done(it)
+        self.journal.append("ITERATION_PROVISIONALLY_ACCEPTED", iteration_id=it["iteration_id"], phase=self.state["phase"],
+                            payload={"how": how, "chain": it.get("chain"), "repair_attempts": it["repair_attempts"],
+                                     "roadmap_refs": it["lineage"]["roadmap_refs"], "checks": it["evidence_state"],
+                                     "diff_sha256": diff_digest(self.env.diff())})
+        self._goto(ac.ROADMAP_CHECK)
+        self._save()
+
+    def _defer(self, findings: Sequence[Mapping[str, Any]], origin: str, note: Mapping[str, Any]) -> None:
+        if not findings:
+            return
+        it = self._it()
+        added = chain.defer(self.state["deferred_findings"], findings, iteration_id=it["iteration_id"],
+                            chain_id=(it.get("chain") or {}).get("chain_id"), origin=origin, at=_now())
+        self.journal.append("FINDINGS_DEFERRED", iteration_id=it["iteration_id"], phase=self.state["phase"], payload={
+            "origin": origin, "count": len(findings), "new": [r["finding_key"] for r in added],
+            "min_repair": note.get("min_repair"), "verdict_relaxed_from": note.get("verdict_relaxed_from")})
+
+    def _relax(self, raw: Any, origin: str) -> Any:
+        mode = self._review_mode()
+        if mode is None:
+            return raw
+        raw, deferred, note = chain.relax_review(
+            raw, min_repair=chain.min_repair_severity(self.chain_cfg, mode), honor_blocking_flag=mode != chain.LIGHT)
+        self._defer(deferred, origin, note)
+        return raw
+
+    def _chain_view(self) -> dict[str, Any] | None:
+        """The chain as a reviewer needs to see it: scope of the whole chain, open backlog, severity policy."""
+        if not self.chain_cfg["enabled"] or not self.state.get("iterations"):
+            return None
+        it = self._it()
+        info = it.get("chain") or {}
+        mode = info.get("review_mode")
+        members = [i for i in self.state["iterations"] if i.get("status") == "PROVISIONAL"]
+        if it not in members:
+            members.append(it)
+        return {"mode": mode, "chain_id": info.get("chain_id"), "position": info.get("position"),
+                "length": info.get("length"),
+                "iterations": [{"iteration_id": i["iteration_id"], "index": i["index"], "goal": i["plan"].get("goal"),
+                                "roadmap_refs": i["lineage"]["roadmap_refs"],
+                                "acceptance_criteria": i["plan"].get("acceptance_criteria", [])} for i in members],
+                "deferred_findings": chain.open_backlog(self.state["deferred_findings"])[:40],
+                "repair_threshold": (chain.min_repair_severity(self.chain_cfg, mode) if mode else None),
+                "closes_chain": mode in (chain.CLOSE, chain.POLISH)}
+
+    def _begin_chain_close(self, reason: str) -> None:
+        """The roadmap (or the iteration budget) ends with an open chain: review it seriously before the Human Gate."""
+        it = self._it()
+        it["chain"] = {**(it.get("chain") or {}), "review_mode": chain.CLOSE}
+        it["status"], it["outcome"], it["finished_at"] = "IN_PROGRESS", None, None
+        self.journal.append("CHAIN_CLOSE_STARTED", iteration_id=it["iteration_id"], phase=ac.ROADMAP_CHECK, payload={
+            "reason": reason, "chain": it["chain"],
+            "provisional": [i["iteration_id"] for i in self.state["iterations"] if i.get("status") == "PROVISIONAL"]})
+        self._goto(ac.AWAITING_REVIEW)
+        self._save()
+
+    def _close_chain(self, closing: Mapping[str, Any]) -> None:
+        members = [i for i in self.state["iterations"] if i.get("status") == "PROVISIONAL"]
+        for member in members:
+            member["status"], member["outcome"] = "ACCEPTED", "PASS"
+            member["accepted_via"] = {"chain_id": (closing.get("chain") or {}).get("chain_id"),
+                                      "closing_iteration_id": closing["iteration_id"]}
+        if (closing.get("chain") or {}).get("review_mode") == chain.POLISH:
+            attempted = set(closing.get("polish_findings", []))
+            for row in self.state["deferred_findings"]:
+                if row.get("status") == "OPEN" and row.get("finding_key") in attempted:
+                    row["status"] = "POLISH_ATTEMPTED"
+        cs = self.state["chain_state"]
+        self.journal.append("CHAIN_ACCEPTED", iteration_id=closing["iteration_id"], phase=ac.FINAL_REVIEW, payload={
+            "chain_id": cs["chain_id"], "iterations": [m["iteration_id"] for m in members] + [closing["iteration_id"]],
+            "open_deferred": len(chain.open_backlog(self.state["deferred_findings"]))})
+        cs["closed_chains"] += 1
+        cs["chain_id"] += 1
+        self.state["chain_plan"] = []
 
     # EXECUTE / SELF_VERIFY ---------------------------------------------------
 
@@ -1343,6 +1655,8 @@ class AutonomyController:
             findings = [{"finding_key": f"SELF_VERIFY::{n}", "severity": "HIGH", "blocking": True,
                          "summary": f"self-verification check {n!r} failed"} for n in failing]
             self._begin_repair("SELF_VERIFY", findings)
+        elif self._review_mode() == chain.LIGHT and self.chain_cfg["mid_chain_review"] == "NONE":
+            self._accept_provisional("SELF_VERIFY_ONLY")
         else:
             self._goto(ac.AWAITING_REVIEW)
             self._save()
@@ -1492,7 +1806,7 @@ class AutonomyController:
             except (OSError, ValueError):
                 continue
             add_source(f"CHECK_LOG:{index}", "CHECK_LOG", path)
-        return {"iteration": it, "packet": packet, "review_kind": kind,
+        return {"iteration": it, "packet": packet, "review_kind": kind, "chain": self._chain_view(),
                 "directional_charter": self.state.get("directional_charter"),
                 "directional_charter_hash": self.state.get("directional_charter_hash"),
                 "raw": {"diff_sha256": diff_digest(diff), "diff_path": str(diff_path),
@@ -1595,6 +1909,7 @@ class AutonomyController:
         raw = self._review_with_raw_access("review", "reviewer", self._reviewer_context(it["packet"], "REVIEW"))
         if self.state["status"] != ac.RUNNING:
             return
+        raw = self._relax(raw, "REVIEW")
         result = ac.normalize_review(raw, failing_evidence=ac.evidence_failures(self._checks()))
         result["at"] = _now()
         result["execution_id"] = self.state["executions"][-1]["execution_id"] if self.state["executions"] else None
@@ -1602,7 +1917,9 @@ class AutonomyController:
         it["reviews"].append(result)
         self._journal_verdict(result, ac.REVIEW)
         self._done(verdict=result["verdict"])
-        if result["verdict"] == ac.V_PASS:
+        if result["verdict"] == ac.V_PASS and self._review_mode() == chain.LIGHT:
+            self._accept_provisional("LIGHT_REVIEW")
+        elif result["verdict"] == ac.V_PASS:
             self._goto(ac.FINAL_REVIEW)
             self._save()
         elif result["verdict"] == ac.V_REPAIR:
@@ -1955,6 +2272,7 @@ class AutonomyController:
                                            self._reviewer_context(packet, "FINAL_REVIEW"), selection)
         if self.state["status"] != ac.RUNNING:
             return
+        raw = self._relax(raw, "FINAL_REVIEW")
         result = ac.normalize_review(raw, failing_evidence=ac.evidence_failures(self._checks()))
         result["at"] = _now()
         result["execution_id"] = self.state["executions"][-1]["execution_id"] if self.state["executions"] else None
@@ -1966,22 +2284,15 @@ class AutonomyController:
         self._done(verdict=result["verdict"])
         if result["verdict"] == ac.V_PASS:
             it["status"], it["outcome"], it["finished_at"] = "ACCEPTED", "PASS", _now()
-            for item_id in it["lineage"]["roadmap_refs"]:
-                row = self.state["roadmap"][item_id]
-                if row.get("recurring") is True:
-                    # A standing item records progress but stays pending: ending it is the planner's
-                    # explicit, reasoned skip (or an execution fuse), never a side effect of one PASS.
-                    row.setdefault("iterations", []).append(it["iteration_id"])
-                    row["last_iteration_id"] = it["iteration_id"]
-                    continue
-                self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
-            ac.refresh_dependency_states(self.state["roadmap"])
+            self._mark_roadmap_done(it)
             self._ledger_dispositions(rx.DISP_RESOLVED, "iteration accepted by final review")
             self.journal.append("ITERATION_ACCEPTED", iteration_id=it["iteration_id"], phase=ac.FINAL_REVIEW, payload={
                 "classified_limitations": list(it.get("classified", [])),
                 "roadmap_refs": it["lineage"]["roadmap_refs"], "repair_attempts": it["repair_attempts"],
                 "repaired": [r["addresses"] for r in it["repairs"]], "checks": it["evidence_state"],
                 "final_head": self.env.head(), "diff_sha256": packet["access"]["diff_sha256"]})
+            if self._review_mode() in (chain.CLOSE, chain.POLISH):
+                self._close_chain(it)
             self._goto(ac.ROADMAP_CHECK)
             self._save()
         elif result["verdict"] == ac.V_REPAIR:
@@ -2002,6 +2313,23 @@ class AutonomyController:
                        item.get("dependency_state") in {"HUMAN_REQUIRED", "BLOCKED_BY_SKIPPED_DEPENDENCY"}]
         payload = {"remaining": remaining, "autonomous_remaining": autonomous_remaining,
                    "human_gated": human_gated, "iterations_done": done, "max_iterations": cap}
+        if self.chain_cfg["enabled"] and (not autonomous_remaining or done >= cap):
+            stop = "ROADMAP_EXHAUSTED" if not autonomous_remaining else "ITERATION_CAP"
+            if self.state["iterations"] and self._it().get("status") == "PROVISIONAL":
+                self._done(next="CHAIN_CLOSE")
+                self._begin_chain_close(stop)
+                return
+            polish = self.chain_cfg["polish"]
+            if (stop == "ROADMAP_EXHAUSTED" and polish["enabled"] and not self.state.get("polish_done")
+                    and chain.open_backlog(self.state["deferred_findings"])):
+                self.state["polish_pending"] = True
+                self.journal.append("ROADMAP_DECISION", phase=ac.ROADMAP_CHECK, payload={
+                    **payload, "next_action_available": True, "roadmap_exhausted": True,
+                    "reason": "roadmap done; one closing polish pass over the deferred findings"})
+                self._done(next="POLISH")
+                self._goto(ac.PLAN)
+                self._save()
+                return
         if not autonomous_remaining:
             self.journal.append("ROADMAP_DECISION", phase=ac.ROADMAP_CHECK, payload={
                 **payload, "next_action_available": False, "roadmap_exhausted": True,
@@ -2035,6 +2363,7 @@ class AutonomyController:
         self.state["phase"] = ac.AWAITING_HUMAN
         self.state["status"] = ac.AWAITING_HUMAN
         self.state["hold"] = {"reason": reason, "detail": detail, "roadmap_exhausted": exhausted,
+                              "deferred_findings": chain.open_backlog(self.state.get("deferred_findings", [])),
                               "promotable": bool(accepted), "candidate_id": candidate_id, "candidate_head": head,
                               "candidate_fingerprint": fingerprint,
                               "accepted_iterations": [i["iteration_id"] for i in accepted],

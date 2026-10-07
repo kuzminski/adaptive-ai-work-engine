@@ -158,6 +158,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/home": lambda q: pv.home_view(),
         "/api/settings": lambda q: product_home.load_settings(),
         "/api/recommendations": app.recommendations,
+        "/api/experience": lambda q: pv.experience_view(q),
         "/api/ping": lambda q: {"ok": True, "version": APP_VERSION},
         "/api/version": lambda q: product_version.describe(),
     }
@@ -165,6 +166,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/providers/detect": app.detect,
         "/api/models/verify": app.verify_models,
         "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {}),
+        "/api/experience/forecast": lambda b: pv.forecast_view(b),
+        "/api/intake/propose": lambda b: pv.intake_view(b),
         "/api/first-run/done": app.first_run_done,
         "/api/repo/inspect": lambda b: prun.inspect_repo(str(b.get("path") or "")),
         "/api/repo/init": lambda b: prun.init_git_repo(str(b.get("path") or "")),
