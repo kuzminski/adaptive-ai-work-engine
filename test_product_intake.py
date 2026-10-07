@@ -100,6 +100,17 @@ def test_intake_risks_reach_the_mandate_register_and_set_charter_floors():
     assert floors and all(f["implementation_floor"] == "HARDER" and f["final_review_floor"] == "HARD" for f in floors)   # LOW adds none
 
 
+def test_a_follow_up_keeps_the_run_mode_it_continues(monkeypatch):
+    for chain_mode in (False, True):
+        form = prun.normalize_form({"goal": "Zbuduj coś ciekawego", "advanced": {"chain_mode": chain_mode, "exploration": True}})
+        monkeypatch.setattr(prun, "load_task", lambda run_id, form=form: {"form": form, "workspace": {"repo": "r"}})
+        monkeypatch.setattr(prun.ctl if hasattr(prun, "ctl") else __import__("autonomy_controller"), "load_state",
+                            lambda run_id, root: {"status": "REJECTED"}, raising=False)
+        monkeypatch.setattr(prun, "runs_root", lambda: None)
+        cont = prun.prepare_continuation("RUN", mode="direction")
+        assert cont["prefill"]["advanced"] == {"chain_mode": chain_mode, "exploration": True}
+
+
 def test_the_human_marker_is_case_and_language_tolerant():
     assert prun.HUMAN_GATE.match("[Człowiek] x") and prun.HUMAN_GATE.match("[HUMAN] x") and not prun.HUMAN_GATE.match("człowiek x")
 

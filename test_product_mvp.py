@@ -474,6 +474,7 @@ def test_accept_reject_and_continue_never_merge_or_push(env):
     assert git(task["workspace"]["worktree"], "rev-parse", "HEAD") == base["commit"]
     assert_no_merge_push(env)
     prefill = cont["prefill"]
+    assert prefill["advanced"]["chain_mode"] is False           # the follow-up keeps the mode of the run it continues
     prefill.update(first_iteration="Add a farewell function", directions=[])
     follow_up = prun.start_task(prefill, detection=prun.detection_snapshot())["run_id"]
     view = wait_for(follow_up, settled)

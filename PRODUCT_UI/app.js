@@ -872,6 +872,7 @@ function bindRun(runId, v) {
     const r = await act("continue", {mode});
     if (!r) return;
     formState = Object.assign(defaultForm(), r.prefill);
+    formState.advanced = Object.assign(defaultForm().advanced, r.prefill.advanced || {});
     formState.directions = (r.prefill.directions || []).join("\n");
     if (r.prefill.risks) { formState.advanced.risks = risksText(r.prefill.risks); delete formState.risks; }
     formState.planning = r.prefill.planning || boot.settings.planning;

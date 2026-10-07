@@ -534,6 +534,9 @@ def forecast(state: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], histor
             basis = stats.choose_basis(scoped(same, "total"), "auto")
     out: dict[str, Any] = {"pending_items": len(pending), "open_ended": standing, "chains_closed": chain.get("closed_chains", 0),
                            "polish_expected": bool(state.get("deferred_findings")) and not state.get("polish_done")}
+    if not pending and not standing:
+        out.update({"estimate": None, "note": "Nie zostały żadne punkty roadmapy do zrobienia."})
+        return out
     if not sample:
         out.update({"estimate": None, "note": "Za mało danych, by uczciwie oszacować czas i koszt — pokażę je po kilku iteracjach."})
         return out

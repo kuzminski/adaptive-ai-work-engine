@@ -1114,7 +1114,10 @@ def prepare_continuation(run_id: str, *, mode: str) -> dict[str, Any]:
     form = dict(task["form"])
     prefill = {"repo": workspace["repo"], "base": base,
                "planning": form.get("planning"), "implementation": form.get("implementation"),
-               "review": form.get("review"), "implementer_chain": form.get("implementer_chain")}
+               "review": form.get("review"), "implementer_chain": form.get("implementer_chain"),
+               # the run mode the user chose stays the mode of the follow-up (chain vs. classic review, exploration)
+               "advanced": {"chain_mode": (form.get("advanced") or {}).get("chain_mode") is not False,
+                            "exploration": (form.get("advanced") or {}).get("exploration")}}
     if mode == "direction":
         # Same goal, new direction: risks for the whole run still apply; point-scoped ones named old points.
         prefill.update(goal=form["goal"], first_iteration="", directions=[],

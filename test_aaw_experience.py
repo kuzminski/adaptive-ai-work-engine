@@ -290,6 +290,12 @@ def test_forecast_falls_back_to_history_then_to_an_honest_nothing():
     assert nothing["estimate"] is None and "Za mało danych" in nothing["note"]
 
 
+def test_forecast_has_no_estimate_when_no_roadmap_point_is_left():
+    own = [row("FEATURE", "A", True, 1.0, iteration_id=f"z{i}") for i in range(2)]
+    out = ex.forecast(running_state(pending=0), own, many("FEATURE", "A", 5, 5, 1.0))
+    assert out["estimate"] is None and "żadne" in out["note"]
+
+
 def test_forecast_says_when_the_end_is_open():
     assert "kontynuuj" in ex.forecast(running_state(standing=True), [], many("FEATURE", "A", 5, 5, 1.0))["note"]
 
