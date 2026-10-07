@@ -48,8 +48,8 @@ Status: **faza 1 wdrożona** w tym commicie (kod + testy). Fazy 2–3 poniżej t
 | D5 | Pretreatment wyłączony domyślnie (`build_direct_executors(review_pretreatment=False)`). | `autonomy_adapters.py` | `test_autonomy_v0_2.py` |
 | D6 | Nowy slot `continuation_planner` = **Sol 6.1 medium** dla tieru DEFAULT (HARD/CRITICAL bez zmian). | `autonomy_policy.select_continuation_planner`, `AUTONOMY_ROLES.json`, `MODEL_RECOMMENDATIONS.json` | `test_autonomy_policy_v0_3.py` |
 | D7 | Nowy slot `implementer_strong` = **Sol 6.1 medium**. Trasa STRONG gdy: `SIGNIFICANTLY_DIFFICULT`, planista prosi (`needs_strong_implementer` z powodem), >6 kroków lub >6 plików, >3 katalogi, albo pakiet strukturalnie niekompletny. Trasa HARDER (Luna xhigh) dla średnich lub mglistych pakietów. | `work_packet.assess_difficulty`, `autonomy_policy.select_implementation` | j.w. |
-| D8 | **Gemini CLI** jako trzeci harness: profile `GEMINI_3_1_PRO` (`gemini-3.1-pro-preview`) i `GEMINI_3_FLASH` (`gemini-3-flash-preview`); wykrywanie w aplikacji, logowanie (zmienna `GEMINI_API_KEY`/… albo istnienie `~/.gemini/oauth_creds.json` — plik nie jest otwierany), „Sprawdź modele”, wywołanie ról, parsowanie odpowiedzi. Gemini jest późną alternatywą w rekomendacjach (gdy brak Codex/Claude). | `autonomy_adapters.py`, `product_providers.py`, `workflow_runner.harness_executable`, katalogi JSON | `test_implementer_effectiveness.py`, `test_product_mvp*.py` |
-| D9 | Aplikacja oddaje routerowi jako alternatywy **tylko profile uruchamialne na tym komputerze**; Gemini w `AUTONOMY_ROLES.json` domyślnie `available: false`, włączany po pozytywnym „Sprawdź modele”. | `product_recommendations._routing_for_machine` | j.w. |
+| D8 | **Antigravity CLI (`agy`)** jako trzeci harness (następca Gemini CLI): profile `AGY_GEMINI_3_1_PRO` (`gemini-3.1-pro-high`) i `AGY_GEMINI_FLASH` (`gemini-3.7-flash-high`); wykrywanie w aplikacji, status logowania, „Sprawdź modele”, wywołanie ról z `--json-schema`, parsowanie koperty JSON. Późna alternatywa w rekomendacjach (gdy brak Codex/Claude). | `autonomy_adapters.py`, `product_providers.py`, katalogi JSON | `test_implementer_effectiveness.py`, `test_product_mvp*.py` |
+| D9 | Aplikacja oddaje routerowi jako alternatywy **tylko profile uruchamialne na tym komputerze**; Antigravity w `AUTONOMY_ROLES.json` domyślnie `available: false`, włączany po pozytywnym „Sprawdź modele”. | `product_recommendations._routing_for_machine` | j.w. |
 
 Zgodność wsteczna: run zamrożony przed tą zmianą (bez slotów `implementer_strong` /
 `continuation_planner`) zachowuje stare zachowanie (fallback do `implementer_hard` /
@@ -73,19 +73,29 @@ REVIEW (Sol 6.1 light) ── REPAIR_REQUIRED ──► REPAIR: Luna → [nie zb
 FINAL REVIEW → kolejna iteracja albo Human Gate
 ```
 
-### Gemini CLI — jak włączyć
+### Antigravity CLI (`agy`) — jak włączyć
 
-1. `npm install -g @google/gemini-cli` (sprawdzone flagi: wersja 0.62.0).
-2. Raz w terminalu: `gemini` → logowanie kontem Google (albo ustaw `GEMINI_API_KEY`).
+Gemini CLI został wyłączony przez Google (18.06.2026) i zastąpiony przez Antigravity CLI (`agy`);
+AAW korzysta z `agy` (wsparcie Gemini CLI usunięte).
+
+1. Instalacja: PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`
+   (macOS/Linux: `curl -fsSL https://antigravity.google/cli/install.sh | bash`).
+2. Raz w terminalu: `agy` → logowanie kontem Google.
 3. W AAW: „Wykryj ponownie” → „Sprawdź modele” (jedno krótkie zapytanie na model).
-4. Profile Gemini stają się dostępne dopiero po akceptacji modelu przez CLI na tym komputerze.
+4. Profile `AGY_GEMINI_3_1_PRO` (`gemini-3.1-pro-high`) i `AGY_GEMINI_FLASH`
+   (`gemini-3.7-flash-high`) są dostępne dopiero po akceptacji modelu na tym komputerze.
 
-Wywołanie: `gemini --model <id> --output-format json --approval-mode plan|yolo --skip-trust
---prompt "…"`, handoff na stdin. Role tylko do odczytu → `plan`; implementacja/naprawa →
-`yolo` (potrzebny shell do testów; granice Git nadal sprawdza kontroler po fazie). Gemini CLI
-nie ma flagi schematu, więc schemat idzie w prompcie, a odpowiedź jest walidowana (wymagane
-pola); brakujące pola = odrzucenie, nigdy cichy PASS. Trust: `SECONDARY` (nie dla krytycznych
-review).
+Wywołanie: `agy --model <slug> --output-format json --json-schema <plik> [--dangerously-skip-permissions]
+--print "Read the file <temp>/aaw_role_prompt.md …"`. Wszystkie opcje przed `--print` (agy traktuje
+resztę jako prompt). W trybie `-p` agy nie czyta stdin, a handoff z diffem przekracza limit linii
+poleceń Windows, więc pełny prompt roli trafia do pliku w katalogu tymczasowym systemu (agy domyślnie
+ma do niego dostęp). Role tylko do odczytu działają w domyślnym trybie uprawnień (odczyt workspace
+dozwolony, edycje i komendy wymagają zgody, której w trybie headless nikt nie da → odmowa); role
+piszące dostają `--dangerously-skip-permissions` (shell do testów; granice Git i tak sprawdza
+kontroler po fazie). Wynik: koperta `{conversation_id, status, response, usage, structured_output}`;
+`structured_output` wymusza `--json-schema`, a odpowiedź jest dodatkowo walidowana (wymagane pola) —
+brakujące pola = odrzucenie, nigdy cichy PASS. Status logowania: `agy -p /usage --output-format json`
+(bez tury agenta i bez zużycia limitu). Trust: `SECONDARY` (nie dla krytycznych review).
 
 ## 4. Faza 2 — następne kroki (po zebraniu danych z prawdziwych runów)
 
@@ -108,10 +118,12 @@ review).
 
 ## 6. Ograniczenia i niepewność (uczciwie)
 
-- Zmiany zweryfikowane testami deterministycznymi i fałszywymi CLI (Claude/Gemini). **Żaden
+- Zmiany zweryfikowane testami deterministycznymi i fałszywymi CLI (Claude/Antigravity). **Żaden
   prawdziwy provider nie był uruchomiony** w tym środowisku (brak zalogowanych CLI).
-- Identyfikatory modeli Gemini pochodzą ze stałych Gemini CLI 0.62.0; dostępność zależy od
-  konta — dlatego wymagane jest „Sprawdź modele”.
+- Flagi `agy` pochodzą z oficjalnego changelogu Antigravity CLI (1.2.17) i integracji spec-kit; nie
+  były uruchomione na prawdziwym `agy`. Slugi modeli (`gemini-3.1-pro-high`, `gemini-3.7-flash-high`)
+  pochodzą z listy `agy models`; starsze wersje `agy` potrafiły po cichu podmienić slug na inny
+  model (zgłoszenia #581/#687) — dlatego wymagane jest „Sprawdź modele” i aktualne `agy`.
 - `SOL_6_1_MEDIUM` (`gpt-6.1-sol` / `medium`) korzysta z istniejącego wpisu katalogu
   (DYNAMIC_PREFLIGHT); nie był sondowany na żywo tutaj.
 - Progi trudności są heurystyką startową; do kalibracji w fazie 2.

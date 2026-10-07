@@ -88,12 +88,12 @@ class App:
     def verify_models(self, body: dict[str, Any]) -> dict[str, Any]:
         ids = body.get("profile_ids")
         if not ids:
-            setup = prun.resolve_setup(body.get("choices") or {})
+            setup = prun.resolve_setup(body.get("choices") or {}, implementer_chain=body.get("implementer_chain"))
             ids = sorted({p for g in setup["groups"].values() for p in g["checkable"]})
         if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
             raise prun.ProductError("profile_ids must be a list of profile IDs")
         result = prun.verify_models(ids)
-        return {**result, "setup": prun.resolve_setup(body.get("choices") or {})}
+        return {**result, "setup": prun.resolve_setup(body.get("choices") or {}, implementer_chain=body.get("implementer_chain"))}
 
     def first_run_done(self, _body: dict[str, Any]) -> dict[str, Any]:
         return product_home.save_settings({"first_run_completed": True})
@@ -165,7 +165,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     post_routes: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/providers/detect": app.detect,
         "/api/models/verify": app.verify_models,
-        "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {}),
+        "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {},
+                                                          implementer_chain=b.get("implementer_chain")),
         "/api/experience/forecast": lambda b: pv.forecast_view(b),
         "/api/intake/propose": lambda b: pv.intake_view(b),
         "/api/first-run/done": app.first_run_done,

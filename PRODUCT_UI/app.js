@@ -250,9 +250,20 @@ function bindPresets(onLoaded) {
 function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
-          planning: s.planning, implementation: s.implementation, review: s.review, base: null, setup: null, preview: null,
-          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {},
+          planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
+          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}, risks: "",
                      chain_mode: true, exploration: null, recommendation: null}, intake: {}};
+}
+// Known risks: wizard text, or rows from the idea intake / a continuation ({description, severity, item_ids|points}).
+const RISK_WORD = {LOW: "niskie", MEDIUM: "średnie", HIGH: "wysokie", CRITICAL: "krytyczne"};
+function risksText(v) {
+  if (!Array.isArray(v)) return String(v || "");
+  const point = (id) => /^STEP_\d+$/.test(id) ? id.slice(5) : String(id);  // STEP_k = point k of the summary list
+  return v.map((r) => {
+    if (typeof r === "string") return r;
+    const refs = r.item_ids ? r.item_ids.map(point) : (r.points || []);
+    return `[${RISK_WORD[String(r.severity || "").toUpperCase()] || r.severity || "średnie"}] ${r.description || r.text || ""}${refs.length ? ` (punkty: ${refs.join(", ")})` : ""}`;
+  }).join("\n");
 }
 function stepperHtml(step) {
   return `<ol class="stepper">${STEPS.map((name, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}" data-goto="${i}"><span>${i < step ? "✓" : i + 1}</span>${esc(name)}</li>`).join("")}</ol>`;
@@ -375,14 +386,63 @@ function groupHtml(group, setup) {
   return `<div class="group"><div class="group-head">${names[group]}</div>
     <div class="seg" data-group="${group}">${c.options.map((o) => `<button type="button" data-value="${esc(o.value)}" class="${f[group] === o.value ? "on" : ""}">${esc(o.label)}${o.value === c.default ? " ★" : ""}</button>`).join("")}</div>
     <div class="choice-desc">${esc(desc)}</div>
-    <div class="models-under">${g ? g.main.map(slotLine).join("") : `<span class="muted small">…</span>`}
+    ${group === "implementation" ? chainHtml(setup) : ""}
+    <div class="models-under">${g ? (group === "implementation" && setup.implementer_chain && setup.implementer_chain.source !== "SLOTS" ? "" : g.main.map(slotLine).join("")) : `<span class="muted small">…</span>`}
       ${g && g.all.length > g.main.length ? `<details><summary class="small">Pozostałe etapy (${g.all.length - g.main.length})</summary>${g.all.filter((s) => !g.main.includes(s) && !g.main.some((m) => m.slot === s.slot)).map(slotLine).join("")}</details>` : ""}
     </div></div>`;
 }
+const CHAIN_SLOTS = ["implementer_default", "implementer_harder", "implementer_hard", "implementer_capability_escalation", "repair_default", "repair_hard", "review_pretreatment"];
+function setupPayload() {
+  const f = formState;
+  return {choices: {planning: f.planning, implementation: f.implementation, review: f.review}, implementer_chain: f.implementer_chain};
+}
 async function loadSetup() {
   const f = formState;
-  f.setup = await api("/api/setup/resolve", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+  f.setup = await api("/api/setup/resolve", setupPayload());
   return f.setup;
+}
+// Selectable profiles for the implementer chain: every profile with an exact runtime model.
+function chainProfiles() {
+  const out = [];
+  for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id && r.runtime_model_id) out.push(r);
+  return out;
+}
+// The chain being edited: the user's own, or the effective one resolved by the system (default).
+function effectiveChain() {
+  const f = formState;
+  if (f.implementer_chain) return f.implementer_chain.slice();
+  const c = f.setup && f.setup.implementer_chain;
+  return c && c.steps && c.steps.length ? c.steps.map((x) => x.profile_id) : [];
+}
+function chainHtml(setup) {
+  const f = formState;
+  const c = setup && setup.implementer_chain;
+  const source = f.implementer_chain ? "USER" : (c ? c.source : "SLOTS");
+  const rows = effectiveChain();
+  const steps = (c && c.steps) || [];
+  const profiles = chainProfiles();
+  const tag = {USER: "ręczny", DEFAULT: "domyślny AAW", SLOTS: "wg poziomu"}[source] || source;
+  const opt = (id, current) => {
+    const p = profiles.find((x) => x.profile_id === id);
+    const taken = rows.includes(id) && id !== current;
+    return `<option value="${esc(id)}" ${id === current ? "selected" : ""} ${taken ? "disabled" : ""}>${esc(p ? (p.display_name || id) : id)} — ${esc(p ? p.runtime_model_id : "brak ID")} / ${esc(p ? p.effort : "")}${p && !p.runnable ? " (niedostępny)" : ""}</option>`;
+  };
+  const list = rows.map((id, i) => {
+    const st = steps.find((x) => x.profile_id === id);
+    const avail = st && !st.runnable ? ` <span class="slot-status UNAVAILABLE">niedostępny</span>` : (st && st.availability === "NOT_VERIFIED" ? ` <span class="slot-status ALTERNATIVE">niesprawdzony</span>` : "");
+    return `<li class="chain-step"><span class="chain-n">${i + 1}</span>
+      <select data-chain-step="${i}">${profiles.map((p) => opt(p.profile_id, id)).join("")}${profiles.some((p) => p.profile_id === id) ? "" : opt(id, id)}</select>${avail}
+      <span class="chain-btns"><button type="button" data-chain-up="${i}" ${i === 0 ? "disabled" : ""} title="Wyżej">↑</button><button type="button" data-chain-down="${i}" ${i === rows.length - 1 ? "disabled" : ""} title="Niżej">↓</button><button type="button" data-chain-del="${i}" ${rows.length <= 1 ? "disabled" : ""} title="Usuń krok">✕</button></span></li>`;
+  }).join("");
+  const skipped = (c && c.skipped || []).map((x) => `<div class="small muted">pominięty (niedostępny tu): ${esc(x.display)}${x.reason ? " — " + esc(x.reason) : ""}</div>`).join("");
+  return `<div class="chain"><div class="chain-head">Łańcuch implementatora <span class="slot-status ${source === "DEFAULT" ? "RECOMMENDED" : "OVERRIDE"}">${esc(tag)}</span></div>
+    ${rows.length ? `<ol class="chain-list">${list}</ol>` : `<div class="small muted">Etapy implementacji wynikają z wybranego poziomu (poniżej). Kliknij „Własny łańcuch”, aby samemu wybrać model(e) implementatora.</div>`}
+    ${skipped}
+    <div class="chain-actions">
+      ${rows.length ? `<button type="button" id="chain-add" ${rows.length >= 12 ? "disabled" : ""}>+ Dodaj krok eskalacji</button>` : `<button type="button" id="chain-custom">Własny łańcuch</button>`}
+      ${f.implementer_chain ? `<button type="button" id="chain-default" class="link">Przywróć domyślny</button>` : ""}
+    </div>
+    <p class="small muted">Krok 1 to implementator na starcie; kolejne kroki to eskalacja, gdy poprzedni model nie wystarcza (rosnąca trudność zadania, błąd możliwości, naprawy). Jeden krok = jeden model na całą implementację. Krok niedostępny nigdy nie jest podmieniany po cichu.</p></div>`;
 }
 async function stepModels(box) {
   const f = formState;
@@ -404,6 +464,34 @@ async function stepModels(box) {
         f[group] = b.dataset.value; await loadSetup(); draw();
       }));
     }
+    const setChain = async (ids) => {
+      f.implementer_chain = ids && ids.length ? ids : null;
+      if (f.implementer_chain) CHAIN_SLOTS.forEach((k) => delete f.advanced.profile_overrides[k]);
+      try { await loadSetup(); } catch (e) { toast(e.message, 8000); }
+      draw();
+    };
+    box.querySelectorAll("[data-chain-step]").forEach((sel) => (sel.onchange = () => {
+      const ids = effectiveChain(); ids[Number(sel.dataset.chainStep)] = sel.value; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-up]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainUp); [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-down]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainDown); [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-del]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(); ids.splice(Number(b.dataset.chainDel), 1); setChain(ids);
+    }));
+    on("chain-add", () => {
+      const ids = effectiveChain();
+      const next = chainProfiles().find((p) => !ids.includes(p.profile_id) && p.runnable) || chainProfiles().find((p) => !ids.includes(p.profile_id));
+      if (next) setChain([...ids, next.profile_id]);
+    });
+    on("chain-custom", () => {
+      const first = s && s.groups.implementation.main[0];
+      if (first) setChain([first.profile_id]);
+    });
+    on("chain-default", () => setChain(null));
     box.querySelectorAll("[data-slot]").forEach((sel) => (sel.onchange = () => {
       if (sel.value) f.advanced.profile_overrides[sel.dataset.slot] = sel.value; else delete f.advanced.profile_overrides[sel.dataset.slot];
     }));
@@ -411,7 +499,7 @@ async function stepModels(box) {
       e.target.disabled = true;
       document.getElementById("verify-status").textContent = "Sprawdzam… (zwykle kilka–kilkanaście sekund na model)";
       try {
-        const r = await api("/api/models/verify", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+        const r = await api("/api/models/verify", setupPayload());
         boot.providers = r.providers; f.setup = r.setup;
         const res = r.results.map((x) => `${x.model}: ${{ACCEPTED: "OK", REJECTED: "odrzucony", UNKNOWN: "nie ustalono"}[x.status]}`).join(", ");
         toast(res ? `Wynik: ${res}` : "Brak modeli do sprawdzenia.", 9000);
@@ -423,13 +511,18 @@ async function stepModels(box) {
   try { await loadSetup(); } catch (e) { box.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   draw();
 }
+function chainActive() {
+  const c = formState.setup && formState.setup.implementer_chain;
+  return !!(formState.implementer_chain || (c && c.source !== "SLOTS"));
+}
 function advancedSlotsHtml() {
   const profiles = [];
   for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id) profiles.push(r);
   const f = formState;
   const opts = (slot) => `<option value="">(wg poziomu)</option>` + profiles.map((p) => `<option value="${esc(p.profile_id)}" ${f.advanced.profile_overrides[slot] === p.profile_id ? "selected" : ""}>${esc(p.profile_id)} — ${esc(p.runtime_model_id || "brak ID")} / ${esc(p.effort)}${p.runnable ? "" : " (niedostępny)"}</option>`).join("");
   return `<p class="muted">Tylko dla zaawansowanych: wymusza dokładny profil dla etapu. Niedostępny profil zablokuje START albo zatrzyma run w Human Gate — nigdy nie zostanie podmieniony.</p>
-    <table>${Object.entries(boot.slot_labels).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
+    ${chainActive() ? `<p class="small muted">Etapy implementacji i napraw wynikają z łańcucha implementatora powyżej, dlatego nie można ich tu nadpisać osobno.</p>` : ""}
+    <table>${Object.entries(boot.slot_labels).filter(([slot]) => !(chainActive() && CHAIN_SLOTS.includes(slot))).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
 }
 
 function draftBanner() {
@@ -483,14 +576,20 @@ function formPayload() {
   const f = formState, a = f.advanced;
   const lines = (t) => String(t || "").split("\n").map((x) => x.trim()).filter(Boolean);
   return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: String(f.directions || ""),
-          planning: f.planning, implementation: f.implementation, review: f.review, base: f.base,
+          planning: f.planning, implementation: f.implementation, review: f.review, implementer_chain: f.implementer_chain, base: f.base,
           advanced: {acceptance_criteria: lines(a.acceptance_criteria), required_evidence: lines(a.required_evidence),
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
                      continue_autonomously: a.continue_autonomously !== false,
                      chain_mode: a.chain_mode !== false, exploration: typeof a.exploration === "boolean" ? a.exploration : null,
                      recommendation: a.recommendation || null,
-                     profile_overrides: a.profile_overrides}};
+                     profile_overrides: a.profile_overrides, risks: a.risks || ""}};
+}
+function risksRow(p) {
+  if (!(p.risks || []).length) return "";
+  const floors = p.risk_floors || [];
+  return `<tr><td>Ryzyka</td><td><ul class="risk-list">${p.risks.map((r) => `<li><span class="risk-level ${esc(r.severity)}">${esc(r.level)}</span> <span class="mono small">${esc(r.risk_id)}</span> ${esc(r.description)} <span class="small muted">— ${esc(r.points.join(", "))}</span></li>`).join("")}</ul>
+    ${floors.length ? `<div class="note small">Progi w charterze planisty (architekt może je tylko podnieść):<ul class="risk-floors">${floors.map((f) => `<li><strong>${esc(f.point)}</strong>: implementacja ≥ ${esc(f.implementation)}, finalny review ≥ ${esc(f.final_review)}</li>`).join("")}</ul></div>` : `<div class="small muted">Same ryzyka niskie — bez podnoszenia progów; planista i reviewerzy je widzą.</div>`}</td></tr>`;
 }
 function slotRow(s) {
   return `<tr><td>${esc(s.label)}</td><td>${slotLine({...s, label: ""})}<span class="muted small mono">${esc(s.profile_id)} · ${esc(s.runtime_model_id || "")} / ${esc(s.effort || "")}</span></td></tr>`;
@@ -503,7 +602,7 @@ async function stepStart(box) {
   catch (e) { box.innerHTML = `<h2>7. Podsumowanie i START</h2><div class="note bad">${esc(e.message)}</div>`; return; }
   f.preview = p;
   const g = p.groups;
-  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
+  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(key === "implementation" && p.implementer_chain.source !== "SLOTS" ? " → " : ", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
   const a = f.advanced;
   box.innerHTML = `<h2>7. Podsumowanie i START</h2>
     ${p.blockers.map((b) => `<div class="note bad"><strong>Nie można wystartować:</strong> ${esc(b)}</div>`).join("")}
@@ -515,6 +614,7 @@ async function stepStart(box) {
       <tr><td>Kierunek (roadmapa)</td><td><ol class="roadmap-list">${p.roadmap.filter((r) => !r.recurring).map((r) => `<li><div class="longtext">${esc(r.title)}</div></li>`).join("")}</ol>
         ${p.continuous ? `<div class="note small">Po tych punktach AAW <strong>kontynuuje autonomicznie</strong>: planista wybiera kolejne uzasadnione kroki, aż uzna, że nie ma już sensownej pracy, albo zadziała bezpiecznik.</div>` : `<div class="note small">AAW zakończy pracę po wykonaniu powyższych punktów.</div>`}</td></tr>
       ${models("planning", "Planowanie")}${models("implementation", "Implementacja")}${models("review", "Review")}
+      ${risksRow(p)}
       <tr><td>Limity</td><td>bezpiecznik: maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację <span class="small muted">(to nie jest cel, tylko hamulec)</span></td></tr>
     </table>
     <div id="forecast-box"></div>
@@ -528,6 +628,8 @@ async function stepStart(box) {
       <textarea id="forb">${esc(a.forbidden_areas)}</textarea>
       <label class="check" style="margin-top:12px"><input type="checkbox" id="chainmode" ${a.chain_mode === false ? "" : "checked"}> Tryb łańcuchowy
         <span class="hint">(długie serie iteracji z lekkim review, jedno poważne review na końcu serii, drobne uwagi na polerowanie; odznacz, by mieć pełne review po każdej iteracji)</span></label>
+      <label class="field">Znane ryzyka <span class="hint">(po jednym w linii, np. „[wysokie] utrata danych przy zapisie (punkty: 1, 3)”; numery jak na liście „Kierunek (roadmapa)” powyżej, 1 = pierwsza iteracja; poziom: niskie / średnie / wysokie / krytyczne, domyślnie średnie; bez „punkty” = całe zadanie)</span></label>
+      <textarea id="risks">${esc(risksText(a.risks))}</textarea>
       <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji (bezpiecznik) <input type="number" id="maxit" min="1" max="${esc((boot.limits || {}).hard_max_iterations || 200)}" value="${esc(a.max_iterations)}"></label>
       <label class="small">Maks. napraw na iterację <input type="number" id="maxrep" min="1" max="6" value="${esc(a.max_repair_attempts)}"></label>
       <button id="apply-adv">Zastosuj</button></div>
@@ -539,7 +641,7 @@ async function stepStart(box) {
       <span class="small muted">${p.can_start ? "AAW zacznie pracę w tle. Możesz zamknąć to okno — praca trwa dalej." : "Popraw powyższe, aby wystartować."}</span></div>`;
   loadForecastBox(p);
   on("apply-adv", () => {
-    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb");
+    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb"); a.risks = val("risks");
     a.max_iterations = val("maxit"); a.max_repair_attempts = val("maxrep");
     a.chain_mode = document.getElementById("chainmode").checked; stepStart(box);
   });
@@ -771,6 +873,7 @@ function bindRun(runId, v) {
     if (!r) return;
     formState = Object.assign(defaultForm(), r.prefill);
     formState.directions = (r.prefill.directions || []).join("\n");
+    if (r.prefill.risks) { formState.advanced.risks = risksText(r.prefill.risks); delete formState.risks; }
     formState.planning = r.prefill.planning || boot.settings.planning;
     formState.implementation = r.prefill.implementation || boot.settings.implementation;
     formState.review = r.prefill.review || boot.settings.review;

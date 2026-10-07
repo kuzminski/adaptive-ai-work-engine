@@ -10,7 +10,7 @@ Wymagane osobno, poza AAW (AAW ich nie instaluje i nie przechowuje haseł):
   * co najmniej jedno CLI AI, zainstalowane i zalogowane na Twoim koncie:
       Claude CLI (Claude Code) — logowanie: w terminalu wpisz  claude
       Codex CLI                — logowanie: w terminalu wpisz  codex login
-      Gemini CLI (opcjonalnie) — logowanie: w terminalu wpisz  gemini  (konto Google)
+      Antigravity CLI (opcj.)  — logowanie: w terminalu wpisz  agy  (konto Google)
 Python, kompilacja ani terminal nie są potrzebne do uruchomienia samego AAW.
 
 1. Rozpakuj AAW-Windows-x64.zip: prawy przycisk → „Wyodrębnij wszystkie…” → „Wyodrębnij”.
@@ -24,8 +24,11 @@ Python, kompilacja ani terminal nie są potrzebne do uruchomienia samego AAW.
 3. Kliknij dwukrotnie AAW.exe. Aplikacja otworzy się w przeglądarce (adres lokalny 127.0.0.1).
    Jeśli Windows pokaże „System Windows ochronił ten komputer”: Więcej informacji → Uruchom mimo to
    (plik nie jest jeszcze podpisany cyfrowo).
+   Jeśli Microsoft Defender usunie AAW.exe jako „Trojan:Win32/Wacatac…!ml”: to fałszywy alarm (ogólne wykrycie
+   heurystyczne dla niepodpisanych aplikacji). Rozpakuj ZIP poza OneDrive (np. C:\AAW), potem w Zabezpieczeniach
+   Windows → Historia ochrony wybierz Akcje → Zezwól na urządzeniu (lub dodaj folder AAW do wyjątków).
 4. Ekran powitalny → „Zaczynamy”. Kreator 7 kroków:
-   projekt (wskaż folder swojego projektu Git) → narzędzia AI (AAW sam wykryje Claude/Codex/Gemini)
+   projekt (wskaż folder swojego projektu Git) → narzędzia AI (AAW sam wykryje Claude/Codex/Antigravity)
    → modele → cel → pierwsza iteracja → kierunek → START.
 
 AAW pracuje w izolowanej kopii projektu, nigdy nie robi merge ani push;

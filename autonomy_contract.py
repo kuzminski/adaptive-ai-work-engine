@@ -245,6 +245,7 @@ def validate_mandate(data: Any) -> dict[str, Any]:
                  "model_policy_overrides.implementation must explicitly name the escalation profile and reason")
     for key in ("priorities", "possible_directions"):
         _str_list(roadmap.get(key, []), f"roadmap_mandate.{key}")
+    _validate_risk_register(roadmap.get("risk_register", []), ids)
 
     frozen = json.loads(json.dumps(data, ensure_ascii=False))
     frozen.pop("mandate_hash", None)
@@ -349,28 +350,139 @@ REQUIRED_CHARTER_GATE_CONDITIONS = ("ROADMAP_EXHAUSTED", "SCOPE_CHANGE", "ROLE_P
                                     "PROMOTION_REQUIRES_HUMAN")
 
 
+# ── human-confirmed risks → charter risk floors ─────────────────────────────
+# A risk the human confirmed before START (typed in the wizard or accepted from
+# the idea intake) lives in `roadmap_mandate.risk_register` and is a *minimum*
+# for the frozen charter: the architect may raise a floor or add rows, never
+# lower or drop one. The severity sets the floors deterministically.
+IMPLEMENTATION_FLOORS = ("NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT")
+FINAL_REVIEW_FLOORS = ("DEFAULT", "HARD", "CRITICAL")
+RISK_SEVERITIES = ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+RISK_SEVERITY_FLOORS: dict[str, tuple[str, str]] = {  # severity → (implementation_floor, final_review_floor)
+    "LOW": ("NORMAL", "DEFAULT"),
+    "MEDIUM": ("NORMAL", "HARD"),
+    "HIGH": ("HARDER", "HARD"),
+    "CRITICAL": ("SIGNIFICANTLY_DIFFICULT", "CRITICAL"),
+}
+MAX_RISKS = 50
+MAX_RISK_CHARS = 2000
+_RISK_REASON_CHARS = 240
+
+
+def _validate_risk_register(register: Any, item_ids: set[str]) -> None:
+    _require(isinstance(register, list) and len(register) <= MAX_RISKS,
+             f"roadmap_mandate.risk_register must be an array of at most {MAX_RISKS} risks")
+    seen: set[str] = set()
+    for row in register:
+        _require(isinstance(row, dict), "every risk_register row must be an object")
+        risk_id = row.get("risk_id")
+        _require(isinstance(risk_id, str) and risk_id.strip(), "every risk needs a risk_id")
+        _require(risk_id not in seen, f"duplicate risk_id {risk_id!r}")
+        seen.add(risk_id)
+        text = row.get("description")
+        _require(isinstance(text, str) and text.strip() and len(text) <= MAX_RISK_CHARS,
+                 f"{risk_id}: description must be non-empty text of at most {MAX_RISK_CHARS} characters")
+        _require(row.get("severity") in RISK_SEVERITIES, f"{risk_id}: severity must be one of {RISK_SEVERITIES}")
+        targets = row.get("item_ids", [])
+        _require(isinstance(targets, list) and all(t in item_ids for t in targets),
+                 f"{risk_id}: item_ids must name roadmap items (empty = the whole run)")
+        mitigation = row.get("mitigation")
+        _require(mitigation is None or isinstance(mitigation, str) and len(mitigation) <= MAX_RISK_CHARS,
+                 f"{risk_id}: mitigation must be text")
+
+
+def risks_for_items(mandate: Mapping[str, Any], item_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Register risks that apply to any of these roadmap items (a risk without item_ids applies to all)."""
+    wanted = set(item_ids)
+    return [dict(row) for row in (mandate.get("roadmap_mandate") or {}).get("risk_register") or []
+            if not row.get("item_ids") or wanted.intersection(row["item_ids"])]
+
+
+def mandated_risk_floors(mandate: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The minimum `risk_guidance` rows the human risk register imposes, in roadmap order.
+
+    Only items whose floors rise above NORMAL/DEFAULT get a row; LOW risks stay
+    in the mandate as context for the planner and reviewers.
+    """
+    rows: list[dict[str, str]] = []
+    for item in mandate["roadmap_mandate"]["items"]:
+        risks = [r for r in risks_for_items(mandate, [item["item_id"]]) if r["severity"] != "LOW"]
+        if not risks:
+            continue
+        floors = [RISK_SEVERITY_FLOORS[r["severity"]] for r in risks]
+        implementation = max((f[0] for f in floors), key=IMPLEMENTATION_FLOORS.index)
+        review = max((f[1] for f in floors), key=FINAL_REVIEW_FLOORS.index)
+        reason = "; ".join(f"HUMAN_CONFIRMED_RISK {r['risk_id']} ({r['severity']}): "
+                           + _clip(" ".join(r["description"].split()), _RISK_REASON_CHARS) for r in risks)
+        rows.append({"item_id": item["item_id"], "implementation_floor": implementation,
+                     "final_review_floor": review, "reason": reason})
+    return rows
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def enforce_risk_floors(rows: Sequence[Mapping[str, str]],
+                        mandated: Sequence[Mapping[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Architect rows raised to (or completed with) the mandated floors, plus what was changed.
+
+    Deterministic and never lowering: a row the architect dropped is added back
+    at the end, a lower floor is raised, and the human risk reason is appended.
+    """
+    out = [dict(row) for row in rows]
+    by_item = {row["item_id"]: row for row in out}
+    adjustments: list[dict[str, Any]] = []
+    for floor in mandated:
+        current = by_item.get(floor["item_id"])
+        if current is None:
+            row = dict(floor)
+            out.append(row)
+            by_item[row["item_id"]] = row
+            adjustments.append({"item_id": row["item_id"], "action": "ADDED",
+                                "implementation_floor": row["implementation_floor"],
+                                "final_review_floor": row["final_review_floor"]})
+            continue
+        raised = {}
+        for key, order in (("implementation_floor", IMPLEMENTATION_FLOORS),
+                           ("final_review_floor", FINAL_REVIEW_FLOORS)):
+            if order.index(floor[key]) > order.index(current[key]):
+                raised[key] = {"architect": current[key], "enforced": floor[key]}
+                current[key] = floor[key]
+        if floor["reason"] not in current["reason"]:
+            current["reason"] = f"{current['reason']} | {floor['reason']}"
+        if raised:
+            adjustments.append({"item_id": current["item_id"], "action": "RAISED", "fields": raised})
+    return out, adjustments
+
+
 def directional_charter_template(mandate: Mapping[str, Any]) -> dict[str, Any]:
     """The charter fields that are verbatim copies of the frozen mandate.
 
     Handed to the initial architect so it does not have to re-derive them;
     `validate_directional_charter` remains the authority and still checks
     every field. The architect contributes `risk_guidance` (and may append
-    further Human Gate conditions).
+    further Human Gate conditions); when the mandate carries a risk register,
+    the template pre-fills the mandated floors the architect may only raise.
     """
     source = mandate["roadmap_mandate"]
     contract = mandate["iteration_contract"]
-    return {"mandate_hash": mandate["mandate_hash"], "objective": source["objective"],
-            "roadmap_items": [{"item_id": item["item_id"], "title": item["title"],
-                               "depends_on": list(item.get("depends_on", [])),
-                               "human_required": item.get("human_required") is True}
-                              for item in source["items"]],
-            "acceptance_criteria": list(contract["acceptance_criteria"]),
-            "boundaries": {"scope": list(contract.get("scope", [])),
-                           "constraints": list(contract.get("constraints", [])),
-                           "forbidden_changes": list(contract.get("forbidden_changes", [])),
-                           "allowed_areas": source["autonomy_bounds"].get("allowed_areas"),
-                           "forbidden_areas": list(source["autonomy_bounds"].get("forbidden_areas", []))},
-            "human_gate_conditions": list(REQUIRED_CHARTER_GATE_CONDITIONS)}
+    template = {"mandate_hash": mandate["mandate_hash"], "objective": source["objective"],
+                "roadmap_items": [{"item_id": item["item_id"], "title": item["title"],
+                                   "depends_on": list(item.get("depends_on", [])),
+                                   "human_required": item.get("human_required") is True}
+                                  for item in source["items"]],
+                "acceptance_criteria": list(contract["acceptance_criteria"]),
+                "boundaries": {"scope": list(contract.get("scope", [])),
+                               "constraints": list(contract.get("constraints", [])),
+                               "forbidden_changes": list(contract.get("forbidden_changes", [])),
+                               "allowed_areas": source["autonomy_bounds"].get("allowed_areas"),
+                               "forbidden_areas": list(source["autonomy_bounds"].get("forbidden_areas", []))},
+                "human_gate_conditions": list(REQUIRED_CHARTER_GATE_CONDITIONS)}
+    mandated = mandated_risk_floors(mandate)
+    if mandated:
+        template["risk_guidance"] = mandated
+    return template
 
 
 def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict[str, Any]:
@@ -402,9 +514,8 @@ def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict
         implementation_floor = row.get("implementation_floor")
         review_floor = row.get("final_review_floor")
         reason = row.get("reason")
-        _require(implementation_floor in {"NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"},
-                 f"{item_id}: invalid implementation_floor")
-        _require(review_floor in {"DEFAULT", "HARD", "CRITICAL"}, f"{item_id}: invalid final_review_floor")
+        _require(implementation_floor in IMPLEMENTATION_FLOORS, f"{item_id}: invalid implementation_floor")
+        _require(review_floor in FINAL_REVIEW_FLOORS, f"{item_id}: invalid final_review_floor")
         _require(isinstance(reason, str) and reason.strip(), f"{item_id}: risk guidance needs a reason")
         normalized_risk.append({"item_id": item_id, "implementation_floor": implementation_floor,
                                 "final_review_floor": review_floor, "reason": reason.strip()})
@@ -425,6 +536,11 @@ def validate_directional_charter(value: Any, mandate: Mapping[str, Any]) -> dict
              "directional charter removed a mandatory Human Gate condition")
     frozen = {key: value[key] for key in ("mandate_hash", "objective", "roadmap_items", "acceptance_criteria",
                                           "boundaries", "human_gate_conditions")}
+    mandated = mandated_risk_floors(mandate)
+    if mandated:
+        normalized_risk, adjustments = enforce_risk_floors(normalized_risk, mandated)
+        frozen["mandated_risk_floors"] = mandated
+        frozen["risk_floor_adjustments"] = adjustments
     frozen["risk_guidance"] = normalized_risk
     return {**frozen, "charter_hash": canonical_hash(frozen)}
 
@@ -723,7 +839,7 @@ ROLES = ("planner", "implementer", "review_prep", "reviewer", "final_reviewer")
 # *declared contract default* (recorded as binding_source), never a runtime
 # substitution for an unavailable model.
 OPTIONAL_ROLE_ALIASES = {"self_verifier": "implementer", "repairer": "implementer"}
-NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation", "chain", "exploration"})
+NON_ROLE_KEYS = frozenset({"policy_profiles", "routing", "repair_escalation", "implementer_chain", "chain", "exploration"})
 ROLE_BY_EXECUTOR = {"plan": "planner", "diagnose": "repairer", "execute": "implementer", "self_verify": "self_verifier",
                     "review": "reviewer", "repair": "repairer", "final_review": "final_reviewer",
                     "prepare_packet": "review_prep"}
@@ -768,6 +884,18 @@ def validate_roles(config: Any, profiles: Mapping[str, Mapping[str, Any]]) -> di
             else:
                 resolved_policy[key] = _binding(key, profile_id, profile, "AUTONOMY_ROLES.policy_profiles")
         resolved["policy_profiles"] = resolved_policy
+    if config.get("implementer_chain") is not None:
+        import autonomy_policy
+        try:
+            chain_ids = autonomy_policy.validate_chain(config["implementer_chain"])
+        except ValueError as exc:
+            raise AutonomyError(str(exc)) from exc
+        unknown = [pid for pid in chain_ids if pid not in profiles]
+        _require(not unknown, f"implementer_chain references unknown profiles: {unknown}")
+        _require(config.get("policy_profiles") is not None,
+                 "implementer_chain requires policy_profiles (the chain drives the implementation slots)")
+        resolved["implementer_chain"] = [_binding("implementer_chain", pid, profiles[pid], "AUTONOMY_ROLES.implementer_chain")
+                                         for pid in chain_ids]
     if config.get("routing") is not None:
         import model_router
         routing = config["routing"]
@@ -830,6 +958,9 @@ def agent_identities(roles: Mapping[str, Mapping[str, Any]]) -> set[str]:
     out: set[str] = set()
     bindings: list[Mapping[str, Any]] = []
     for key, value in roles.items():
+        if key == "implementer_chain" and isinstance(value, list):
+            bindings.extend(row for row in value if isinstance(row, Mapping) and "profile_id" in row)
+            continue
         if not isinstance(value, Mapping) or key in ("routing", "repair_escalation", "chain", "exploration"):
             continue
         if "profile_id" in value:

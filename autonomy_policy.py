@@ -43,6 +43,76 @@ def validate_policy_ids(values: Any) -> dict[str, str]:
     return {key: str(values[key]) for key in PROFILE_KEYS}
 
 
+# ── implementer chain (user- or system-defined escalation order) ─────────────
+#
+# A chain is an ordered list of profile IDs, weakest step first. With a chain the
+# implementation family (implement / repair / review-prep) climbs it in order: the
+# plan's complexity picks the starting step and a blocking capability failure
+# moves one step up. A single-element chain pins one model for everything. The
+# legacy `implementer_*` slots stay populated from the chain (clamped to its
+# length) so the human override, the UI and older records keep their meaning.
+
+CHAIN_KEY = "implementer_chain"
+MAX_CHAIN_LENGTH = 12
+_COMPLEXITY_START = {"NORMAL": 0, "HARDER": 1, "SIGNIFICANTLY_DIFFICULT": 2}
+# a work packet assessed as visibly hard starts at least this far up the chain
+_DIFFICULTY_START = {"HARDER": 1, "STRONG": 2}
+# chain index each legacy slot reads from (clamped to the chain length)
+CHAIN_SLOT_INDEX = {"implementer_default": 0, "implementer_harder": 1, "implementer_hard": 2,
+                    "implementer_strong": 2, "implementer_capability_escalation": 3,
+                    "repair_default": 1, "repair_hard": 2,
+                    "review_pretreatment": 1}
+# first chain index that counts as "escalated beyond the Luna-class tiers" for final-review severity
+CHAIN_ESCALATED_FROM_INDEX = 3
+
+
+def validate_chain(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple)) or not values:
+        raise ValueError("implementer_chain must be a non-empty list of profile IDs")
+    chain = [str(v).strip() for v in values if isinstance(v, str) and v.strip()]
+    if len(chain) != len(values):
+        raise ValueError("implementer_chain entries must be non-empty profile ID strings")
+    if len(set(chain)) != len(chain):
+        raise ValueError("implementer_chain must not repeat a profile")
+    if len(chain) > MAX_CHAIN_LENGTH:
+        raise ValueError(f"implementer_chain may have at most {MAX_CHAIN_LENGTH} steps")
+    return chain
+
+
+def chain_slot_ids(chain: Sequence[str]) -> dict[str, str]:
+    """The legacy implementation slots implied by a chain (indexes clamped to its length)."""
+    chain = validate_chain(chain)
+    return {slot: chain[min(index, len(chain) - 1)] for slot, index in CHAIN_SLOT_INDEX.items()}
+
+
+def _chain_selection(chain: Sequence[str], index: int, reason: str, *, tier: str,
+                     evidence: Sequence[Any] = (), previous_attempt: Mapping[str, Any] | None = None,
+                     escalated_from: str | None = None) -> dict[str, Any]:
+    return {
+        "policy_version": POLICY_VERSION,
+        "profile_key": f"{CHAIN_KEY}[{index}]",
+        "profile_id": chain[index],
+        "selection_reason": reason,
+        "tier": tier,
+        "complexity_risk_evidence": [str(item) for item in evidence],
+        "previous_attempt": dict(previous_attempt) if previous_attempt else None,
+        "escalated_from": escalated_from,
+        "chain_index": index,
+        "chain_length": len(chain),
+    }
+
+
+def _chain_capability_failure(chain: Sequence[str], previous_attempt: Mapping[str, Any] | None) -> int | None:
+    """Index of the chain step that failed with a concrete capability mismatch (None if none or last step)."""
+    if not previous_attempt or previous_attempt.get("profile_id") not in chain:
+        return None
+    qualifying = (previous_attempt.get("outcome") == "FAILED"
+                  and previous_attempt.get("finding_code") == "IMPLEMENTATION_CAPABILITY_MISMATCH"
+                  and bool(previous_attempt.get("execution_id")) and bool(previous_attempt.get("evidence_ref")))
+    index = list(chain).index(previous_attempt["profile_id"])
+    return index if qualifying and index < len(chain) - 1 else None
+
+
 def _selection(profile_key: str, profiles: Mapping[str, str], reason: str, *, tier: str,
                evidence: Sequence[Any] = (), previous_attempt: Mapping[str, Any] | None = None,
                escalated_from: str | None = None) -> dict[str, Any]:
@@ -65,7 +135,8 @@ def select_initial_planner(profiles: Mapping[str, str]) -> dict[str, Any]:
 def select_implementation(profiles: Mapping[str, str], complexity: str = "NORMAL", *,
                           evidence: Sequence[Any] = (), previous_attempt: Mapping[str, Any] | None = None,
                           human_override: Mapping[str, Any] | None = None,
-                          difficulty: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                          difficulty: Mapping[str, Any] | None = None,
+                          chain: Sequence[str] | None = None) -> dict[str, Any]:
     """Choose the implementer by visible difficulty.
 
     NORMAL → the default bounded implementer; HARDER → its harder tier;
@@ -74,6 +145,10 @@ def select_implementation(profiles: Mapping[str, str], complexity: str = "NORMAL
     route STRONG) → the STRONG implementer up front, instead of a long repair
     thread by a weaker model. Sonnet capability escalation still needs concrete
     evidence or a human override.
+
+    With a `chain` the starting step follows the plan's complexity (raised by the
+    work-packet difficulty) and a concrete capability failure of a step moves to
+    the next one; legacy tiers are not used.
     """
     profiles = with_fallbacks(profiles)
     value = str(complexity or "NORMAL").upper()
@@ -91,6 +166,19 @@ def select_implementation(profiles: Mapping[str, str], complexity: str = "NORMAL
         return _selection("implementer_capability_escalation", profiles, "HUMAN_OVERRIDE", tier="SONNET",
                           evidence=[*evidence, reason], previous_attempt=previous_attempt,
                           escalated_from=profiles["implementer_hard"])
+    if chain:
+        failed = _chain_capability_failure(chain, previous_attempt)
+        if failed is not None:
+            return _chain_selection(chain, failed + 1, "CHAIN_CAPABILITY_FAILURE", tier=f"CHAIN_STEP_{failed + 2}",
+                                    evidence=[*evidence, str(previous_attempt["evidence_ref"])],
+                                    previous_attempt=previous_attempt, escalated_from=chain[failed])
+        key, reason = route[value]
+        start = _COMPLEXITY_START[value]
+        if _DIFFICULTY_START.get(difficulty_route, 0) > start:
+            start, reason, evidence = (_DIFFICULTY_START[difficulty_route], "WORK_PACKET_DIFFICULTY",
+                                       [*evidence, *difficulty_reasons])
+        index = min(start, len(chain) - 1)
+        return _chain_selection(chain, index, reason, tier=value, evidence=evidence)
     if previous_attempt:
         qualifying = (
             previous_attempt.get("profile_id") in (profiles["implementer_hard"], profiles["implementer_strong"])
@@ -119,10 +207,20 @@ def select_implementation(profiles: Mapping[str, str], complexity: str = "NORMAL
 def select_repair(profiles: Mapping[str, str], *, attempt: int,
                   findings: Sequence[Mapping[str, Any]],
                   previous_attempt: Mapping[str, Any] | None = None,
-                  implementation_profile_id: str | None = None) -> dict[str, Any]:
+                  implementation_profile_id: str | None = None,
+                  chain: Sequence[str] | None = None) -> dict[str, Any]:
     profiles = with_fallbacks(profiles)
-    if previous_attempt and previous_attempt.get("profile_id") in (profiles["implementer_hard"],
-                                                                  profiles["implementer_strong"]):
+    if chain:
+        capability_finding = next((f for f in findings
+                                   if f.get("finding_code") == "IMPLEMENTATION_CAPABILITY_MISMATCH"
+                                   and f.get("blocking") is True and f.get("evidence_ref")), None)
+        failed = _chain_capability_failure(chain, previous_attempt) if capability_finding else None
+        if failed is not None:
+            return _chain_selection(chain, failed + 1, "CHAIN_CAPABILITY_FAILURE", tier="CHAIN_REPAIR",
+                                    evidence=[str(capability_finding["evidence_ref"])],
+                                    previous_attempt=previous_attempt, escalated_from=chain[failed])
+    elif previous_attempt and previous_attempt.get("profile_id") in (profiles["implementer_hard"],
+                                                                    profiles["implementer_strong"]):
         capability_finding = next((f for f in findings
                                    if f.get("finding_code") == "IMPLEMENTATION_CAPABILITY_MISMATCH"
                                    and f.get("blocking") is True), None)
@@ -134,7 +232,7 @@ def select_repair(profiles: Mapping[str, str], *, attempt: int,
                               previous_attempt=previous_attempt,
                               escalated_from=profiles["implementer_hard"])
     strong = profiles["implementer_strong"]
-    if implementation_profile_id and implementation_profile_id == strong and strong not in (
+    if not chain and implementation_profile_id and implementation_profile_id == strong and strong not in (
             profiles["repair_default"], profiles["repair_hard"]):
         # Work the strong implementer was given because it was visibly hard is not handed to a weaker repairer.
         return _selection("implementer_strong", profiles, "REPAIR_KEEPS_STRONG_IMPLEMENTER", tier="STRONG",
@@ -158,7 +256,7 @@ _ARCHITECTURE_PATHS = {"autonomy_controller.py"}
 def select_final_review(profiles: Mapping[str, str], *, changed_files: Sequence[str],
                         repair_attempts: int, findings: Sequence[Mapping[str, Any]],
                         human_critical: bool = False, implementation_profile_id: str | None = None,
-                        uncertainty: bool = False) -> dict[str, Any]:
+                        uncertainty: bool = False, chain: Sequence[str] | None = None) -> dict[str, Any]:
     files = {str(path).replace("\\", "/").rsplit("/", 1)[-1].lower() for path in changed_files}
     severe = [f for f in findings if str(f.get("severity", "")).upper() in {"HIGH", "CRITICAL"}]
     critical_evidence = []
@@ -178,7 +276,10 @@ def select_final_review(profiles: Mapping[str, str], *, changed_files: Sequence[
         hard_evidence.append(f"REPEATED_REPAIR:{repair_attempts}")
     if len(severe) >= 2:
         hard_evidence.append(f"MULTIPLE_SEVERE_FINDINGS:{len(severe)}")
-    if implementation_profile_id == profiles["implementer_capability_escalation"]:
+    if chain:
+        if implementation_profile_id in chain and list(chain).index(implementation_profile_id) >= CHAIN_ESCALATED_FROM_INDEX:
+            hard_evidence.append("IMPLEMENTATION_ESCALATED_BEYOND_LUNA_MAX")
+    elif implementation_profile_id == profiles["implementer_capability_escalation"]:
         hard_evidence.append("IMPLEMENTATION_ESCALATED_BEYOND_LUNA_MAX")
     if uncertainty:
         hard_evidence.append("REVIEW_UNCERTAINTY")
@@ -213,7 +314,7 @@ def profile_id_map(policy_bindings: Mapping[str, Mapping[str, Any]]) -> dict[str
 
 # ── V0.4: bounded repair escalation (roles, not model names) ─────────────────
 
-def default_repair_escalation(profiles: Mapping[str, str]) -> dict[str, Any]:
+def default_repair_escalation(profiles: Mapping[str, str], chain: Sequence[str] | None = None) -> dict[str, Any]:
     """The ladder implied by the policy profiles when AUTONOMY_ROLES does not configure one.
 
     Roles only: `default_implementer` is the implementer family's profile,
@@ -222,6 +323,15 @@ def default_repair_escalation(profiles: Mapping[str, str]) -> dict[str, Any]:
     an explicit `repair_escalation` block) changes the ladder; this module
     names no model.
     """
+    if chain:
+        # The repair ladder walks the implementer chain in order; the last step is the "difficult implementer".
+        chain = validate_chain(chain)
+        return {"enabled": True, "stages": ["CURRENT", "EFFORT_UP", "DIFFICULT_IMPLEMENTER", "PLANNER_DIAGNOSIS"],
+                "max_effort_steps": min(6, max(1, len(chain) - 3)), "max_attempts_per_stage": 2,
+                "effort_ladder": list(chain),
+                "roles": {"default_implementer": chain[0], "difficult_implementer": chain[-1],
+                          "planner": profiles["initial_planner"], "reviewer": profiles["primary_reviewer"],
+                          "final_reviewer": profiles["final_review_default"]}}
     strong = profiles.get("implementer_strong")
     # With a STRONG implementer configured, a finding that survived the weak repairer goes straight to it
     # (fresh context, diagnosis first) instead of another, longer attempt by the same weak model family.

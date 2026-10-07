@@ -1,5 +1,21 @@
 # Changelog — AAW product app
 
+## Unreleased — known risks set the planner charter's risk floors
+
+Details: `AAW_RISK_REGISTER_CHARTER_V0_1.md`.
+
+- New wizard field "Znane ryzyka" (Zaawansowane), also fed by rows from the idea intake: each risk has a level
+  (niskie / średnie / wysokie / krytyczne) and optional roadmap points; stored as the mandate's `risk_register`.
+- The level sets minimum implementation / final-review floors in the frozen directional charter
+  (MEDIUM → hard review; HIGH → harder implementation + hard review; CRITICAL → strongest implementation and
+  critical review). The initial architect may only raise them; a dropped or lowered floor is restored and
+  recorded (`risk_floor_adjustments`), never a rejection.
+- Planner names applicable risks in work-packet pitfalls; implementer gets `RISK_FOCUS`, reviewers `RISK_CHECKS`.
+- Summary before START lists the risks and the floors (CRITICAL adds a cost warning); the run's charter brief
+  shows what the risks enforced. Summary table stacks on phones.
+- Windows walkthrough uses the example presets (the old example buttons are gone).
+
+
 ## Unreleased — chain mode, telemetry V1, AAW-Bench
 
 Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
@@ -38,7 +54,18 @@ Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
 - Tests: `test_autonomy_explore.py` (20), `test_product_intake.py` (25).
 - Performance: the run page's live block is cached by file state and skipped on the Home list (the first version recomputed history and benchmark on every 0.15-1.5 s poll and slowed a product test by ~20 s).
 
-## Unreleased — implementer effectiveness (phase 1)
+- Goal / First iteration / Direction fields are no longer cut (was 2000 / 2000 / 12 points × 400 chars);
+  safety ceilings only (200k / 200k / 500k chars, 200 points), refused with a clear message, never truncated.
+- Direction text is split into points preserving multi-line Markdown; the verbatim text is kept in the mandate.
+- New "standing" roadmap item (`recurring: true`, id `CONTINUE`): an accepted iteration never completes it, so
+  PLAN → … → FINAL_REVIEW → ROADMAP_CHECK → PLAN continues until the planner skips it with a reason or a fuse
+  fires. Option `advanced.continue_autonomously` (default on; off = previous behaviour).
+- Iteration cap is a fuse: default 40 (was `len(items)+2`), hard ceiling 200 (was 50).
+- Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
+- UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
+  (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
+
+## 0.4.0 — 2026-10-06 — Implementer effectiveness (phase 1) + Antigravity CLI (includes 0.3.0)
 
 Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. Lifecycle unchanged.
 - Plans carry a mandatory **work packet** (files to read/change, small ordered steps with per-step verification,
@@ -51,10 +78,15 @@ Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. 
   request) go to GPT-6.1 Sol medium up front (new slot `implementer_strong`); a finding that survives the weak
   repairer goes straight to it with diagnosis first (EFFORT_UP skipped). Next iterations are planned by
   GPT-6.1 Sol medium (new slot `continuation_planner`) instead of Sol 5.6 light.
+- With an implementer chain (the default since 0.3.0, or one chosen at start) the chain stays the authority:
+  difficulty routing only raises the starting step (packet route HARDER → at least step 2, STRONG → at least
+  step 3) and `implementer_strong` maps to chain step 3; GPT-6.1 Sol medium is used up front only by the
+  model sets without a chain (Szybka / Zbalansowana / Silna).
 - Review pretreatment is off by default (one model call per review round with no effect on the verdict).
-- **Gemini CLI** support (detection, login status, "Sprawdź modele", role dispatch); profiles `GEMINI_3_1_PRO`,
-  `GEMINI_3_FLASH`, usable after a local probe. Routing alternatives are limited to profiles runnable on this
-  machine.
+- **Antigravity CLI (`agy`)** support — successor of the Gemini CLI, which Google shut down (detection, login
+  status via `agy -p /usage`, "Sprawdź modele", role dispatch with `--json-schema`); profiles `AGY_GEMINI_3_1_PRO`,
+  `AGY_GEMINI_FLASH`, usable after a local probe. The interim Gemini CLI harness is removed. Routing
+  alternatives are limited to profiles runnable on this machine.
 - Required-evidence matching tolerates naming variants ("Unit-tests (pytest)" substantiates "unit tests").
 
 ## Unreleased — long-form fields, example presets, count-free autonomy
@@ -71,6 +103,21 @@ Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
 - Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
 - UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
   (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
+
+## 0.3.0 — 2026-10-04 — Implementer chain chosen at start (includes 0.2.1)
+
+Details: `AAW_IMPLEMENTER_CHAIN_V0_1.md`. Lifecycle unchanged.
+- The implementer is no longer fixed: at the "Modele" step the user can pick any model as the implementer, or an
+  ordered escalation chain of models (from → to, any length 1–12). Default chain set by the system:
+  GPT-6 Luna high → very high → max → GPT-5.6 Terra high → very high → max → Claude Sonnet 5.5 medium → high.
+- New exact profiles: `TERRA_VERY_HIGH`, `TERRA_MAX`, `CLAUDE_SONNET_5_5_HIGH`.
+- The chain is frozen with the run (`roles.implementer_chain`) and drives start (by plan complexity), capability
+  escalation, repairs and the repair ladder. A step that is not runnable here is never replaced by another model.
+
+## 0.2.1 — 2026-10-04 — antivirus false-positive mitigation
+- `AAW.exe` now carries a Windows version resource (company, product, description, version).
+- CI builds the PyInstaller bootloader from source and scans the built app with Microsoft Defender (informational).
+- Start guides explain what to do when Defender quarantines the file.
 
 ## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 

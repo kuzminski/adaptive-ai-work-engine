@@ -210,7 +210,8 @@ def main(argv: list[str]) -> int:
         with calls_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"role": role, "harness": harness, "argv": argv, "cwd": os.getcwd(),
                                      "pid": os.getpid(), "execution_id": handoff.get("EXECUTION_ID"),
-                                     "iteration_id": handoff.get("ITERATION_ID")}) + "\n")
+                                     "iteration_id": handoff.get("ITERATION_ID"),
+                                     "handoff_keys": sorted(handoff)}) + "\n")
     if step.get("sleep"):
         time.sleep(float(step["sleep"]))
     for rel, content in (step.get("write_files") or {}).items():

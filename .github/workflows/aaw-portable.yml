@@ -58,14 +58,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install build and test tools
-        run: python -m pip install pyinstaller==6.22.3 pytest playwright
+      - name: Install build and test tools (PyInstaller bootloader compiled from source - fewer AV false positives)
+        run: |
+          python -m pip install pytest playwright
+          python -m pip install --no-binary pyinstaller pyinstaller==6.22.3
       - name: Engine safe-stop + product suites (real worker processes, fake CLIs via .cmd wrappers)
         timeout-minutes: 15
         run: python -m pytest -q -p no:cacheprovider -rf test_autonomy_safe_stop.py test_product_mvp.py test_product_mvp_v0_2.py
       - name: Build portable app (includes frozen --self-test and --version)
         timeout-minutes: 10
         run: python packaging/build_portable.py
+      - name: Microsoft Defender scan of the built app (informational)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $mp = Get-ChildItem "$env:ProgramFiles\Windows Defender\MpCmdRun.exe","$env:ProgramData\Microsoft\Windows Defender\Platform\*\MpCmdRun.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if (-not $mp) { Write-Output "Defender not available on this runner"; exit 0 }
+          & $mp.FullName -Scan -ScanType 3 -File "$PWD\dist\AAW" -DisableRemediation
+          Write-Output "MpCmdRun exit code: $LASTEXITCODE (0 = nothing found, 2 = threat detected)"
+          Get-FileHash dist\AAW\AAW.exe, dist\AAW-Windows-x64.zip -Algorithm SHA256 | Format-Table -AutoSize
       - name: Frozen exe — version, self-test, provider detection, UI on loopback
         timeout-minutes: 3
         shell: pwsh

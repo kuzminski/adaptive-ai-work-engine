@@ -167,6 +167,38 @@
       "curated": true
     },
     {
+      "profile_id": "TERRA_VERY_HIGH",
+      "display_name": "Terra / very high",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR"
+      ],
+      "description": "Implementacja wymagająca dłuższego rozumowania (krok łańcucha implementatora).",
+      "ui_hint": "Trudniejsza implementacja",
+      "harness": "codex",
+      "runtime_model_id": "gpt-5.6-terra",
+      "effort": "xhigh",
+      "availability": "VERIFIED",
+      "curated": true
+    },
+    {
+      "profile_id": "TERRA_MAX",
+      "display_name": "Terra / max",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR"
+      ],
+      "description": "Implementacja wymagająca dłuższego rozumowania (krok łańcucha implementatora).",
+      "ui_hint": "Trudniejsza implementacja",
+      "harness": "codex",
+      "runtime_model_id": "gpt-5.6-terra",
+      "effort": "max",
+      "availability": "VERIFIED",
+      "curated": true
+    },
+    {
       "profile_id": "SOL_MEDIUM",
       "display_name": "Sol / medium",
       "suitable_for": [
@@ -498,6 +530,22 @@
       "curated": true
     },
     {
+      "profile_id": "CLAUDE_SONNET_5_5_HIGH",
+      "display_name": "Claude Sonnet 5.5 / high (exact)",
+      "suitable_for": [
+        "IMPLEMENT",
+        "REVIEW",
+        "REPAIR"
+      ],
+      "description": "Claude Sonnet 5.5 (high), dokładny ID runtime; użyty dopiero po sprawdzeniu na tym komputerze.",
+      "harness": "claude",
+      "runtime_model_id": "claude-sonnet-5-5",
+      "effort": "high",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "curated": true
+    },
+    {
       "profile_id": "ANTIGRAVITY_FREE",
       "display_name": "Google Antigravity (FREE) / experimental",
       "suitable_for": [
@@ -533,8 +581,8 @@
       "curated": true
     },
     {
-      "profile_id": "GEMINI_3_1_PRO",
-      "display_name": "Gemini 3.1 Pro (Gemini CLI)",
+      "profile_id": "AGY_GEMINI_3_1_PRO",
+      "display_name": "Gemini 3.1 Pro (Antigravity CLI)",
       "suitable_for": [
         "IMPLEMENT",
         "SUBTASK",
@@ -542,25 +590,25 @@
         "REVIEW",
         "PLAN"
       ],
-      "description": "Google Gemini 3.1 Pro through the locally installed Gemini CLI; requires its own Google login or API key. Usable after a local probe.",
-      "harness": "gemini",
-      "runtime_model_id": "gemini-3.1-pro-preview",
+      "description": "Google Gemini 3.1 Pro through the locally installed Antigravity CLI (agy); requires its own Google sign-in. Usable after a local probe.",
+      "harness": "agy",
+      "runtime_model_id": "gemini-3.1-pro-high",
       "effort": "default",
       "availability": "VERIFIED",
       "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "curated": true
     },
     {
-      "profile_id": "GEMINI_3_FLASH",
-      "display_name": "Gemini 3 Flash (Gemini CLI)",
+      "profile_id": "AGY_GEMINI_FLASH",
+      "display_name": "Gemini 3.7 Flash (Antigravity CLI)",
       "suitable_for": [
         "SUBTASK",
         "REPAIR",
         "IMPLEMENT"
       ],
-      "description": "Google Gemini 3 Flash through the Gemini CLI; fast bounded implementation/repair. Usable after a local probe.",
-      "harness": "gemini",
-      "runtime_model_id": "gemini-3-flash-preview",
+      "description": "Google Gemini 3.7 Flash through the Antigravity CLI (agy); fast bounded implementation/repair. Usable after a local probe.",
+      "harness": "agy",
+      "runtime_model_id": "gemini-3.7-flash-high",
       "effort": "default",
       "availability": "VERIFIED",
       "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",

@@ -368,9 +368,9 @@
     },
     {
       "provider": "google",
-      "harness": "gemini",
-      "model_family": "Gemini 3.1 Pro (preview) via Gemini CLI",
-      "runtime_model_id": "gemini-3.1-pro-preview",
+      "harness": "agy",
+      "model_family": "Gemini 3.1 Pro (High) via Antigravity CLI",
+      "runtime_model_id": "gemini-3.1-pro-high",
       "supported_efforts": [
         "default"
       ],
@@ -383,18 +383,18 @@
       "product_activation": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "trust_level": "SECONDARY",
       "live_integration": "PROBE_REQUIRED",
-      "minimum_cli_version": "0.62.0",
-      "role_hint": "Alternative implementer/reviewer through the Gemini CLI (Google account or API key). Used only after 'Sprawdź modele' saw the installed CLI accept this exact model.",
+      "minimum_cli_version": "1.0.0",
+      "role_hint": "Alternative implementer/reviewer through the Antigravity CLI (agy) (Google account or API key). Used only after 'Sprawdź modele' saw the installed CLI accept this exact model.",
       "source_class": [
-        "GEMINI_CLI_0_62_MODEL_CONSTANTS",
+        "ANTIGRAVITY_CLI_MODEL_SLUGS",
         "AAW_PRODUCT_RUNTIME_PROBE"
       ]
     },
     {
       "provider": "google",
-      "harness": "gemini",
-      "model_family": "Gemini 3 Flash (preview) via Gemini CLI",
-      "runtime_model_id": "gemini-3-flash-preview",
+      "harness": "agy",
+      "model_family": "Gemini 3.7 Flash (High) via Antigravity CLI",
+      "runtime_model_id": "gemini-3.7-flash-high",
       "supported_efforts": [
         "default"
       ],
@@ -407,10 +407,10 @@
       "product_activation": "LOCAL_RUNTIME_PROBE_REQUIRED",
       "trust_level": "SECONDARY",
       "live_integration": "PROBE_REQUIRED",
-      "minimum_cli_version": "0.62.0",
-      "role_hint": "Fast/cheap bounded implementation and repair through the Gemini CLI. Probe required.",
+      "minimum_cli_version": "1.0.0",
+      "role_hint": "Fast/cheap bounded implementation and repair through the Antigravity CLI (agy). Probe required.",
       "source_class": [
-        "GEMINI_CLI_0_62_MODEL_CONSTANTS",
+        "ANTIGRAVITY_CLI_MODEL_SLUGS",
         "AAW_PRODUCT_RUNTIME_PROBE"
       ]
     }

@@ -10,8 +10,8 @@ path in `autonomy_adapters`) has to implement so that decision can be honoured:
     preflight()       None if a profile is runnable now, else the reason
     invoke()          run one role call and return the structured result
 
-Google models are served today through the Gemini CLI, a built-in direct
-CLI harness (`gemini`) in `autonomy_adapters` with detection and model probes
+Google models are served today through the Antigravity CLI (`agy`), a built-in
+direct CLI harness in `autonomy_adapters` with detection and model probes
 in `product_providers` (see AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md).
 
 Google Antigravity (FREE) is the first adapter-contract provider. Its trust level is
