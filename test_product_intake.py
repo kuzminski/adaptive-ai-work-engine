@@ -259,7 +259,7 @@ def test_the_applied_recommendation_is_recorded_as_a_user_confirmed_audit_entry(
         "recommendation": {"slot": "implementer_default", "profile_id": "TERRA_HIGH", "kind": "BUGFIX", "n": 9, "rate": 0.9,
                            "cost_per_solved": 0.02, "evil": "ignored", "previous_profile_id": "GPT6_LUNA_HIGH"}}})
     rec = form["advanced"]["recommendation"]
-    assert rec == {"source": "EXPERIENCE", "slot": "implementer_default", "profile_id": "TERRA_HIGH", "kind": "BUGFIX",
+    assert rec == {"source": "EXPERIENCE", "slot": "implementer_default", "chain": None, "profile_id": "TERRA_HIGH", "kind": "BUGFIX",
                    "previous_profile_id": "GPT6_LUNA_HIGH", "n": 9, "rate": 0.9, "cost_per_solved": 0.02, "confirmed_by_user": True}
     assert form["advanced"]["profile_overrides"] == {"implementer_default": "TERRA_HIGH"}
     assert prun.normalize_form({"goal": "Zbuduj coś ciekawego"})["advanced"]["recommendation"] is None
