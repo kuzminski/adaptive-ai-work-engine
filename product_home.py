@@ -96,7 +96,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "review": "RECOMMENDED",
     "online_recommendation_updates": False,
     "max_repair_attempts": 2,
-    "provider_timeout_s": 1800,
+    "provider_timeout_s": 3600,
     "first_run_completed": False,
 }
 

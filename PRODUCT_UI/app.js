@@ -174,22 +174,94 @@ async function renderRuns() {
 
 // ── new task wizard ──────────────────────────────────────────────────────────
 const STEPS = ["Projekt", "Narzędzia AI", "Modele", "Cel", "Pierwsza iteracja", "Kierunek", "Start"];
-const EXAMPLES = [
-  {title: "Tracker wydatków (Python)", goal: "Prosta aplikacja w Pythonie do śledzenia wydatków: dodawanie wydatków, lista i eksport do CSV.",
-   first: "Model danych wydatku (kwota, kategoria, data, opis) i zapis/odczyt z pliku JSON, z testami jednostkowymi.",
-   dirs: "- polecenia w terminalu: dodaj, lista, usuń\n- eksport do CSV\n- podsumowanie miesięczne"},
-  {title: "Testy i walidacja w istniejącym projekcie", goal: "Zwiększ niezawodność istniejącego kodu: testy dla obecnego zachowania i czytelne błędy przy złych danych wejściowych.",
-   first: "Dodaj testy jednostkowe opisujące obecne zachowanie głównego modułu (bez zmiany logiki).",
-   dirs: "- walidacja danych wejściowych z czytelnymi komunikatami\n- krótka dokumentacja w README"},
-  {title: "Lista zadań w przeglądarce (HTML/JS)", goal: "Mała strona HTML/JavaScript z listą zadań do zrobienia, działająca bez serwera.",
-   first: "Strona index.html z dodawaniem i usuwaniem zadań zapisywanych w localStorage.",
-   dirs: "- filtrowanie: wszystkie / zrobione / do zrobienia\n- prosty, czytelny wygląd\n- eksport listy do pliku JSON"},
-];
+// ── long-text editor (first-class: prompts and roadmaps are long) ───────────
+// Plain <textarea> + auto-height, enlarge-to-full-screen, copy, counter. No length limit in the UI;
+// the server's safety ceiling (boot.limits.max_field_chars) is far above realistic prompts.
+function editorHtml(id, value, opts = {}) {
+  const rows = opts.rows || 5;
+  return `<div class="editor" id="ed-${id}">
+    <textarea id="${id}" rows="${rows}" spellcheck="false" placeholder="${esc(opts.placeholder || "")}">${esc(value)}</textarea>
+    <div class="editor-bar"><span class="editor-count small muted" id="cnt-${id}"></span>
+      <span class="editor-actions"><button type="button" class="ghost" data-ed-copy="${id}" title="Kopiuj całą treść">Kopiuj</button>
+      <button type="button" class="ghost" data-ed-expand="${id}" title="Edytuj w powiększeniu (Esc zamyka)">Powiększ ⤢</button></span></div></div>`;
+}
+function bindEditor(id, onChange) {
+  const t = document.getElementById(id), wrap = document.getElementById("ed-" + id);
+  if (!t || !wrap) return;
+  const count = document.getElementById("cnt-" + id);
+  const fit = () => {
+    if (wrap.classList.contains("expanded")) { t.style.height = ""; return; }
+    t.style.height = "auto";
+    t.style.height = Math.min(t.scrollHeight + 2, Math.round(window.innerHeight * 0.6)) + "px";
+  };
+  const refresh = () => {
+    const n = t.value.length, lines = t.value ? t.value.split("\n").length : 0;
+    count.textContent = n ? `${n.toLocaleString("pl-PL")} znaków · ${lines} ${lines === 1 ? "linia" : "linii"}` : "";
+    fit();
+  };
+  t.addEventListener("input", () => { refresh(); if (onChange) onChange(t.value); });
+  wrap.querySelector("[data-ed-copy]").onclick = async () => {
+    try { await navigator.clipboard.writeText(t.value); toast("Skopiowano do schowka."); }
+    catch (e) { t.select(); toast("Zaznaczono tekst — skopiuj Ctrl+C."); }
+  };
+  const expandBtn = wrap.querySelector("[data-ed-expand]");
+  const setExpanded = (on) => {
+    wrap.classList.toggle("expanded", on);
+    document.body.classList.toggle("editor-open", on);
+    expandBtn.textContent = on ? "Zamknij ✕" : "Powiększ ⤢";
+    refresh(); t.focus();
+  };
+  expandBtn.onclick = () => setExpanded(!wrap.classList.contains("expanded"));
+  t.addEventListener("keydown", (e) => { if (e.key === "Escape" && wrap.classList.contains("expanded")) { e.stopPropagation(); setExpanded(false); } });
+  refresh();
+  return {refresh, set(v) { t.value = v; refresh(); }};
+}
+// Draft of the three long fields survives reload / navigation (per browser; never sent anywhere).
+const DRAFT_KEY = "aaw.newtask.draft.v1";
+function draftRead() { try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); return d && (d.goal || d.first_iteration || d.directions) ? d : null; } catch (e) { return null; } }
+function draftSave() {
+  const f = formState; if (!f) return;
+  try {
+    if (!(f.goal || f.first_iteration || f.directions)) { localStorage.removeItem(DRAFT_KEY); return; }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({goal: f.goal, first_iteration: f.first_iteration, directions: f.directions, at: new Date().toISOString()}));
+    const el = document.getElementById("draft-state"); if (el) el.textContent = "Szkic zapisany lokalnie w tej przeglądarce — nie zginie po odświeżeniu.";
+  } catch (e) { /* storage unavailable: editing still works */ }
+}
+function draftClear() { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ } }
+function presetPickerHtml() {
+  const presets = boot.presets || [];
+  if (!presets.length) return "";
+  return `<div class="preset-box"><div class="preset-head"><strong>Przykładowe wypełnienie</strong>
+      <span class="small muted">Wczytuje przykład do kroków 4–6. To tylko wzór — możesz go dowolnie zmienić; nic nie jest obowiązkowe.</span></div>
+    <div class="preset-list">${presets.map((x) => `<button type="button" class="preset" data-preset="${esc(x.id)}"><strong>${esc(x.title)}</strong><span class="small muted">${esc(x.description || "")}</span></button>`).join("")}</div></div>`;
+}
+function bindPresets(onLoaded) {
+  view.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
+    const x = (boot.presets || []).find((p) => p.id === b.dataset.preset);
+    if (!x) return;
+    const f = formState;
+    if ((f.goal || f.first_iteration || f.directions) && !confirm("Zastąpić obecną treść pól Cel / Pierwsza iteracja / Kierunek przykładem?")) return;
+    f.goal = x.goal; f.first_iteration = x.first_iteration; f.directions = x.directions;
+    draftSave(); onLoaded();
+    toast("Wczytano przykład — zmień go dowolnie.");
+  }));
+}
 function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
-          planning: s.planning, implementation: s.implementation, review: s.review, base: null, setup: null, preview: null,
-          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", profile_overrides: {}}};
+          planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
+          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}, risks: ""}};
+}
+// Known risks: wizard text, or rows from the idea intake / a continuation ({description, severity, item_ids|points}).
+const RISK_WORD = {LOW: "niskie", MEDIUM: "średnie", HIGH: "wysokie", CRITICAL: "krytyczne"};
+function risksText(v) {
+  if (!Array.isArray(v)) return String(v || "");
+  const point = (id) => /^STEP_\d+$/.test(id) ? id.slice(5) : String(id);  // STEP_k = point k of the summary list
+  return v.map((r) => {
+    if (typeof r === "string") return r;
+    const refs = r.item_ids ? r.item_ids.map(point) : (r.points || []);
+    return `[${RISK_WORD[String(r.severity || "").toUpperCase()] || r.severity || "średnie"}] ${r.description || r.text || ""}${refs.length ? ` (punkty: ${refs.join(", ")})` : ""}`;
+  }).join("\n");
 }
 function stepperHtml(step) {
   return `<ol class="stepper">${STEPS.map((name, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}" data-goto="${i}"><span>${i < step ? "✓" : i + 1}</span>${esc(name)}</li>`).join("")}</ol>`;
@@ -312,14 +384,63 @@ function groupHtml(group, setup) {
   return `<div class="group"><div class="group-head">${names[group]}</div>
     <div class="seg" data-group="${group}">${c.options.map((o) => `<button type="button" data-value="${esc(o.value)}" class="${f[group] === o.value ? "on" : ""}">${esc(o.label)}${o.value === c.default ? " ★" : ""}</button>`).join("")}</div>
     <div class="choice-desc">${esc(desc)}</div>
-    <div class="models-under">${g ? g.main.map(slotLine).join("") : `<span class="muted small">…</span>`}
+    ${group === "implementation" ? chainHtml(setup) : ""}
+    <div class="models-under">${g ? (group === "implementation" && setup.implementer_chain && setup.implementer_chain.source !== "SLOTS" ? "" : g.main.map(slotLine).join("")) : `<span class="muted small">…</span>`}
       ${g && g.all.length > g.main.length ? `<details><summary class="small">Pozostałe etapy (${g.all.length - g.main.length})</summary>${g.all.filter((s) => !g.main.includes(s) && !g.main.some((m) => m.slot === s.slot)).map(slotLine).join("")}</details>` : ""}
     </div></div>`;
 }
+const CHAIN_SLOTS = ["implementer_default", "implementer_harder", "implementer_hard", "implementer_capability_escalation", "repair_default", "repair_hard", "review_pretreatment"];
+function setupPayload() {
+  const f = formState;
+  return {choices: {planning: f.planning, implementation: f.implementation, review: f.review}, implementer_chain: f.implementer_chain};
+}
 async function loadSetup() {
   const f = formState;
-  f.setup = await api("/api/setup/resolve", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+  f.setup = await api("/api/setup/resolve", setupPayload());
   return f.setup;
+}
+// Selectable profiles for the implementer chain: every profile with an exact runtime model.
+function chainProfiles() {
+  const out = [];
+  for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id && r.runtime_model_id) out.push(r);
+  return out;
+}
+// The chain being edited: the user's own, or the effective one resolved by the system (default).
+function effectiveChain() {
+  const f = formState;
+  if (f.implementer_chain) return f.implementer_chain.slice();
+  const c = f.setup && f.setup.implementer_chain;
+  return c && c.steps && c.steps.length ? c.steps.map((x) => x.profile_id) : [];
+}
+function chainHtml(setup) {
+  const f = formState;
+  const c = setup && setup.implementer_chain;
+  const source = f.implementer_chain ? "USER" : (c ? c.source : "SLOTS");
+  const rows = effectiveChain();
+  const steps = (c && c.steps) || [];
+  const profiles = chainProfiles();
+  const tag = {USER: "ręczny", DEFAULT: "domyślny AAW", SLOTS: "wg poziomu"}[source] || source;
+  const opt = (id, current) => {
+    const p = profiles.find((x) => x.profile_id === id);
+    const taken = rows.includes(id) && id !== current;
+    return `<option value="${esc(id)}" ${id === current ? "selected" : ""} ${taken ? "disabled" : ""}>${esc(p ? (p.display_name || id) : id)} — ${esc(p ? p.runtime_model_id : "brak ID")} / ${esc(p ? p.effort : "")}${p && !p.runnable ? " (niedostępny)" : ""}</option>`;
+  };
+  const list = rows.map((id, i) => {
+    const st = steps.find((x) => x.profile_id === id);
+    const avail = st && !st.runnable ? ` <span class="slot-status UNAVAILABLE">niedostępny</span>` : (st && st.availability === "NOT_VERIFIED" ? ` <span class="slot-status ALTERNATIVE">niesprawdzony</span>` : "");
+    return `<li class="chain-step"><span class="chain-n">${i + 1}</span>
+      <select data-chain-step="${i}">${profiles.map((p) => opt(p.profile_id, id)).join("")}${profiles.some((p) => p.profile_id === id) ? "" : opt(id, id)}</select>${avail}
+      <span class="chain-btns"><button type="button" data-chain-up="${i}" ${i === 0 ? "disabled" : ""} title="Wyżej">↑</button><button type="button" data-chain-down="${i}" ${i === rows.length - 1 ? "disabled" : ""} title="Niżej">↓</button><button type="button" data-chain-del="${i}" ${rows.length <= 1 ? "disabled" : ""} title="Usuń krok">✕</button></span></li>`;
+  }).join("");
+  const skipped = (c && c.skipped || []).map((x) => `<div class="small muted">pominięty (niedostępny tu): ${esc(x.display)}${x.reason ? " — " + esc(x.reason) : ""}</div>`).join("");
+  return `<div class="chain"><div class="chain-head">Łańcuch implementatora <span class="slot-status ${source === "DEFAULT" ? "RECOMMENDED" : "OVERRIDE"}">${esc(tag)}</span></div>
+    ${rows.length ? `<ol class="chain-list">${list}</ol>` : `<div class="small muted">Etapy implementacji wynikają z wybranego poziomu (poniżej). Kliknij „Własny łańcuch”, aby samemu wybrać model(e) implementatora.</div>`}
+    ${skipped}
+    <div class="chain-actions">
+      ${rows.length ? `<button type="button" id="chain-add" ${rows.length >= 12 ? "disabled" : ""}>+ Dodaj krok eskalacji</button>` : `<button type="button" id="chain-custom">Własny łańcuch</button>`}
+      ${f.implementer_chain ? `<button type="button" id="chain-default" class="link">Przywróć domyślny</button>` : ""}
+    </div>
+    <p class="small muted">Krok 1 to implementator na starcie; kolejne kroki to eskalacja, gdy poprzedni model nie wystarcza (rosnąca trudność zadania, błąd możliwości, naprawy). Jeden krok = jeden model na całą implementację. Krok niedostępny nigdy nie jest podmieniany po cichu.</p></div>`;
 }
 async function stepModels(box) {
   const f = formState;
@@ -341,6 +462,34 @@ async function stepModels(box) {
         f[group] = b.dataset.value; await loadSetup(); draw();
       }));
     }
+    const setChain = async (ids) => {
+      f.implementer_chain = ids && ids.length ? ids : null;
+      if (f.implementer_chain) CHAIN_SLOTS.forEach((k) => delete f.advanced.profile_overrides[k]);
+      try { await loadSetup(); } catch (e) { toast(e.message, 8000); }
+      draw();
+    };
+    box.querySelectorAll("[data-chain-step]").forEach((sel) => (sel.onchange = () => {
+      const ids = effectiveChain(); ids[Number(sel.dataset.chainStep)] = sel.value; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-up]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainUp); [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-down]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(), i = Number(b.dataset.chainDown); [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; setChain(ids);
+    }));
+    box.querySelectorAll("[data-chain-del]").forEach((b) => (b.onclick = () => {
+      const ids = effectiveChain(); ids.splice(Number(b.dataset.chainDel), 1); setChain(ids);
+    }));
+    on("chain-add", () => {
+      const ids = effectiveChain();
+      const next = chainProfiles().find((p) => !ids.includes(p.profile_id) && p.runnable) || chainProfiles().find((p) => !ids.includes(p.profile_id));
+      if (next) setChain([...ids, next.profile_id]);
+    });
+    on("chain-custom", () => {
+      const first = s && s.groups.implementation.main[0];
+      if (first) setChain([first.profile_id]);
+    });
+    on("chain-default", () => setChain(null));
     box.querySelectorAll("[data-slot]").forEach((sel) => (sel.onchange = () => {
       if (sel.value) f.advanced.profile_overrides[sel.dataset.slot] = sel.value; else delete f.advanced.profile_overrides[sel.dataset.slot];
     }));
@@ -348,7 +497,7 @@ async function stepModels(box) {
       e.target.disabled = true;
       document.getElementById("verify-status").textContent = "Sprawdzam… (zwykle kilka–kilkanaście sekund na model)";
       try {
-        const r = await api("/api/models/verify", {choices: {planning: f.planning, implementation: f.implementation, review: f.review}});
+        const r = await api("/api/models/verify", setupPayload());
         boot.providers = r.providers; f.setup = r.setup;
         const res = r.results.map((x) => `${x.model}: ${{ACCEPTED: "OK", REJECTED: "odrzucony", UNKNOWN: "nie ustalono"}[x.status]}`).join(", ");
         toast(res ? `Wynik: ${res}` : "Brak modeli do sprawdzenia.", 9000);
@@ -360,58 +509,81 @@ async function stepModels(box) {
   try { await loadSetup(); } catch (e) { box.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
   draw();
 }
+function chainActive() {
+  const c = formState.setup && formState.setup.implementer_chain;
+  return !!(formState.implementer_chain || (c && c.source !== "SLOTS"));
+}
 function advancedSlotsHtml() {
   const profiles = [];
   for (const p of (boot.providers?.providers || [])) for (const r of p.profiles || []) if (r.profile_id) profiles.push(r);
   const f = formState;
   const opts = (slot) => `<option value="">(wg poziomu)</option>` + profiles.map((p) => `<option value="${esc(p.profile_id)}" ${f.advanced.profile_overrides[slot] === p.profile_id ? "selected" : ""}>${esc(p.profile_id)} — ${esc(p.runtime_model_id || "brak ID")} / ${esc(p.effort)}${p.runnable ? "" : " (niedostępny)"}</option>`).join("");
   return `<p class="muted">Tylko dla zaawansowanych: wymusza dokładny profil dla etapu. Niedostępny profil zablokuje START albo zatrzyma run w Human Gate — nigdy nie zostanie podmieniony.</p>
-    <table>${Object.entries(boot.slot_labels).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
+    ${chainActive() ? `<p class="small muted">Etapy implementacji i napraw wynikają z łańcucha implementatora powyżej, dlatego nie można ich tu nadpisać osobno.</p>` : ""}
+    <table>${Object.entries(boot.slot_labels).filter(([slot]) => !(chainActive() && CHAIN_SLOTS.includes(slot))).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
 }
 
+function draftBanner() {
+  const d = draftRead(), f = formState;
+  if (!d || f.goal || f.first_iteration || f.directions) return "";
+  return `<div class="note small" id="draft-banner">Znaleziono niedokończony szkic z ${esc(fmtTime(d.at))}. <button type="button" class="link" id="draft-restore">Przywróć</button> · <button type="button" class="link" id="draft-drop">Odrzuć</button></div>`;
+}
+function bindDraftBanner() {
+  on("draft-restore", () => { const d = draftRead(); if (d) { Object.assign(formState, {goal: d.goal || "", first_iteration: d.first_iteration || "", directions: d.directions || ""}); renderWizard(); } });
+  on("draft-drop", () => { draftClear(); document.getElementById("draft-banner")?.remove(); });
+}
 function stepGoal(box) {
   const f = formState;
   box.innerHTML = `<h2>4. Co chcesz osiągnąć?</h2>
-    <p class="hint">Opisz cel całego zadania własnymi słowami — tak, jak powiedziałbyś to współpracownikowi.</p>
-    <textarea id="goal" rows="4" placeholder="np. Prosta aplikacja do śledzenia wydatków z eksportem do CSV">${esc(f.goal)}</textarea>
-    <div class="examples"><span class="small muted">Przykłady (kliknij, aby wypełnić kroki 4–6):</span>
-      ${EXAMPLES.map((x, i) => `<button class="link" data-example="${i}">${esc(x.title)}</button>`).join("")}</div>`;
-  const t = document.getElementById("goal");
-  t.addEventListener("input", () => { f.goal = t.value; refreshNext(); });
-  box.querySelectorAll("[data-example]").forEach((b) => (b.onclick = () => {
-    const x = EXAMPLES[Number(b.dataset.example)];
-    f.goal = x.goal; f.first_iteration = x.first; f.directions = x.dirs; t.value = x.goal; refreshNext();
-    toast("Wypełniono cel, pierwszą iterację i kierunek przykładem — możesz je zmienić.");
-  }));
-  t.focus();
+    <p class="hint">Opisz cel całego zadania własnymi słowami. Możesz wkleić długi prompt (także w Markdown) — pole nie ma limitu i rośnie razem z treścią.</p>
+    ${draftBanner()}
+    ${editorHtml("goal", f.goal, {rows: 5, placeholder: "np. Prosta aplikacja do śledzenia wydatków z eksportem do CSV"})}
+    <div class="small muted" id="draft-state"></div>
+    ${presetPickerHtml()}`;
+  bindDraftBanner();
+  bindEditor("goal", (v) => { f.goal = v; draftSave(); refreshNext(); });
+  bindPresets(() => renderWizard());
+  document.getElementById("goal").focus();
 }
 function stepFirst(box) {
   const f = formState;
   box.innerHTML = `<h2>5. Pierwsza iteracja <span class="hint">(opcjonalnie)</span></h2>
-    <p class="hint">Konkretny, mały zakres na start. Zostaw puste, a AAW zacznie od celu z kroku 4.</p>
-    <textarea id="first" rows="4" placeholder="np. Model danych wydatku i zapis do pliku JSON z testami">${esc(f.first_iteration)}</textarea>`;
-  const t = document.getElementById("first");
-  t.addEventListener("input", () => { f.first_iteration = t.value; });
-  t.focus();
+    <p class="hint">Konkretny, mały zakres na start. Zostaw puste, a AAW zacznie od celu z kroku 4. Dokładny tekst trafia do silnika bez skracania.</p>
+    ${editorHtml("first", f.first_iteration, {rows: 5, placeholder: "np. Model danych wydatku i zapis do pliku JSON z testami"})}
+    <div class="small muted" id="draft-state"></div>`;
+  bindEditor("first", (v) => { f.first_iteration = v; draftSave(); });
+  document.getElementById("first").focus();
 }
 function stepDirections(box) {
   const f = formState;
-  box.innerHTML = `<h2>6. Dalszy kierunek <span class="hint">(opcjonalnie, każdy punkt w osobnej linii)</span></h2>
-    <div class="note small">Podaj <strong>szerokie kierunki</strong>, nie szczegółowy plan. Im dalszy etap, tym mniej wiadomo o jego dokładnej formie — AAW zaplanuje szczegóły, gdy do nich dojdzie, i zatrzyma się, gdy zabraknie punktów.</div>
-    <textarea id="dirs" rows="5" placeholder="- interfejs w terminalu&#10;- eksport do CSV&#10;- raport miesięczny">${esc(f.directions)}</textarea>`;
-  const t = document.getElementById("dirs");
-  t.addEventListener("input", () => { f.directions = t.value; });
-  t.focus();
+  const lim = boot.limits || {};
+  box.innerHTML = `<h2>6. Kierunek / roadmapa <span class="hint">(opcjonalnie)</span></h2>
+    <div class="note small">Podaj <strong>szerokie kierunki</strong>, nie szczegółowy plan. Każdy punkt zaczyna się od nowej, niewciętej linii (opcjonalnie z „-”, „*” lub „1.”); wcięte linie i opisy należą do poprzedniego punktu, a nagłówki Markdown (#) tylko porządkują tekst.
+      <strong>Po wykonaniu punktów AAW nie zatrzymuje się</strong> — planista sam wybiera kolejne uzasadnione kroki, dopóki ma sensowną pracę i nie zadziała bezpiecznik (STOP, limit iteracji, eskalacja).</div>
+    ${editorHtml("dirs", f.directions, {rows: 8, placeholder: "- interfejs w terminalu\n- eksport do CSV\n- raport miesięczny"})}
+    <div class="small muted" id="draft-state"></div>
+    <label class="check"><input type="checkbox" id="cont" ${f.advanced.continue_autonomously === false ? "" : "checked"}> Kontynuuj autonomicznie po wykonaniu punktów roadmapy
+      <span class="hint">(odznacz, aby AAW zakończył pracę, gdy lista punktów zostanie zrobiona; bezpiecznik iteracji: domyślnie ${esc(lim.default_max_iterations || 40)}, maks. ${esc(lim.hard_max_iterations || 200)})</span></label>`;
+  bindEditor("dirs", (v) => { f.directions = v; draftSave(); });
+  document.getElementById("cont").onchange = (e) => { f.advanced.continue_autonomously = e.target.checked; };
+  document.getElementById("dirs").focus();
 }
 function formPayload() {
   const f = formState, a = f.advanced;
   const lines = (t) => String(t || "").split("\n").map((x) => x.trim()).filter(Boolean);
-  return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: lines(f.directions),
-          planning: f.planning, implementation: f.implementation, review: f.review, base: f.base,
+  return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: String(f.directions || ""),
+          planning: f.planning, implementation: f.implementation, review: f.review, implementer_chain: f.implementer_chain, base: f.base,
           advanced: {acceptance_criteria: lines(a.acceptance_criteria), required_evidence: lines(a.required_evidence),
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
-                     profile_overrides: a.profile_overrides}};
+                     continue_autonomously: a.continue_autonomously !== false,
+                     profile_overrides: a.profile_overrides, risks: a.risks || ""}};
+}
+function risksRow(p) {
+  if (!(p.risks || []).length) return "";
+  const floors = p.risk_floors || [];
+  return `<tr><td>Ryzyka</td><td><ul class="risk-list">${p.risks.map((r) => `<li><span class="risk-level ${esc(r.severity)}">${esc(r.level)}</span> <span class="mono small">${esc(r.risk_id)}</span> ${esc(r.description)} <span class="small muted">— ${esc(r.points.join(", "))}</span></li>`).join("")}</ul>
+    ${floors.length ? `<div class="note small">Progi w charterze planisty (architekt może je tylko podnieść):<ul class="risk-floors">${floors.map((f) => `<li><strong>${esc(f.point)}</strong>: implementacja ≥ ${esc(f.implementation)}, finalny review ≥ ${esc(f.final_review)}</li>`).join("")}</ul></div>` : `<div class="small muted">Same ryzyka niskie — bez podnoszenia progów; planista i reviewerzy je widzą.</div>`}</td></tr>`;
 }
 function slotRow(s) {
   return `<tr><td>${esc(s.label)}</td><td>${slotLine({...s, label: ""})}<span class="muted small mono">${esc(s.profile_id)} · ${esc(s.runtime_model_id || "")} / ${esc(s.effort || "")}</span></td></tr>`;
@@ -424,18 +596,20 @@ async function stepStart(box) {
   catch (e) { box.innerHTML = `<h2>7. Podsumowanie i START</h2><div class="note bad">${esc(e.message)}</div>`; return; }
   f.preview = p;
   const g = p.groups;
-  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
+  const models = (key, name) => `<tr><td>${name}</td><td>${g[key].models.map(esc).join(key === "implementation" && p.implementer_chain.source !== "SLOTS" ? " → " : ", ")}${g[key].alternatives.length ? ` <span class="slot-status ALTERNATIVE">${g[key].alternatives.length} alternatyw</span>` : ""}</td></tr>`;
   const a = f.advanced;
   box.innerHTML = `<h2>7. Podsumowanie i START</h2>
     ${p.blockers.map((b) => `<div class="note bad"><strong>Nie można wystartować:</strong> ${esc(b)}</div>`).join("")}
     ${p.warnings.map((w) => `<div class="note warn small">${esc(w)}</div>`).join("")}
     <table class="summary-table">
       <tr><td>Projekt</td><td><strong>${esc(p.project.name || "")}</strong>${p.project.base ? " (kontynuacja)" : ""}</td></tr>
-      <tr><td>Cel</td><td>${esc(p.goal)}</td></tr>
-      <tr><td>Pierwsza iteracja</td><td>${esc(p.first_iteration)}</td></tr>
-      <tr><td>Kierunek (roadmapa)</td><td><ol style="margin:0;padding-left:18px">${p.roadmap.map((r) => `<li>${esc(r.title)}</li>`).join("")}</ol></td></tr>
+      <tr><td>Cel</td><td><div class="longtext">${esc(p.goal)}</div></td></tr>
+      <tr><td>Pierwsza iteracja</td><td><div class="longtext">${esc(p.first_iteration)}</div></td></tr>
+      <tr><td>Kierunek (roadmapa)</td><td><ol class="roadmap-list">${p.roadmap.filter((r) => !r.recurring).map((r) => `<li><div class="longtext">${esc(r.title)}</div></li>`).join("")}</ol>
+        ${p.continuous ? `<div class="note small">Po tych punktach AAW <strong>kontynuuje autonomicznie</strong>: planista wybiera kolejne uzasadnione kroki, aż uzna, że nie ma już sensownej pracy, albo zadziała bezpiecznik.</div>` : `<div class="note small">AAW zakończy pracę po wykonaniu powyższych punktów.</div>`}</td></tr>
       ${models("planning", "Planowanie")}${models("implementation", "Implementacja")}${models("review", "Review")}
-      <tr><td>Limity</td><td>maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację</td></tr>
+      ${risksRow(p)}
+      <tr><td>Limity</td><td>bezpiecznik: maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację <span class="small muted">(to nie jest cel, tylko hamulec)</span></td></tr>
     </table>
     <ul class="safety">${p.safety.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
     <details style="margin-top:12px"><summary>Zaawansowane</summary>
@@ -445,7 +619,9 @@ async function stepStart(box) {
       <textarea id="ev">${esc(a.required_evidence)}</textarea>
       <label class="field">Obszary zabronione <span class="hint">(ścieżki, po jednej w linii)</span></label>
       <textarea id="forb">${esc(a.forbidden_areas)}</textarea>
-      <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji <input type="number" id="maxit" min="1" max="50" value="${esc(a.max_iterations)}"></label>
+      <label class="field">Znane ryzyka <span class="hint">(po jednym w linii, np. „[wysokie] utrata danych przy zapisie (punkty: 1, 3)”; numery jak na liście „Kierunek (roadmapa)” powyżej, 1 = pierwsza iteracja; poziom: niskie / średnie / wysokie / krytyczne, domyślnie średnie; bez „punkty” = całe zadanie)</span></label>
+      <textarea id="risks">${esc(risksText(a.risks))}</textarea>
+      <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji (bezpiecznik) <input type="number" id="maxit" min="1" max="${esc((boot.limits || {}).hard_max_iterations || 200)}" value="${esc(a.max_iterations)}"></label>
       <label class="small">Maks. napraw na iterację <input type="number" id="maxrep" min="1" max="6" value="${esc(a.max_repair_attempts)}"></label>
       <button id="apply-adv">Zastosuj</button></div>
       <h3 style="margin-top:16px">Wszystkie etapy i dokładne profile</h3>
@@ -455,14 +631,14 @@ async function stepStart(box) {
     <div class="actions start-row"><button class="primary start-btn" id="start" ${p.can_start ? "" : "disabled"}>START</button>
       <span class="small muted">${p.can_start ? "AAW zacznie pracę w tle. Możesz zamknąć to okno — praca trwa dalej." : "Popraw powyższe, aby wystartować."}</span></div>`;
   on("apply-adv", () => {
-    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb");
+    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb"); a.risks = val("risks");
     a.max_iterations = val("maxit"); a.max_repair_attempts = val("maxrep"); stepStart(box);
   });
   on("start", async (e) => {
     e.target.disabled = true;
     try {
       const r = await api("/api/tasks/start", {form: formPayload()});
-      formState = null;
+      formState = null; draftClear();
       location.hash = `#/runs/${r.run_id}`;
     } catch (err) { toast(err.message, 9000); e.target.disabled = false; }
   });
@@ -495,13 +671,45 @@ function processHtml(v) {
         <div class="stat"><div class="k">Model</div><div class="v">${esc(p.model || "—")}</div></div>
         <div class="stat"><div class="k">Ten krok</div><div class="v">${running ? fmtDuration(p.step_elapsed_s ?? p.phase_elapsed_s) : "—"}</div></div>
         <div class="stat"><div class="k">Czas całkowity</div><div class="v">${fmtDuration(p.run_elapsed_s)}</div></div>
-        <div class="stat"><div class="k">Roadmapa</div><div class="v">${esc(p.roadmap.done)} / ${esc(p.roadmap.total)}</div></div>
+        <div class="stat"><div class="k">Roadmapa</div><div class="v">${esc(p.roadmap.done)} / ${esc(p.roadmap.total)}${p.standing && p.standing.status === "PENDING" ? ` <span class="small muted">+ kontynuacja</span>` : ""}</div></div>
+        <div class="stat"><div class="k">Iteracje</div><div class="v">${esc(p.iterations_done ?? 0)} <span class="small muted">/ bezpiecznik ${esc(p.max_iterations ?? "—")}</span></div></div>
       </div>
       <div class="small muted" style="margin-top:8px">AAW nie pokazuje szacowanego czasu zakończenia — nie ma danych, by podać go uczciwie.</div>
       ${v.status_detail ? `<div class="note warn" style="margin-top:12px">${esc(v.status_detail)}</div>` : ""}
       ${stopInfo(v)}
     </div></div>
     ${controlsHtml(v)}</div>`;
+}
+const ITEM_TEXT = {PENDING: "do zrobienia", DONE: "zrobione", SKIPPED: "pominięte", HUMAN_REQUIRED: "wymaga człowieka"};
+function directionHtml(v) {
+  const d = v.direction;
+  if (!d) return "";
+  const p = v.process || {};
+  const items = (p.roadmap_items || []).filter((r) => !r.recurring);
+  const standing = p.standing;
+  const wr = v.working_roadmap;
+  const history = v.working_roadmap_history || [];
+  const text = (t) => t ? `<div class="longtext tall">${esc(t)}</div>` : `<span class="muted">—</span>`;
+  const itemRow = (r) => `<li class="ri ${esc(r.status)}"><span class="ri-state">${esc(ITEM_TEXT[r.status] || r.status)}</span><div class="longtext">${esc(r.title)}</div>${r.reason ? `<div class="small muted">${esc(r.reason)}</div>` : ""}</li>`;
+  const standingLine = standing ? `<div class="note small">${standing.status === "SKIPPED"
+    ? `Planista zakończył pracę autonomiczną z uzasadnieniem: ${esc(standing.reason || "")}`
+    : `Praca autonomiczna po punktach roadmapy: <strong>aktywna</strong> (wykonano ${esc(standing.iterations)} iteracji kontynuacji).`}</div>` : "";
+  return `<details class="panel direction" ${v.status === "RUNNING" ? "" : "open"}><summary><strong>Kierunek i roadmapa</strong>
+      <span class="small muted">${esc(p.iterations_done ?? 0)} iteracji zakończonych · bezpiecznik ${esc(p.max_iterations ?? "—")}</span></summary>
+    <div class="dir-grid">
+      <div><h3>Kierunek użytkownika <span class="chk PASS">zamrożony</span></h3>
+        <div class="small muted">Nie jest zmieniany automatycznie — planista pracuje wewnątrz niego.</div>
+        <div class="k-label">Cel</div>${text(d.goal)}
+        <div class="k-label">Pierwsza iteracja</div>${text(d.first_iteration)}
+        <div class="k-label">Kierunek / roadmapa (oryginał)</div>${text(d.directions_text)}</div>
+      <div><h3>Bieżąca roadmapa robocza</h3>
+        ${items.length ? `<ul class="roadmap-state">${items.map(itemRow).join("")}</ul>` : `<div class="muted">Brak punktów.</div>`}
+        ${standingLine}
+        ${wr ? `<div class="k-label">Notatki planisty (iteracja ${esc(wr.index)}, ${esc(fmtTime(wr.at))})</div>${text(wr.notes)}
+          ${wr.next_step ? `<div class="k-label">Następny rekomendowany krok</div>${text(wr.next_step)}` : ""}
+          ${history.length > 1 ? `<details><summary class="small">Historia notatek (${history.length})</summary>${history.slice().reverse().map((h) => `<div class="k-label">Iteracja ${esc(h.index)} · ${esc(fmtTime(h.at))}</div>${text(h.notes)}`).join("")}</details>` : ""}` :
+          `<div class="small muted" style="margin-top:8px">Notatki planisty pojawią się po zaplanowaniu pierwszej iteracji.</div>`}</div>
+    </div></details>`;
 }
 function stopInfo(v) {
   const ev = ((v.stop_effect || {}).events || []).slice(-1)[0];
@@ -553,7 +761,9 @@ function gateHtml(v) {
   return `<div class="panel gate"><h2>Human Gate</h2>${decided}
     <div class="sec"><h3>Dlaczego AAW się zatrzymał</h3><div class="why">${esc(g.why)}</div></div>
     <div class="sec"><h3>Co zrobiono</h3>${list(g.done, "Żadna iteracja nie została zaakceptowana.")}</div>
-    <div class="sec"><h3>Co zostało</h3>${list(g.remaining, "Nic — roadmapa wyczerpana.")}</div>
+    <div class="sec"><h3>Co zostało</h3>${list(g.remaining, "Nic — roadmapa wyczerpana.")}
+      ${g.planner_end_reason ? `<div class="note small">Planista zakończył pracę autonomiczną: ${esc(g.planner_end_reason)}</div>` : ""}
+      ${g.could_continue ? `<div class="note warn small">AAW mógł pracować dalej — zatrzymał go bezpiecznik lub eskalacja, nie brak pracy. „Dodaj kierunek” startuje nowe zadanie od tego wyniku.</div>` : ""}</div>
     <div class="sec"><h3>Ostrzeżenia</h3>${list(g.warnings, "Brak.")}</div>
     <div class="sec"><h3>Bieżący kandydat</h3><div class="kv small">
       <div>Zmienione pliki</div><div class="mono">${esc((c.changed_files || []).join(", ") || "—")}</div>
@@ -602,7 +812,7 @@ async function renderRun(runId) {
     const techOpen = document.getElementById("tech")?.open;
     view.innerHTML = `<div class="muted small"><a href="#/home">Home</a> › ${esc(v.project || "")}</div>
       <h1 class="run-title">${esc(v.goal)}</h1>${bannerHtml(v)}
-      ${gateHtml(v)}${processHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
+      ${gateHtml(v)}${processHtml(v)}${directionHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
     const tech = document.getElementById("tech");
     if (techOpen) tech.open = true;
     document.body.classList.toggle("show-adv", !!techOpen);
@@ -650,6 +860,7 @@ function bindRun(runId, v) {
     if (!r) return;
     formState = Object.assign(defaultForm(), r.prefill);
     formState.directions = (r.prefill.directions || []).join("\n");
+    if (r.prefill.risks) { formState.advanced.risks = risksText(r.prefill.risks); delete formState.risks; }
     formState.planning = r.prefill.planning || boot.settings.planning;
     formState.implementation = r.prefill.implementation || boot.settings.implementation;
     formState.review = r.prefill.review || boot.settings.review;

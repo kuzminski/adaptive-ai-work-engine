@@ -49,7 +49,14 @@ import run_cancellation as rc
 
 PRODUCT_DIR = "PRODUCT"
 TASK_SCHEMA = "AAW_PRODUCT_TASK_V0.1"
-MAX_DIRECTIONS = 12
+# Free-text fields are never silently truncated. These are safety ceilings
+# against runaway/pasted-by-accident payloads (a whole novel), set far above
+# any realistic prompt or roadmap; exceeding one is a clear error, not a cut.
+MAX_FIELD_CHARS = 200_000        # goal / first iteration, each
+MAX_ROADMAP_CHARS = 500_000      # the whole direction / roadmap text
+MAX_DIRECTION_CHARS = 20_000     # one roadmap point (may span several lines)
+MAX_DIRECTIONS = 200             # roadmap points
+MAX_LIST_ITEM_CHARS = 5_000      # acceptance criteria / evidence / forbidden areas
 BRANCH_PREFIX = "aaw/"
 
 
@@ -245,15 +252,173 @@ def init_git_repo(path: str) -> dict[str, Any]:
 
 # ── task → mandate ───────────────────────────────────────────────────────────
 
-def _clean_list(values: Any, limit: int = MAX_DIRECTIONS) -> list[str]:
+_BULLET = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
+def _check_len(text: str, limit: int, label: str) -> str:
+    if len(text) > limit:
+        raise ProductError(f"{label}: tekst ma {len(text)} znaków, a bezpiecznik pozwala na {limit}. "
+                           "Skróć go lub podziel na kilka zadań.")
+    return text
+
+
+def _clean_list(values: Any, limit: int = 20, item_limit: int = MAX_LIST_ITEM_CHARS) -> list[str]:
+    """One entry per non-empty line (or list element); bullets are stripped; nothing is cut."""
     if isinstance(values, str):
         values = values.splitlines()
     rows = []
     for value in values or []:
-        text = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", str(value)).strip()
+        text = _BULLET.sub("", str(value)).strip()
         if text:
-            rows.append(text[:400])
-    return rows[:limit]
+            rows.append(_check_len(text, item_limit, "pozycja listy"))
+    if len(rows) > limit:
+        raise ProductError(f"Zbyt wiele pozycji ({len(rows)}); maksimum to {limit}.")
+    return rows
+
+
+def split_directions(values: Any) -> list[str]:
+    """Roadmap text → one entry per point, preserving multi-line points and Markdown.
+
+    A non-indented line starts a new point (a bullet marker is dropped). Indented lines
+    and lines after a point continue it, so a long Markdown roadmap with sub-bullets keeps
+    its structure inside the point. Headings and blank lines separate points but are not
+    points themselves (they remain in the verbatim roadmap text stored with the mandate).
+    A plain list of one-line items behaves exactly as before.
+    """
+    if isinstance(values, (list, tuple)):
+        values = "\n".join(str(v) for v in values)
+    points: list[list[str]] = []
+    current: list[str] | None = None
+    for raw in str(values or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            if current is not None:
+                current.append("")        # paragraph break inside an indented point
+            continue
+        if _HEADING.match(line):
+            current = None                # a heading closes the previous point
+            continue
+        if line[0] in " \t" and current is not None:
+            current.append(line)
+        else:
+            current = [_BULLET.sub("", line, count=1).strip()]
+            points.append(current)
+    rows = ["\n".join(p).strip() for p in points if p]
+    rows = [r for r in rows if r]
+    for r in rows:
+        _check_len(r, MAX_DIRECTION_CHARS, "punkt kierunku")
+    if len(rows) > MAX_DIRECTIONS:
+        raise ProductError(f"Kierunek ma {len(rows)} punktów; maksimum to {MAX_DIRECTIONS}. Połącz je w szersze punkty.")
+    return rows
+
+
+# Known risks (typed in the wizard or accepted from the idea intake) → the mandate's risk register,
+# which sets minimum implementation / final-review floors in the planner's frozen charter.
+# Line syntax: "[wysokie] opis ryzyka (punkty: 1, 3)"; the level and the scope are optional
+# (default: średnie, whole run). Numbers follow the summary's "Kierunek (roadmapa)" list:
+# 1 = the first iteration (STEP_1), k = STEP_k; "pierwsza" is an alias of 1.
+RISK_LEVELS = {"niskie": "LOW", "niski": "LOW", "low": "LOW",
+               "średnie": "MEDIUM", "średni": "MEDIUM", "srednie": "MEDIUM", "sredni": "MEDIUM", "medium": "MEDIUM",
+               "wysokie": "HIGH", "wysoki": "HIGH", "high": "HIGH",
+               "krytyczne": "CRITICAL", "krytyczny": "CRITICAL", "critical": "CRITICAL"}
+DEFAULT_RISK_LEVEL = "MEDIUM"
+FIRST_POINT_WORDS = {"pierwsza", "pierwsza iteracja", "start", "first"}
+_RISK_LEVEL = re.compile(r"^\[([^\]]+)\]\s*")
+_RISK_SCOPE = re.compile(r"\((?:punkty|punkt|points|point)\s*:?\s*([^()]*)\)\s*$", re.IGNORECASE)
+
+
+def _risk_level(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    if not key:
+        return DEFAULT_RISK_LEVEL
+    if key.upper() in ac.RISK_SEVERITIES:
+        return key.upper()
+    if key not in RISK_LEVELS:
+        raise ProductError(f"Nieznany poziom ryzyka „{value}”. Użyj: niskie, średnie, wysokie lub krytyczne.")
+    return RISK_LEVELS[key]
+
+
+def _risk_targets(refs: Any, direction_count: int) -> list[str]:
+    """Point references → roadmap item IDs (point k of the summary list = STEP_k; 1 = first iteration)."""
+    if refs in (None, "", []):
+        return []
+    if isinstance(refs, str):
+        refs = [r for r in re.split(r"[,;]", refs)]
+    out: list[str] = []
+    for ref in refs:
+        text = str(ref).strip()
+        if not text:
+            continue
+        low = text.lower()
+        if low in FIRST_POINT_WORDS:
+            low = "1"
+        number = low[5:] if re.fullmatch(r"step_\d+", low) else low if low.isdigit() else None
+        if number is not None:
+            if not 1 <= int(number) <= direction_count + 1:
+                raise ProductError(f"Ryzyko wskazuje punkt {text}, a lista „Kierunek (roadmapa)” ma "
+                                   f"{direction_count + 1} punktów (1 = pierwsza iteracja).")
+            item = f"STEP_{int(number)}"
+        else:
+            raise ProductError(f"Nie rozumiem odwołania „{text}” w ryzyku. Podaj numery punktów z listy "
+                               "„Kierunek (roadmapa)” (1 = pierwsza iteracja).")
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def normalize_risks(values: Any, direction_count: int) -> list[dict[str, Any]]:
+    """Text lines or intake rows ({description, severity, points | item_ids, mitigation}) → risk register rows."""
+    if isinstance(values, str):
+        values = [line for line in values.splitlines() if line.strip()]
+    if values is not None and not isinstance(values, (list, tuple)):
+        raise ProductError("Ryzyka muszą być tekstem (po jednym w linii) albo listą.")
+    rows: list[dict[str, Any]] = []
+    for value in values or []:
+        if isinstance(value, Mapping):
+            text = str(value.get("description") or value.get("text") or value.get("risk") or "").strip()
+            level = _risk_level(value.get("severity") or value.get("level"))
+            refs = value.get("item_ids") if value.get("item_ids") is not None else value.get("points")
+            mitigation = str(value.get("mitigation") or "").strip() or None
+            given_id = str(value.get("risk_id") or "").strip()
+            source = "INTAKE" if str(value.get("source") or "").upper() == "INTAKE" else "USER"
+        else:
+            text = _BULLET.sub("", str(value), count=1).strip()
+            level_match = _RISK_LEVEL.match(text)
+            level = _risk_level(level_match.group(1) if level_match else None)
+            text = text[level_match.end():] if level_match else text
+            scope_match = _RISK_SCOPE.search(text)
+            refs = scope_match.group(1) if scope_match else None
+            text = text[:scope_match.start()].strip() if scope_match else text.strip()
+            mitigation, given_id, source = None, "", "USER"
+        if not text:
+            continue
+        _check_len(text, ac.MAX_RISK_CHARS, "opis ryzyka")
+        if mitigation:
+            _check_len(mitigation, ac.MAX_RISK_CHARS, "sposób ograniczenia ryzyka")
+        rows.append({"risk_id": given_id, "description": text, "severity": level,
+                     "item_ids": _risk_targets(refs, direction_count), "mitigation": mitigation, "source": source})
+    if len(rows) > ac.MAX_RISKS:
+        raise ProductError(f"Zbyt wiele ryzyk ({len(rows)}); maksimum to {ac.MAX_RISKS}. Połącz podobne.")
+    used: set[str] = set()
+    for index, row in enumerate(rows, start=1):
+        candidate = row["risk_id"] if row["risk_id"] and row["risk_id"] not in used else f"R{index}"
+        suffix = 1
+        while candidate in used:
+            suffix += 1
+            candidate = f"R{index}_{suffix}"
+        row["risk_id"] = candidate
+        used.add(candidate)
+    return rows
+
+
+def _clean_chain(value: Any) -> list[str] | None:
+    """The user's own implementer chain (ordered profile IDs) or None for the system default."""
+    if value in (None, "", []):
+        return None
+    if not isinstance(value, (list, tuple)):
+        raise ProductError("Łańcuch implementatora musi być uporządkowaną listą profili.")
+    return [str(v).strip() for v in value if str(v).strip()] or None
 
 
 def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
@@ -261,24 +426,46 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
     if len(goal) < 5:
         raise ProductError("Opisz, co chcesz zbudować (pole „Co chcesz zbudować?”).")
     advanced = dict(form.get("advanced") or {})
+    directions_raw = form.get("directions")
+    if isinstance(directions_raw, (list, tuple)):
+        directions_text = "\n".join(str(v) for v in directions_raw)
+    else:
+        directions_text = str(directions_raw or "")
+    directions = split_directions(directions_raw)
+    risks_raw = advanced.get("risks") if advanced.get("risks") not in (None, "", []) else form.get("risks")
     return {
         "repo": str(form.get("repo") or "").strip().strip('"'),
-        "goal": goal[:2000],
-        "first_iteration": str(form.get("first_iteration") or "").strip()[:2000],
-        "directions": _clean_list(form.get("directions")),
+        "goal": _check_len(goal, MAX_FIELD_CHARS, "Cel"),
+        "first_iteration": _check_len(str(form.get("first_iteration") or "").strip(), MAX_FIELD_CHARS,
+                                      "Pierwsza iteracja"),
+        "directions": directions,
+        "directions_text": _check_len(directions_text.strip(), MAX_ROADMAP_CHARS, "Kierunek / roadmapa"),
         "planning": form.get("planning") or None,
         "implementation": form.get("implementation") or None,
         "review": form.get("review") or None,
+        "implementer_chain": _clean_chain(form.get("implementer_chain")),
         "advanced": {
-            "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 20),
-            "required_evidence": _clean_list(advanced.get("required_evidence"), 10),
-            "forbidden_areas": _clean_list(advanced.get("forbidden_areas"), 20),
+            "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 100),
+            "required_evidence": _clean_list(advanced.get("required_evidence"), 50),
+            "forbidden_areas": _clean_list(advanced.get("forbidden_areas"), 100),
             "max_iterations": advanced.get("max_iterations"),
             "max_repair_attempts": advanced.get("max_repair_attempts"),
+            # AAW keeps going while the roadmap offers justified work; False restores "stop when the
+            # listed points are done". Missing key = the autonomous default.
+            "continue_autonomously": advanced.get("continue_autonomously") is not False,
             "profile_overrides": {k: str(v) for k, v in (advanced.get("profile_overrides") or {}).items() if v},
+            "risks": normalize_risks(risks_raw, len(directions)),
         },
         "base": form.get("base") if isinstance(form.get("base"), dict) else None,
     }
+
+
+CONTINUATION_ITEM_ID = "CONTINUE"
+CONTINUATION_TITLE = (
+    "Continue autonomously toward the objective. After the listed points are done, inspect the real state of the "
+    "repository, the user's direction and the working roadmap, then choose the next most valuable bounded step "
+    "(missing features, integration, tests, UX, documentation). Skip this standing item with a concrete reason only "
+    "when no sensible further work remains.")
 
 
 def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -289,15 +476,23 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
     may skip a later item with an explicit reason.
     """
     first = form["first_iteration"] or form["goal"]
-    items = [{"item_id": "STEP_1", "title": first[:400]}]
+    items = [{"item_id": "STEP_1", "title": first}]
     for index, direction in enumerate(form["directions"], start=2):
         items.append({"item_id": f"STEP_{index}", "title": direction, "depends_on": ["STEP_1"]})
     advanced = form["advanced"]
+    continuous = advanced.get("continue_autonomously", True) is not False
+    if continuous:
+        # A standing item that is never "done": after the listed points the planner keeps choosing the
+        # next justified step until it skips this item with a reason or an execution fuse fires.
+        items.append({"item_id": CONTINUATION_ITEM_ID, "title": CONTINUATION_TITLE,
+                      "depends_on": ["STEP_1"], "recurring": True})
     acceptance = advanced["acceptance_criteria"] or [
-        f"The first iteration is implemented: {first[:400]}",
+        "The first iteration is implemented" + (f": {first}" if len(first) <= 600 else
+                                                " as specified in iteration_contract.goal"),
         "Project checks/tests that passed before this change still pass",
     ]
-    max_iterations = advanced.get("max_iterations") or min(ac.HARD_MAX_ITERATIONS, len(items) + 2)
+    max_iterations = (advanced.get("max_iterations")
+                      or (ac.DEFAULT_MAX_ITERATIONS if continuous else min(ac.HARD_MAX_ITERATIONS, len(items) + 2)))
     max_repairs = advanced.get("max_repair_attempts") or settings.get("max_repair_attempts", 2)
     return {
         "mandate_id": mandate_id,
@@ -317,12 +512,15 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
             "items": items,
             "priorities": [],
             "possible_directions": form["directions"],
+            "direction_text": form.get("directions_text", ""),
             "autonomy_bounds": {
                 "max_iterations": int(max(1, min(ac.HARD_MAX_ITERATIONS, int(max_iterations)))),
                 "max_repair_attempts": int(max(1, min(ac.HARD_MAX_REPAIR_ATTEMPTS, int(max_repairs)))),
                 "allowed_areas": None,
                 "forbidden_areas": [".git", *advanced["forbidden_areas"]],
             },
+            # Only present with risks, so a mandate without them keeps its previous shape and hash.
+            **({"risk_register": [dict(r) for r in advanced["risks"]]} if advanced.get("risks") else {}),
         },
     }
 
@@ -346,17 +544,51 @@ def verify_models(profile_ids: Sequence[str] | None = None) -> dict[str, Any]:
     return {**result, "providers": detection}
 
 
-def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None,
+                  implementer_chain: Sequence[str] | None = None) -> dict[str, Any]:
     """The three simple levels → the actual models (wizard step 'model setup'); no goal needed."""
     settings = product_home.load_settings()
     detection = detection or detection_snapshot()
     picked = {g: (choices or {}).get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
     states = pp.profile_states(detection)
     resolution = pr.resolve_choices(picked, runnable=pp.runnable_profiles(detection), detection=detection,
-                                    states=states)
+                                    states=states, implementer_chain=_clean_chain(implementer_chain))
     return {"choices": resolution["choices"], "groups": pr.group_summary(resolution),
+            "implementer_chain": resolution["implementer_chain"],
             "blockers": resolution["blockers"], "warnings": resolution["warnings"],
             "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]}}
+
+
+IMPLEMENTATION_FLOOR_LABELS = {"NORMAL": "zwykła", "HARDER": "trudniejsza",
+                               "SIGNIFICANTLY_DIFFICULT": "znacznie trudniejsza"}
+REVIEW_FLOOR_LABELS = {"DEFAULT": "standardowy", "HARD": "mocny", "CRITICAL": "krytyczny (najmocniejszy model)"}
+RISK_LEVEL_LABELS = {"LOW": "niskie", "MEDIUM": "średnie", "HIGH": "wysokie", "CRITICAL": "krytyczne"}
+
+
+def _point_label(item_id: str) -> str:
+    """Numbered like the summary's "Kierunek (roadmapa)" list (STEP_k = point k)."""
+    if item_id == "STEP_1":
+        return "punkt 1 (pierwsza iteracja)"
+    if item_id == CONTINUATION_ITEM_ID:
+        return "dalsza praca autonomiczna"
+    return f"punkt {item_id[5:]}" if re.fullmatch(r"STEP_\d+", item_id) else item_id
+
+
+def risk_summary(mandate: Mapping[str, Any]) -> dict[str, Any]:
+    """The risk register and the charter floors it will impose, in the words the summary uses."""
+    register = mandate["roadmap_mandate"].get("risk_register") or []
+    return {
+        "risks": [{"risk_id": r["risk_id"], "severity": r["severity"], "level": RISK_LEVEL_LABELS[r["severity"]],
+                   "description": r["description"], "mitigation": r.get("mitigation"),
+                   "points": [_point_label(i) for i in r.get("item_ids", [])] or ["całe zadanie"]}
+                  for r in register],
+        "floors": [{"item_id": f["item_id"], "point": _point_label(f["item_id"]),
+                    "implementation_floor": f["implementation_floor"],
+                    "implementation": IMPLEMENTATION_FLOOR_LABELS[f["implementation_floor"]],
+                    "final_review_floor": f["final_review_floor"],
+                    "final_review": REVIEW_FLOOR_LABELS[f["final_review_floor"]]}
+                   for f in ac.mandated_risk_floors(mandate)],
+    }
 
 
 def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -368,7 +600,7 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
     choices = {g: form[g] or settings.get(g) for g in pr.CHOICE_GROUPS}
     resolution = pr.resolve_choices(choices, runnable=pp.runnable_profiles(detection),
                                     overrides=form["advanced"]["profile_overrides"], detection=detection,
-                                    states=pp.profile_states(detection))
+                                    states=pp.profile_states(detection), implementer_chain=form["implementer_chain"])
     mandate = build_mandate(form, "PREVIEW", settings)
     try:
         ac.validate_mandate(mandate)
@@ -398,6 +630,11 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
                 and provider["status"] == pp.FOUND:
             warnings.append(f"{provider['display_name']}: nie udało się bezpiecznie sprawdzić logowania.")
     planner = resolution["slots"]["initial_planner"]
+    risks = risk_summary(mandate) if not mandate_error else {"risks": [], "floors": []}
+    critical = [r["risk_id"] for r in risks["risks"] if r["severity"] == "CRITICAL"]
+    if critical:
+        warnings.append(f"Ryzyko krytyczne ({', '.join(critical)}): implementację i finalny review wskazanych punktów "
+                        "wykonają najmocniejsze modele — to podnosi koszt i czas tych iteracji.")
     return {
         "can_start": not blockers,
         "blockers": [b for b in blockers if b],
@@ -406,8 +643,12 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
                     "branch": repo.get("branch"), "head": repo.get("head"), "base": form["base"]},
         "goal": form["goal"],
         "first_iteration": form["first_iteration"] or form["goal"],
-        "roadmap": [{"item_id": i["item_id"], "title": i["title"]} for i in mandate["roadmap_mandate"]["items"]],
+        "roadmap": [{"item_id": i["item_id"], "title": i["title"], "recurring": i.get("recurring") is True}
+                    for i in mandate["roadmap_mandate"]["items"]],
+        "continuous": any(i.get("recurring") for i in mandate["roadmap_mandate"]["items"]),
         "acceptance_criteria": mandate["iteration_contract"]["acceptance_criteria"],
+        "risks": risks["risks"],
+        "risk_floors": risks["floors"],
         "limits": mandate["roadmap_mandate"]["autonomy_bounds"],
         "planner": planner,
         "implementer_policy": {k: resolution["slots"][k] for k in (
@@ -417,6 +658,7 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
         "review_policy": {k: resolution["slots"][k] for k in (
             "primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")},
         "choices": resolution["choices"],
+        "implementer_chain": resolution["implementer_chain"],
         "groups": pr.group_summary(resolution),
         "catalog": {"version": resolution["catalog_version"], "source": resolution["catalog_source"]},
         "providers": [{"display_name": p["display_name"], "status": p["status"], "version": p["version"],
@@ -426,6 +668,8 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
             "Brak automatycznego merge.",
             "Brak automatycznego push.",
             "Human Gate po zakończeniu — decyzja zawsze należy do Ciebie.",
+            "STOP SAFELY / STOP NOW możesz użyć w dowolnej chwili; praca kończy się też na bezpiecznikach "
+            "(limit iteracji, eskalacja, błąd Git) lub gdy planista uzasadni brak dalszej pracy.",
             "Nie zmieniaj plików w głównym folderze repozytorium w trakcie pracy AAW — AAW to wykryje i zatrzyma się.",
         ],
         "_form": form, "_resolution": resolution, "_mandate": mandate,
@@ -498,9 +742,9 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
         "workspace": {"repo": str(repo_top), "worktree": str(worktree), "branch": branch,
                       "base_commit": base_commit, "project_name": repo_top.name},
         "resolution": {k: resolution[k] for k in ("choices", "catalog_version", "catalog_source", "slots",
-                                                   "warnings")},
+                                                   "warnings", "implementer_chain")},
         "roles_config": resolution["roles_config"],
-        "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 1800)), "max_turns": 30},
+        "executor_limits": {"timeout_s": int(settings.get("provider_timeout_s", 3600)), "max_turns": 30},
         "authority_note": "Product input record. The engine state (AUTONOMY/autonomy_state.json), its journal and "
                           "the ledger are the only run authority; this file is never read by the engine.",
     }
@@ -623,7 +867,7 @@ def _human_identity() -> str:
 
 def _executors(limits: Mapping[str, Any]) -> dict[str, Any]:
     import autonomy_adapters as aa
-    return aa.build_direct_executors(timeout=int(limits.get("timeout_s", 1800)),
+    return aa.build_direct_executors(timeout=int(limits.get("timeout_s", 3600)),
                                      max_turns=int(limits.get("max_turns", 30)))
 
 
@@ -787,9 +1031,11 @@ def prepare_continuation(run_id: str, *, mode: str) -> dict[str, Any]:
     form = dict(task["form"])
     prefill = {"repo": workspace["repo"], "base": base,
                "planning": form.get("planning"), "implementation": form.get("implementation"),
-               "review": form.get("review")}
+               "review": form.get("review"), "implementer_chain": form.get("implementer_chain")}
     if mode == "direction":
-        prefill.update(goal=form["goal"], first_iteration="", directions=[])
+        # Same goal, new direction: risks for the whole run still apply; point-scoped ones named old points.
+        prefill.update(goal=form["goal"], first_iteration="", directions=[],
+                       risks=[r for r in (form.get("advanced") or {}).get("risks") or [] if not r.get("item_ids")])
     else:
         prefill.update(goal="", first_iteration="", directions=[])
     return {"prefill": prefill, "base": base}

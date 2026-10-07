@@ -58,10 +58,30 @@ def next_item(handoff: dict) -> str | None:
     return None
 
 
+def continuation_passes() -> int:
+    """How many iterations the fake planner spends on a standing (recurring) item before it ends the run."""
+    try:
+        return int(os.environ.get("AAW_FAKE_CONTINUATION_PASSES", "0"))
+    except ValueError:
+        return 0
+
+
 def default_step(role: str, handoff: dict) -> dict:
     if role == "PLANNER":
         initial = handoff.get("PLANNING_STAGE") == "INITIAL_ARCHITECT"
         item = next_item(handoff)
+        row = (handoff.get("ROADMAP_STATUS") or {}).get(item or "") or {}
+        if row.get("recurring") and len(row.get("iterations") or []) >= continuation_passes():
+            # Only the standing item is left and the fake has "nothing sensible" to add: skip it with a reason.
+            pending = [i for i, r in (handoff.get("ROADMAP_STATUS") or {}).items() if r.get("status") == "PENDING"]
+            return {"output": {"status": "NO_FURTHER_ACTION", "mandate_hash": "$MANDATE_HASH", "goal": None,
+                               "roadmap_refs": [], "scope_justification": None, "acceptance_criteria": [],
+                               "touched_areas": [], "decisions": [],
+                               "skipped_items": [{"item_id": i, "reason": "no sensible further work remains"} for i in pending],
+                               "reason": "roadmap complete", "implementation_complexity": "NORMAL",
+                               "complexity_evidence": [], "semantic_verification_required": False,
+                               "semantic_verification_reason": None, "directional_charter": None,
+                               "directional_charter_hash": "$CHARTER_HASH"}}
         out = {"status": "ITERATION", "mandate_hash": "$MANDATE_HASH",
                "goal": f"Deliver {item or 'the first iteration'}", "roadmap_refs": [item] if item else [],
                "scope_justification": "Next ready roadmap item of the frozen charter",
@@ -69,7 +89,8 @@ def default_step(role: str, handoff: dict) -> dict:
                "touched_areas": ["src"], "decisions": [{"kind": "LOCAL_TECHNICAL", "summary": "small change"}],
                "skipped_items": [], "reason": None, "implementation_complexity": "NORMAL",
                "complexity_evidence": [], "semantic_verification_required": False,
-               "semantic_verification_reason": None}
+               "semantic_verification_reason": None,
+               "working_roadmap": f"- done: {item or 'first iteration'}\n- next: continue", "next_recommended_step": "continue"}
         if initial:
             out["directional_charter"] = "$CHARTER"
             out["directional_charter_hash"] = None
@@ -189,7 +210,8 @@ def main(argv: list[str]) -> int:
         with calls_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"role": role, "harness": harness, "argv": argv, "cwd": os.getcwd(),
                                      "pid": os.getpid(), "execution_id": handoff.get("EXECUTION_ID"),
-                                     "iteration_id": handoff.get("ITERATION_ID")}) + "\n")
+                                     "iteration_id": handoff.get("ITERATION_ID"),
+                                     "handoff_keys": sorted(handoff)}) + "\n")
     if step.get("sleep"):
         time.sleep(float(step["sleep"]))
     for rel, content in (step.get("write_files") or {}).items():

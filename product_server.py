@@ -31,7 +31,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+import autonomy_contract as ac
 import product_home
+import product_presets
 import product_providers as pp
 import product_recommendations as pr
 import product_runs as prun
@@ -64,7 +66,11 @@ class App:
                             "last_updated": catalog.get("last_updated")},
                 "data_home": str(product_home.home()), "frozen": product_home.is_frozen(),
                 "control_center_available": self._control_center_path() is not None,
-                "slot_labels": pr.SLOT_LABELS}
+                "slot_labels": pr.SLOT_LABELS, "presets": product_presets.list_presets(),
+                "limits": {"max_field_chars": prun.MAX_FIELD_CHARS, "max_roadmap_chars": prun.MAX_ROADMAP_CHARS, "max_directions": prun.MAX_DIRECTIONS,
+                           "default_max_iterations": ac.DEFAULT_MAX_ITERATIONS,
+                           "hard_max_iterations": ac.HARD_MAX_ITERATIONS,
+                           "hard_max_repair_attempts": ac.HARD_MAX_REPAIR_ATTEMPTS}}
 
     def recommendations(self, _q: dict[str, Any]) -> dict[str, Any]:
         catalog = pr.effective_catalog()
@@ -82,12 +88,12 @@ class App:
     def verify_models(self, body: dict[str, Any]) -> dict[str, Any]:
         ids = body.get("profile_ids")
         if not ids:
-            setup = prun.resolve_setup(body.get("choices") or {})
+            setup = prun.resolve_setup(body.get("choices") or {}, implementer_chain=body.get("implementer_chain"))
             ids = sorted({p for g in setup["groups"].values() for p in g["checkable"]})
         if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
             raise prun.ProductError("profile_ids must be a list of profile IDs")
         result = prun.verify_models(ids)
-        return {**result, "setup": prun.resolve_setup(body.get("choices") or {})}
+        return {**result, "setup": prun.resolve_setup(body.get("choices") or {}, implementer_chain=body.get("implementer_chain"))}
 
     def first_run_done(self, _body: dict[str, Any]) -> dict[str, Any]:
         return product_home.save_settings({"first_run_completed": True})
@@ -137,7 +143,7 @@ class App:
 
 def _json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     length = int(handler.headers.get("Content-Length") or 0)
-    if length > 2_000_000:
+    if length > 16_000_000:
         raise prun.ProductError("żądanie jest za duże")
     raw = handler.rfile.read(length) if length else b"{}"
     value = json.loads(raw.decode("utf-8") or "{}")
@@ -158,7 +164,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     post_routes: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/providers/detect": app.detect,
         "/api/models/verify": app.verify_models,
-        "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {}),
+        "/api/setup/resolve": lambda b: prun.resolve_setup(b.get("choices") or {},
+                                                          implementer_chain=b.get("implementer_chain")),
         "/api/first-run/done": app.first_run_done,
         "/api/repo/inspect": lambda b: prun.inspect_repo(str(b.get("path") or "")),
         "/api/repo/init": lambda b: prun.init_git_repo(str(b.get("path") or "")),

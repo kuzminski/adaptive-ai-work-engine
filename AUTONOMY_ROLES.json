@@ -272,8 +272,8 @@
         ],
         "cost_weight": 1.2
       },
-      "GEMINI_3_1_PRO": {
-        "pool": "google-gemini",
+      "AGY_GEMINI_3_1_PRO": {
+        "pool": "google-antigravity",
         "trust": "SECONDARY",
         "capability_class": 4,
         "capabilities": [
@@ -286,10 +286,10 @@
         ],
         "cost_weight": 0.8,
         "available": false,
-        "unavailable_reason": "Gemini CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
+        "unavailable_reason": "Antigravity CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
       },
-      "GEMINI_3_FLASH": {
-        "pool": "google-gemini",
+      "AGY_GEMINI_FLASH": {
+        "pool": "google-antigravity",
         "trust": "SECONDARY",
         "capability_class": 3,
         "capabilities": [
@@ -300,7 +300,7 @@
         ],
         "cost_weight": 0.4,
         "available": false,
-        "unavailable_reason": "Gemini CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
+        "unavailable_reason": "Antigravity CLI: enabled per machine by the AAW product after 'Sprawdź modele' accepted the model"
       }
     }
   },

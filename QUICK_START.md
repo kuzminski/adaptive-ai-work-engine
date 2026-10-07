@@ -1,13 +1,13 @@
 # AAW — Quick Start (Windows)
 
-Release `0.2.0` · the app UI is in Polish; button names are quoted as they appear.
+Release `0.4.0` · the app UI is in Polish; button names are quoted as they appear.
 
 **Before you start (outside AAW, one time):**
 - **Git for Windows** — <https://git-scm.com/downloads>
 - **At least one AI CLI, installed and logged in with your own account:**
   - Claude CLI (Claude Code): install per <https://docs.anthropic.com/en/docs/claude-code/setup>, then run `claude` once in a terminal and log in;
   - or Codex CLI: install per <https://github.com/openai/codex>, then run `codex login`;
-  - optionally Gemini CLI: `npm install -g @google/gemini-cli`, then run `gemini` once and log in with a Google account (or set `GEMINI_API_KEY`). Gemini models are used only after **„Sprawdź modele"** confirms them.
+  - optionally Antigravity CLI (`agy`, successor of the Gemini CLI): in PowerShell `irm https://antigravity.google/cli/install.ps1 | iex`, then run `agy` once and sign in with a Google account. Its models are used only after **„Sprawdź modele"** confirms them.
 
   Installing and logging in to these CLIs is **not part of AAW**. AAW only detects them and never stores passwords or keys.
 
@@ -17,9 +17,10 @@ Release `0.2.0` · the app UI is in Polish; button names are quoted as they appe
 2. **Unzip** it (right-click → *Extract All…* → *Extract*). No installation, no Python, no terminal needed. Do not start the app from inside the ZIP preview.
 3. **Run** it: the extracted location contains one folder, `AAW`. Open it and double-click `AAW.exe` (Explorer may show it as `AAW`, type *Application*). Next to it: `SZYBKI_START.txt` (this guide in Polish), `README.md`, `EXAMPLES` and `_internal` (app files — do not modify). The app opens in your browser at `http://127.0.0.1:…` (local only).
 4. **Windows warning:** the build is not code-signed yet, so SmartScreen may show *"Windows protected your PC"*. Click **More info → Run anyway**.
+   If Microsoft Defender quarantines `AAW.exe` as `Trojan:Win32/Wacatac…!ml`, it is a generic heuristic false positive for unsigned PyInstaller apps: extract the ZIP outside OneDrive (e.g. `C:\AAW`), then in Windows Security → Protection history choose **Actions → Allow on device** (or exclude the `AAW` folder).
 5. **Welcome screen** → **„Zaczynamy →"** (Let's start). A 7-step wizard opens.
 6. **Project** — click **„Wybierz…"** (Choose…) and pick your normal project folder (a Git repository). AAW creates its own isolated copy; your folder is not changed. If the folder has uncommitted changes, AAW tells you exactly what to do (commit or stash).
-7. **AI tools** — AAW detects Claude CLI / Codex CLI / Gemini CLI and shows FOUND / NOT FOUND, version and login status, with setup help if something is missing. Then **models**: keep the recommended levels (★) and optionally click **„Sprawdź modele"** (Verify models — one tiny request per model).
+7. **AI tools** — AAW detects Claude CLI / Codex CLI / Antigravity CLI and shows FOUND / NOT FOUND, version and login status, with setup help if something is missing. Then **models**: keep the recommended levels (★) and optionally click **„Sprawdź modele"** (Verify models — one tiny request per model).
 8. **Goal** — describe what you want in 1–3 sentences (or click an example). Optionally add a **first iteration** and a few **broad directions** (one per line — directions, not a detailed plan).
 9. **START** — check the summary and press **START**.
 

@@ -40,15 +40,24 @@ from typing import Any, Mapping, Sequence
 import provider_adapters as pa
 import work_packet as wp
 import workflow_runner as wr
+import autonomy_contract as ac
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
-from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
+from autonomy_contract import (LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template,
+                               risks_for_items)
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
-SUPPORTED_HARNESSES = ("codex", "claude", "gemini")
-# Gemini CLI (headless): the full handoff goes on stdin; `--prompt` text is appended to it.
-GEMINI_HEADLESS_PROMPT = "Follow the AAW role instructions and handoff above. Reply with the JSON object only."
+SUPPORTED_HARNESSES = ("codex", "claude", "agy")
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 3600
+MIN_SIDE_EFFECT_TIMEOUT_SECONDS = 3600
+# Antigravity CLI (`agy`, successor of the Gemini CLI). In print mode it does not read stdin when the
+# prompt is given by flag, and a handoff with a diff exceeds the Windows command-line limit, so the
+# full role prompt is written to a file in the system temp directory (readable by agy by default)
+# and the `--print` prompt only points at it.
+AGY_PROMPT_FILE = "aaw_role_prompt.md"
+AGY_HEADLESS_PROMPT = ("Read the file {path} completely and do exactly what it says: it holds your AAW role "
+                       "instructions and the full handoff. Your final answer must be the JSON object it asks for.")
 # Provider-session variables a parent Claude Code session exports. Inherited by
 # a child `claude --print`, they make the child report the *parent's* session
 # id — fresh context would then be unprovable from evidence.
@@ -118,6 +127,8 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "complexity_evidence": _STRS,
                  "semantic_verification_required": {"type": "boolean"},
                  "semantic_verification_reason": {"type": ["string", "null"]},
+                 "working_roadmap": {"type": ["string", "null"]},
+                 "next_recommended_step": {"type": ["string", "null"]},
                  "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
@@ -202,19 +213,34 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "that exactly preserves the frozen MANDATE objective, roadmap item IDs/titles/dependencies, acceptance "
              "criteria, boundaries, and all required Human Gate conditions: copy every field of "
              "DIRECTIONAL_CHARTER_TEMPLATE verbatim; human_gate_conditions must contain every code in "
-             "REQUIRED_HUMAN_GATE_CONDITIONS exactly as written (you may append others). Include risk_guidance rows only where a "
-             "roadmap item warrants a higher implementation or final-review floor, with an evidence-based reason; use "
-             "an empty array when no item warrants escalation. Do not add roadmap work. On later invocations, "
+             "REQUIRED_HUMAN_GATE_CONDITIONS exactly as written (you may append others). DIRECTIONAL_CHARTER_TEMPLATE.risk_guidance, "
+             "when present, holds the floors set by the human-confirmed MANDATE.roadmap_mandate.risk_register: keep every "
+             "such row (you may raise a floor or extend its reason, never lower or drop it). Add further risk_guidance "
+             "rows only where a roadmap item warrants a higher implementation or final-review floor, with an "
+             "evidence-based reason; with no template rows, use an empty array when no item warrants escalation. "
+             "Do not add roadmap work. On later invocations, "
              "omit directional_charter and echo its directional_charter_hash; select only the next bounded iteration "
              "from that frozen charter. Decide one iteration, no further justified action, or ESCALATE. Echo "
              "MANDATE.mandate_hash exactly. Iteration 1 carries all human acceptance criteria verbatim. roadmap_refs "
-             "must be pending items with dependencies met. Set implementation_complexity to NORMAL, HARDER, or "
+             "must be pending items with dependencies met. For every MANDATE.roadmap_mandate.risk_register entry that "
+             "applies to the selected roadmap_refs (an entry without item_ids applies to all), name the risk_id in "
+             "work_packet pitfalls together with how the step avoids it, and add a verification step when one can show "
+             "it. Set implementation_complexity to NORMAL, HARDER, or "
              "SIGNIFICANTLY_DIFFICULT and cite concrete complexity_evidence. Never use that label alone to request Sonnet. "
              "Every decisions[].kind must be a key of DECISION_KINDS (its value is the autonomy level); a kind whose "
              "level is ESCALATE, or any kind not listed, stops autonomy for a human, so record ordinary technical "
              "choices with AUTO / AUTO_WITHIN_SCOPE kinds. skipped_items PERMANENTLY removes a roadmap item from this "
              "run: list an item there only with a reason why it should never be done autonomously; never list an item "
              "merely because it is waiting for its dependencies (it stays pending for a later iteration). "
+             "A roadmap item marked recurring is a standing item: it is not completed by an accepted iteration. "
+             "While user direction items remain pending, prefer them; once only the recurring item remains, "
+             "inspect the repository and choose the next most valuable bounded step toward MANDATE.roadmap_mandate.objective "
+             "(missing functionality, integration, tests, UX, documentation) and reference the recurring item in "
+             "roadmap_refs. Only when no sensible further work remains, return NO_FURTHER_ACTION and list the recurring "
+             "item in skipped_items with the concrete reason. On every ITERATION plan, set working_roadmap to the "
+             "updated working roadmap (Markdown: done, open problems, decisions, next steps) and next_recommended_step "
+             "to the single next step; both are advisory notes for the operator and never change the user's direction "
+             "or grant scope. "
              + wp.PLANNER_RULES + " Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
@@ -225,7 +251,9 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                 "name. For every test or command check, the summary must state the exact command, its exit code and "
                 "the reported result counts, so a reviewer can verify it from this record alone. "
                 "Do not delete files such as __pycache__. "
-                "Report deviations from the plan and known limitations (uncertainties)." + wp.IMPLEMENTER_RULES),
+                "Report deviations from the plan and known limitations (uncertainties). RISK_FOCUS, when present, lists "
+                "human-confirmed risks for this step: avoid each one and report any you could not rule out as an "
+                "uncertainty." + wp.IMPLEMENTER_RULES),
     "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
                     "REQUIRED_EVIDENCE only where semantic verification is needed; run no mechanical checks that are "
                     "already recorded. Do not run Git commands; the controller verifies Git boundaries. "
@@ -239,7 +267,10 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                "ambiguity changes interpretation, request specific source_ref values with a concise reason in "
                "raw_evidence_requests and return ESCALATE pending the controller's targeted retrieval. List any "
                "remaining substantive uncertainty in uncertainties. Do not run Git commands; review the supplied "
-               "diff/source evidence and use targeted retrieval when needed. Otherwise "
+               "diff/source evidence and use targeted retrieval when needed. RISK_CHECKS, when present, lists the "
+               "human-confirmed risks for this iteration's roadmap items: check each against the diff and evidence, "
+               "raise a finding only when the change realizes the risk or skips its stated mitigation, and name every "
+               "risk_id you checked in summary. Otherwise "
                "return PASS, REPAIR_REQUIRED, or ESCALATE with evidence references. Do not modify any file."),
     "repair": ("You are the AAW REPAIRER. Address only FINDINGS, inside EXACT_ALLOWED_REPAIR_SCOPE. Do not expand "
                "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
@@ -336,6 +367,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
+                "WORKING_ROADMAP": ctx.get("working_roadmap"),
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
     if name in ("execute", "repair", "self_verify", "diagnose"):
         it = ctx["iteration"]
@@ -344,6 +376,9 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                "REQUIRED_EVIDENCE": contract.get("required_evidence", []),
                "FORBIDDEN_AREAS": mandate["roadmap_mandate"]["autonomy_bounds"].get("forbidden_areas", []),
                "WORK_PACKET": (ctx.get("plan") or {}).get("work_packet")}
+        risks = risks_for_items(mandate, (ctx.get("plan") or {}).get("roadmap_refs") or [])
+        if risks:
+            out["RISK_FOCUS"] = risks
         if name in ("execute", "repair"):
             out["AUDIT_CHECKLIST"] = [dict(row) for row in wp.AUDIT_CHECKLIST]
         if name == "self_verify":
@@ -360,7 +395,8 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 out = {key: out[key] for key in ("ROLE", "AAW_RUN_ID", "ITERATION_ID", "EXECUTION_ID", "WORKTREE_PATH",
                                                  "SOURCE_REFERENCES", "CONSTRAINTS", "FORBIDDEN_CHANGES",
                                                  "REQUIRED_EVIDENCE", "FORBIDDEN_AREAS", "FINDINGS", "ATTEMPT",
-                                                 "EXACT_ALLOWED_REPAIR_SCOPE", "WORK_PACKET", "AUDIT_CHECKLIST")
+                                                 "EXACT_ALLOWED_REPAIR_SCOPE", "WORK_PACKET", "AUDIT_CHECKLIST",
+                                                 "RISK_FOCUS")
                        if key in out}
                 out.update({"PLAN": {"goal": ctx["plan"].get("goal")}, "REPAIR_PACKET": packet,
                             "MODE": ctx.get("repair_mode"), "STEP": ctx.get("step")})
@@ -371,6 +407,9 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
     # Review starts with the compact packet and source manifest. The controller
     # adds only specifically requested, hash-verified raw sources on a second call.
     raw = dict(ctx["raw"])
+    risks = risks_for_items(mandate, ctx["iteration"]["plan"].get("roadmap_refs") or [])
+    if risks:
+        common["RISK_CHECKS"] = risks
     return {**common, "REVIEW_KIND": ctx["review_kind"], "FROZEN_MANDATE": mandate,
             "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
             "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
@@ -386,7 +425,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
 # ── the executor ────────────────────────────────────────────────────────────
 
 def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Path, final_path: Path,
-          schema: Mapping[str, Any], max_turns: int) -> tuple[list[str], bool]:
+          schema: Mapping[str, Any], max_turns: int, prompt_path: Path | None = None) -> tuple[list[str], bool]:
     """Same direct-CLI invocation shape as `workflow_runner.execute_llm_node`.
 
     Returns (argv, prompt_on_stdin). The prompt always goes on stdin: a review
@@ -399,13 +438,17 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
                 "--model", runtime["model"], "--config", f'model_reasoning_effort="{runtime["effort"]}"',
                 "--cd", worktree, "--output-schema", str(schema_path), "--output-last-message", str(final_path),
                 "--json", "-"], True
-    if runtime["harness"] == "gemini":
-        # Headless Gemini CLI: `plan` approval mode is read-only; write roles need shell for checks, so they
-        # auto-approve tools (the controller's Git boundary check after the phase stays the authority).
-        # `--skip-trust` lets the CLI run in the fresh, untrusted AAW worktree without an interactive prompt.
-        return [str(runtime["executable"]), "--model", runtime["model"], "--output-format", "json",
-                "--approval-mode", "plan" if read_only else "yolo", "--skip-trust",
-                "--prompt", GEMINI_HEADLESS_PROMPT], True
+    if runtime["harness"] == "agy":
+        # Headless Antigravity CLI. Read-only roles keep the default permission mode: workspace reads are
+        # granted, edits and commands need an approval nobody can give in print mode, so they are denied.
+        # Write roles need a shell for their checks and auto-approve tools; the controller's Git boundary
+        # check after the phase stays the authority. `--json-schema` enforces the role's output contract
+        # (`structured_output`). Every option precedes `--print`: agy reads all trailing arguments as prompt.
+        argv = [str(runtime["executable"]), "--model", runtime["model"], "--output-format", "json",
+                "--json-schema", str(schema_path)]
+        if not read_only:
+            argv.append("--dangerously-skip-permissions")
+        return argv + ["--print", AGY_HEADLESS_PROMPT.format(path=prompt_path)], False
     argv = [str(runtime["executable"]), "--print", "--no-session-persistence",
             "--permission-mode", "plan" if read_only else "acceptEdits",
             "--model", runtime["model"], "--effort", runtime["effort"], "--output-format", "json",
@@ -419,10 +462,9 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
     return argv, True
 
 
-GEMINI_AUTH_EXIT = 41  # Gemini CLI FatalAuthenticationError
 _RATE_PATTERNS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "quota", "too many requests",
                   "resource_exhausted", "limit reached", "overloaded")
-_AUTH_PATTERNS = ("not logged in", "unauthorized", "authentication", "invalid api key",
+_AUTH_PATTERNS = ("not signed in", "sign in to", "/login", "not logged in", "unauthorized", "authentication", "invalid api key",
                   "login required", "please log in", "token expired")
 
 
@@ -440,7 +482,7 @@ def classify_failure(rc: int | None, stdout: str | None, stderr: str | None) -> 
             value = float(match.group(1))
             minutes = value / 60.0 if (match.group(2) or "s").startswith("s") else value
         return "RATE_LIMIT", minutes
-    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text) or rc == GEMINI_AUTH_EXIT:
+    if any(p in text for p in _AUTH_PATTERNS) or _re.search(r"\b40[13]\b", text):
         return "AUTH", None
     return None, None
 
@@ -450,7 +492,8 @@ class DirectRoleExecutor:
 
     fixture_class = "REAL_PROVIDER_DIRECT_CLI"
 
-    def __init__(self, name: str, *, timeout: int = 1800, max_turns: int = 30) -> None:
+    def __init__(self, name: str, *, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+                 max_turns: int = 30) -> None:
         self.name, self.timeout, self.max_turns = name, timeout, max_turns
 
     def preflight(self, binding: Mapping[str, Any]) -> str | None:
@@ -471,14 +514,15 @@ class DirectRoleExecutor:
             return adapter.invoke(ctx, runtime, handoff)
         prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
                   "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
-        if runtime["harness"] == "gemini":
-            prompt += ("\n\nOUTPUT_SCHEMA (your final message must be ONE JSON object valid against it, no prose, "
-                       "no code fence):\n" + json.dumps(schema, separators=(",", ":")))
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="aaw_autonomy_role_") as temp:
             schema_path, final_path = Path(temp) / "schema.json", Path(temp) / "final.json"
             schema_path.write_text(json.dumps(schema), encoding="utf-8")
-            argv, on_stdin = _argv(runtime, self.name, worktree, schema_path, final_path, schema, self.max_turns)
+            prompt_path = Path(temp) / AGY_PROMPT_FILE
+            if runtime["harness"] == "agy":
+                prompt_path.write_text(prompt, encoding="utf-8")
+            argv, on_stdin = _argv(runtime, self.name, worktree, schema_path, final_path, schema, self.max_turns,
+                                   prompt_path=prompt_path)
             try:
                 rc, stdout, stderr = wr.run_process(argv, cwd=Path(worktree), stdin=prompt if on_stdin else None,
                                                     timeout=self.timeout, provider=runtime["provider"],
@@ -491,29 +535,36 @@ class DirectRoleExecutor:
                 raise ExecutorFailure(f"{self.name}: dispatch failed: {exc}", dispatched=recorder.started,
                                       failure_class="UNAVAILABLE" if not recorder.started else None) from exc
             session, usage, raw, provider_meta = self._parse(runtime["harness"], rc, stdout, final_path)
-            if runtime["harness"] == "gemini" and raw is not None and not core_shape_ok(self.name, raw):
+            if runtime["harness"] == "agy" and raw is not None and not core_shape_ok(self.name, raw):
                 provider_meta["schema_rejected"] = True
                 raw = None
         elapsed = round(time.monotonic() - started, 3)
+        valid = isinstance(raw, dict)
+        timeout_result = rc == 124 and valid
         update_execution(descriptor_path, execution["execution_id"],
                          provider_session_id=str(session) if session else None,
-                         status="COMPLETED" if rc == 0 else "FAILED")
+                         status="COMPLETED" if rc == 0 or timeout_result else "FAILED")
         result_path = Path(execution["result_path"])
         _write_once(result_path, {
             "execution_id": execution["execution_id"], "role": ctx["role"], "executor": self.name,
             "recorded_by": ADAPTER_ID, "result": raw, "exit_code": rc, "provider_session_id": session,
             "harness": runtime["harness"], "model": runtime["model"], "effort": runtime["effort"],
-            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "usage": usage, "provider_meta": provider_meta,
+            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "timeout_s": self.timeout,
+            "result_recovered_after_timeout": timeout_result,
+            "usage": usage, "provider_meta": provider_meta,
             "stderr_tail": (stderr or "")[-4000:], "stdout_tail": (stdout or "")[-4000:] if raw is None else None})
         close = wr._close_from_returncode(rc, provider_session_id=session)
-        valid = rc == 0 and isinstance(raw, dict)
+        valid = (rc == 0 or rc == 124) and isinstance(raw, dict)
         if rc == 0 and not valid:
             close["effect_certainty"] = "PARTIAL"  # process exited cleanly; only the structured result is untrusted
         recorder.close(outcome="RESULT_RECEIVED" if valid else ("INVALID" if rc == 0 else "BLOCKED"),
                        result_refs=[str(result_path)], detail=None if valid else (stderr or stdout)[-2000:], **close)
-        if rc != 0:
+        if rc != 0 and not timeout_result:
+            retryable = rc == 124 and self.name in READ_ONLY_EXECUTORS and ctx.get("role") != "initial_planner"
+            code = ac.E_EXECUTOR_TIMEOUT if rc == 124 else None
             failure_class, retry_after = classify_failure(rc, stdout, stderr)
-            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True,
+            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", code=code,
+                                  dispatched=True, retryable=retryable,
                                   failure_class=failure_class, retry_after_minutes=retry_after)
         if not valid and self.name not in ("review", "final_review"):
             raise ExecutorFailure(f"{self.name}: provider returned no structured result", dispatched=True)
@@ -523,17 +574,22 @@ class DirectRoleExecutor:
 
     @staticmethod
     def _parse(harness: str, rc: int, stdout: str, final_path: Path) -> tuple[Any, dict, Any, dict]:
-        if harness == "gemini":
+        if harness == "agy":
+            # agy --output-format json: {conversation_id, status, response, usage, structured_output}
             envelope = _json_object(stdout) or {}
+            raw = envelope.get("structured_output") if isinstance(envelope.get("structured_output"), dict) else None
             text = envelope.get("response") if isinstance(envelope.get("response"), str) else None
-            raw = _json_object(text) if rc == 0 and text else None
-            meta = {"error": envelope.get("error"), "warnings": envelope.get("warnings")}
-            stats = envelope.get("stats") if isinstance(envelope.get("stats"), dict) else {}
-            return envelope.get("session_id"), dict(stats), raw, meta
+            if raw is None and rc == 0 and text:
+                raw = _json_object(text)
+            if rc != 0:
+                raw = None
+            meta = {"status": envelope.get("status"), "error": envelope.get("error")}
+            usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+            return envelope.get("conversation_id"), dict(usage), raw, meta
         if harness == "codex":
             _, session, usage = wr.parse_codex_events(stdout)
             raw = None
-            if rc == 0 and final_path.is_file():
+            if final_path.is_file():
                 try:
                     raw = json.loads(final_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
@@ -583,7 +639,7 @@ def core_shape_ok(name: str, raw: Any) -> bool:
     return isinstance(raw, dict) and all(key in raw for key in CORE_REQUIRED.get(name, []))
 
 
-def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30,
+def build_direct_executors(*, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS, max_turns: int = 30,
                            review_pretreatment: bool = False) -> dict[str, DirectRoleExecutor]:
     """The production executor set for `AutonomyController`.
 
@@ -591,8 +647,15 @@ def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30,
     round that may only re-index evidence the deterministic packet already
     carries (it can never change a verdict), so it cost time and quota on every
     REVIEW without changing outcomes. Pass `review_pretreatment=True` to keep it.
+    Side-effecting roles (execute, repair) never get less than
+    MIN_SIDE_EFFECT_TIMEOUT_SECONDS: a timeout there abandons real work.
     """
     names = ["plan", "execute", "self_verify", "review", "repair", "final_review", "diagnose"]
     if review_pretreatment:
         names.insert(3, "prepare_packet")
-    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns) for name in names}
+    return {name: DirectRoleExecutor(
+                name,
+                timeout=max(int(timeout), MIN_SIDE_EFFECT_TIMEOUT_SECONDS)
+                if name in ("execute", "repair") else int(timeout),
+                max_turns=max_turns)
+            for name in names}

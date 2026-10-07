@@ -786,7 +786,9 @@ class RoutingJournal:
         if not self.path.exists():
             return []
         rows: list[dict[str, Any]] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        data = self.path.read_bytes()
+        # A concurrent append may be half-written; only newline-terminated events are complete.
+        for line in data[:data.rfind(b"\n") + 1].decode("utf-8").splitlines():
             if line.strip():
                 rows.append(json.loads(line))
         return rows
