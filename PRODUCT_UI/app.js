@@ -250,7 +250,18 @@ function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
           planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
-          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}}};
+          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}, risks: ""}};
+}
+// Known risks: wizard text, or rows from the idea intake / a continuation ({description, severity, item_ids|points}).
+const RISK_WORD = {LOW: "niskie", MEDIUM: "średnie", HIGH: "wysokie", CRITICAL: "krytyczne"};
+function risksText(v) {
+  if (!Array.isArray(v)) return String(v || "");
+  const point = (id) => /^STEP_\d+$/.test(id) ? id.slice(5) : String(id);  // STEP_k = point k of the summary list
+  return v.map((r) => {
+    if (typeof r === "string") return r;
+    const refs = r.item_ids ? r.item_ids.map(point) : (r.points || []);
+    return `[${RISK_WORD[String(r.severity || "").toUpperCase()] || r.severity || "średnie"}] ${r.description || r.text || ""}${refs.length ? ` (punkty: ${refs.join(", ")})` : ""}`;
+  }).join("\n");
 }
 function stepperHtml(step) {
   return `<ol class="stepper">${STEPS.map((name, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}" data-goto="${i}"><span>${i < step ? "✓" : i + 1}</span>${esc(name)}</li>`).join("")}</ol>`;
@@ -566,7 +577,13 @@ function formPayload() {
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
                      continue_autonomously: a.continue_autonomously !== false,
-                     profile_overrides: a.profile_overrides}};
+                     profile_overrides: a.profile_overrides, risks: a.risks || ""}};
+}
+function risksRow(p) {
+  if (!(p.risks || []).length) return "";
+  const floors = p.risk_floors || [];
+  return `<tr><td>Ryzyka</td><td><ul class="risk-list">${p.risks.map((r) => `<li><span class="risk-level ${esc(r.severity)}">${esc(r.level)}</span> <span class="mono small">${esc(r.risk_id)}</span> ${esc(r.description)} <span class="small muted">— ${esc(r.points.join(", "))}</span></li>`).join("")}</ul>
+    ${floors.length ? `<div class="note small">Progi w charterze planisty (architekt może je tylko podnieść):<ul class="risk-floors">${floors.map((f) => `<li><strong>${esc(f.point)}</strong>: implementacja ≥ ${esc(f.implementation)}, finalny review ≥ ${esc(f.final_review)}</li>`).join("")}</ul></div>` : `<div class="small muted">Same ryzyka niskie — bez podnoszenia progów; planista i reviewerzy je widzą.</div>`}</td></tr>`;
 }
 function slotRow(s) {
   return `<tr><td>${esc(s.label)}</td><td>${slotLine({...s, label: ""})}<span class="muted small mono">${esc(s.profile_id)} · ${esc(s.runtime_model_id || "")} / ${esc(s.effort || "")}</span></td></tr>`;
@@ -591,6 +608,7 @@ async function stepStart(box) {
       <tr><td>Kierunek (roadmapa)</td><td><ol class="roadmap-list">${p.roadmap.filter((r) => !r.recurring).map((r) => `<li><div class="longtext">${esc(r.title)}</div></li>`).join("")}</ol>
         ${p.continuous ? `<div class="note small">Po tych punktach AAW <strong>kontynuuje autonomicznie</strong>: planista wybiera kolejne uzasadnione kroki, aż uzna, że nie ma już sensownej pracy, albo zadziała bezpiecznik.</div>` : `<div class="note small">AAW zakończy pracę po wykonaniu powyższych punktów.</div>`}</td></tr>
       ${models("planning", "Planowanie")}${models("implementation", "Implementacja")}${models("review", "Review")}
+      ${risksRow(p)}
       <tr><td>Limity</td><td>bezpiecznik: maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację <span class="small muted">(to nie jest cel, tylko hamulec)</span></td></tr>
     </table>
     <ul class="safety">${p.safety.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
@@ -601,6 +619,8 @@ async function stepStart(box) {
       <textarea id="ev">${esc(a.required_evidence)}</textarea>
       <label class="field">Obszary zabronione <span class="hint">(ścieżki, po jednej w linii)</span></label>
       <textarea id="forb">${esc(a.forbidden_areas)}</textarea>
+      <label class="field">Znane ryzyka <span class="hint">(po jednym w linii, np. „[wysokie] utrata danych przy zapisie (punkty: 1, 3)”; numery jak na liście „Kierunek (roadmapa)” powyżej, 1 = pierwsza iteracja; poziom: niskie / średnie / wysokie / krytyczne, domyślnie średnie; bez „punkty” = całe zadanie)</span></label>
+      <textarea id="risks">${esc(risksText(a.risks))}</textarea>
       <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji (bezpiecznik) <input type="number" id="maxit" min="1" max="${esc((boot.limits || {}).hard_max_iterations || 200)}" value="${esc(a.max_iterations)}"></label>
       <label class="small">Maks. napraw na iterację <input type="number" id="maxrep" min="1" max="6" value="${esc(a.max_repair_attempts)}"></label>
       <button id="apply-adv">Zastosuj</button></div>
@@ -611,7 +631,7 @@ async function stepStart(box) {
     <div class="actions start-row"><button class="primary start-btn" id="start" ${p.can_start ? "" : "disabled"}>START</button>
       <span class="small muted">${p.can_start ? "AAW zacznie pracę w tle. Możesz zamknąć to okno — praca trwa dalej." : "Popraw powyższe, aby wystartować."}</span></div>`;
   on("apply-adv", () => {
-    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb");
+    a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb"); a.risks = val("risks");
     a.max_iterations = val("maxit"); a.max_repair_attempts = val("maxrep"); stepStart(box);
   });
   on("start", async (e) => {
@@ -840,6 +860,7 @@ function bindRun(runId, v) {
     if (!r) return;
     formState = Object.assign(defaultForm(), r.prefill);
     formState.directions = (r.prefill.directions || []).join("\n");
+    if (r.prefill.risks) { formState.advanced.risks = risksText(r.prefill.risks); delete formState.risks; }
     formState.planning = r.prefill.planning || boot.settings.planning;
     formState.implementation = r.prefill.implementation || boot.settings.implementation;
     formState.review = r.prefill.review || boot.settings.review;

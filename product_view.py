@@ -321,10 +321,15 @@ def build_briefs(run_id: str, state: Mapping[str, Any], events: list[dict[str, A
             charter = state.get("directional_charter") or {}
             risk = [f"{r['item_id']}: implementacja ≥ {r['implementation_floor']}, final review ≥ "
                     f"{r['final_review_floor']} — {r['reason']}" for r in charter.get("risk_guidance", [])]
+            enforced = [f"{a['item_id']} ({'dodano' if a.get('action') == 'ADDED' else 'podniesiono'})"
+                        for a in payload.get("risk_floor_adjustments") or []]
             brief = _brief("CHARTER", "Plan początkowy (architekt)", meta,
                            goal="Zamrozić kierunek całego zadania i warunki Human Gate",
                            done=[f"Zamrożono kierunek z {len(payload.get('roadmap_items', []))} punktami roadmapy",
-                                 *(["Wskazówki ryzyka: " + "; ".join(risk)] if risk else [])],
+                                 *(["Wskazówki ryzyka: " + "; ".join(risk)] if risk else []),
+                                 *([f"Progi z Twoich ryzyk: {payload['mandated_risk_floors']} punktów roadmapy"
+                                    + (f"; architekt je pominął lub obniżył, przywrócono: {', '.join(enforced)}"
+                                       if enforced else "")] if payload.get("mandated_risk_floors") else [])],
                            checks=[], problems=[], at=at,
                            handed=["Zamrożony kierunek (hash) przekazany każdemu kolejnemu planiście i reviewerowi"],
                            evidence=[payload.get("initial_planner_execution_id")])

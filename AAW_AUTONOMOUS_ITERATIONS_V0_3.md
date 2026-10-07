@@ -31,7 +31,9 @@ selects unknown, human-required, dependency-blocked, or out-of-mandate work
 escalates before implementation.
 
 Risk guidance can set a minimum Luna implementation tier and a minimum final
-review tier for named roadmap items. Runtime selection records the policy ID,
+review tier for named roadmap items. Risks the human confirmed before START
+(`roadmap_mandate.risk_register`) pre-fill those floors and the architect may
+only raise them (`AAW_RISK_REGISTER_CHARTER_V0_1.md`). Runtime selection records the policy ID,
 reason, evidence, previous attempt, escalation source, and execution ID in
 `MODEL_POLICY_SELECTED`; the V0.4A descriptor and V0.4B ledger remain the
 invocation and lifecycle authorities.

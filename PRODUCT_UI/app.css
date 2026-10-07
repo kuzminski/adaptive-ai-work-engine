@@ -275,3 +275,17 @@ label.check .hint { display: block; margin-left: 24px; }
 .ri.DONE .ri-state { color: var(--ok); } .ri.SKIPPED .ri-state, .ri.HUMAN_REQUIRED .ri-state { color: var(--warn); }
 .ri.PENDING .ri-state { color: var(--active); }
 @media (max-width: 520px) { .ri { grid-template-columns: 1fr; } }
+
+/* known risks → charter floors (wizard summary) */
+.risk-list, .risk-floors { margin: 0; padding-left: 18px; }
+.risk-list li, .risk-floors li { margin: 4px 0; overflow-wrap: anywhere; }
+.risk-level { display: inline-block; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 10px; background: var(--info-bg); color: var(--accent); }
+.risk-level.HIGH { background: var(--warn-bg); color: var(--warn); }
+.risk-level.CRITICAL { background: var(--bad-bg); color: var(--bad); }
+.risk-level.LOW { background: var(--ok-bg); color: var(--ok); }
+.risk-level { white-space: nowrap; }
+/* phone width: the summary's label column (210px) left ~100px for values — stack label above value */
+@media (max-width: 560px) {
+  .summary-table tr, .summary-table td { display: block; }
+  .summary-table td:first-child { width: auto; padding-bottom: 0; border-bottom: none; font-size: 12px; }
+}

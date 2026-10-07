@@ -1,5 +1,20 @@
 # Changelog — AAW product app
 
+## Unreleased — known risks set the planner charter's risk floors
+
+Details: `AAW_RISK_REGISTER_CHARTER_V0_1.md`.
+
+- New wizard field "Znane ryzyka" (Zaawansowane), also fed by rows from the idea intake: each risk has a level
+  (niskie / średnie / wysokie / krytyczne) and optional roadmap points; stored as the mandate's `risk_register`.
+- The level sets minimum implementation / final-review floors in the frozen directional charter
+  (MEDIUM → hard review; HIGH → harder implementation + hard review; CRITICAL → strongest implementation and
+  critical review). The initial architect may only raise them; a dropped or lowered floor is restored and
+  recorded (`risk_floor_adjustments`), never a rejection.
+- Planner names applicable risks in work-packet pitfalls; implementer gets `RISK_FOCUS`, reviewers `RISK_CHECKS`.
+- Summary before START lists the risks and the floors (CRITICAL adds a cost warning); the run's charter brief
+  shows what the risks enforced. Summary table stacks on phones.
+- Windows walkthrough uses the example presets (the old example buttons are gone).
+
 ## Unreleased — long-form fields, example presets, count-free autonomy
 
 Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.

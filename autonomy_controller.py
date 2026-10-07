@@ -1251,6 +1251,10 @@ class AutonomyController:
             self.journal.append("DIRECTIONAL_CHARTER_FROZEN", phase=ac.PLAN, payload={
                 "mandate_hash": self.state["mandate_hash"], "charter_hash": charter["charter_hash"],
                 "roadmap_items": [item["item_id"] for item in charter["roadmap_items"]],
+                "risk_guidance": [{k: row[k] for k in ("item_id", "implementation_floor", "final_review_floor")}
+                                  for row in charter["risk_guidance"]],
+                "mandated_risk_floors": len(charter.get("mandated_risk_floors", [])),
+                "risk_floor_adjustments": charter.get("risk_floor_adjustments", []),
                 "initial_planner_execution_id": next((e.get("execution_id") for e in reversed(self.state["executions"])
                                                        if e.get("role") == "initial_planner"), None)})
         verdict = ac.check_plan(plan, self.state["mandate"], self.state["roadmap"], index,

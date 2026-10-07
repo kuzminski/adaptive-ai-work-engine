@@ -43,7 +43,8 @@ import workflow_runner as wr
 import autonomy_contract as ac
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
-from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
+from autonomy_contract import (LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template,
+                               risks_for_items)
 from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
@@ -212,13 +213,19 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "that exactly preserves the frozen MANDATE objective, roadmap item IDs/titles/dependencies, acceptance "
              "criteria, boundaries, and all required Human Gate conditions: copy every field of "
              "DIRECTIONAL_CHARTER_TEMPLATE verbatim; human_gate_conditions must contain every code in "
-             "REQUIRED_HUMAN_GATE_CONDITIONS exactly as written (you may append others). Include risk_guidance rows only where a "
-             "roadmap item warrants a higher implementation or final-review floor, with an evidence-based reason; use "
-             "an empty array when no item warrants escalation. Do not add roadmap work. On later invocations, "
+             "REQUIRED_HUMAN_GATE_CONDITIONS exactly as written (you may append others). DIRECTIONAL_CHARTER_TEMPLATE.risk_guidance, "
+             "when present, holds the floors set by the human-confirmed MANDATE.roadmap_mandate.risk_register: keep every "
+             "such row (you may raise a floor or extend its reason, never lower or drop it). Add further risk_guidance "
+             "rows only where a roadmap item warrants a higher implementation or final-review floor, with an "
+             "evidence-based reason; with no template rows, use an empty array when no item warrants escalation. "
+             "Do not add roadmap work. On later invocations, "
              "omit directional_charter and echo its directional_charter_hash; select only the next bounded iteration "
              "from that frozen charter. Decide one iteration, no further justified action, or ESCALATE. Echo "
              "MANDATE.mandate_hash exactly. Iteration 1 carries all human acceptance criteria verbatim. roadmap_refs "
-             "must be pending items with dependencies met. Set implementation_complexity to NORMAL, HARDER, or "
+             "must be pending items with dependencies met. For every MANDATE.roadmap_mandate.risk_register entry that "
+             "applies to the selected roadmap_refs (an entry without item_ids applies to all), name the risk_id in "
+             "work_packet pitfalls together with how the step avoids it, and add a verification step when one can show "
+             "it. Set implementation_complexity to NORMAL, HARDER, or "
              "SIGNIFICANTLY_DIFFICULT and cite concrete complexity_evidence. Never use that label alone to request Sonnet. "
              "Every decisions[].kind must be a key of DECISION_KINDS (its value is the autonomy level); a kind whose "
              "level is ESCALATE, or any kind not listed, stops autonomy for a human, so record ordinary technical "
@@ -244,7 +251,9 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                 "name. For every test or command check, the summary must state the exact command, its exit code and "
                 "the reported result counts, so a reviewer can verify it from this record alone. "
                 "Do not delete files such as __pycache__. "
-                "Report deviations from the plan and known limitations (uncertainties)." + wp.IMPLEMENTER_RULES),
+                "Report deviations from the plan and known limitations (uncertainties). RISK_FOCUS, when present, lists "
+                "human-confirmed risks for this step: avoid each one and report any you could not rule out as an "
+                "uncertainty." + wp.IMPLEMENTER_RULES),
     "self_verify": ("You are the AAW SELF-VERIFIER. Verify the current worktree against PLAN.acceptance_criteria and "
                     "REQUIRED_EVIDENCE only where semantic verification is needed; run no mechanical checks that are "
                     "already recorded. Do not run Git commands; the controller verifies Git boundaries. "
@@ -258,7 +267,10 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
                "ambiguity changes interpretation, request specific source_ref values with a concise reason in "
                "raw_evidence_requests and return ESCALATE pending the controller's targeted retrieval. List any "
                "remaining substantive uncertainty in uncertainties. Do not run Git commands; review the supplied "
-               "diff/source evidence and use targeted retrieval when needed. Otherwise "
+               "diff/source evidence and use targeted retrieval when needed. RISK_CHECKS, when present, lists the "
+               "human-confirmed risks for this iteration's roadmap items: check each against the diff and evidence, "
+               "raise a finding only when the change realizes the risk or skips its stated mitigation, and name every "
+               "risk_id you checked in summary. Otherwise "
                "return PASS, REPAIR_REQUIRED, or ESCALATE with evidence references. Do not modify any file."),
     "repair": ("You are the AAW REPAIRER. Address only FINDINGS, inside EXACT_ALLOWED_REPAIR_SCOPE. Do not expand "
                "the goal; do not merge, push, rebase or switch branches; leave changes uncommitted. Report which "
@@ -364,6 +376,9 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                "REQUIRED_EVIDENCE": contract.get("required_evidence", []),
                "FORBIDDEN_AREAS": mandate["roadmap_mandate"]["autonomy_bounds"].get("forbidden_areas", []),
                "WORK_PACKET": (ctx.get("plan") or {}).get("work_packet")}
+        risks = risks_for_items(mandate, (ctx.get("plan") or {}).get("roadmap_refs") or [])
+        if risks:
+            out["RISK_FOCUS"] = risks
         if name in ("execute", "repair"):
             out["AUDIT_CHECKLIST"] = [dict(row) for row in wp.AUDIT_CHECKLIST]
         if name == "self_verify":
@@ -380,7 +395,8 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 out = {key: out[key] for key in ("ROLE", "AAW_RUN_ID", "ITERATION_ID", "EXECUTION_ID", "WORKTREE_PATH",
                                                  "SOURCE_REFERENCES", "CONSTRAINTS", "FORBIDDEN_CHANGES",
                                                  "REQUIRED_EVIDENCE", "FORBIDDEN_AREAS", "FINDINGS", "ATTEMPT",
-                                                 "EXACT_ALLOWED_REPAIR_SCOPE", "WORK_PACKET", "AUDIT_CHECKLIST")
+                                                 "EXACT_ALLOWED_REPAIR_SCOPE", "WORK_PACKET", "AUDIT_CHECKLIST",
+                                                 "RISK_FOCUS")
                        if key in out}
                 out.update({"PLAN": {"goal": ctx["plan"].get("goal")}, "REPAIR_PACKET": packet,
                             "MODE": ctx.get("repair_mode"), "STEP": ctx.get("step")})
@@ -391,6 +407,9 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
     # Review starts with the compact packet and source manifest. The controller
     # adds only specifically requested, hash-verified raw sources on a second call.
     raw = dict(ctx["raw"])
+    risks = risks_for_items(mandate, ctx["iteration"]["plan"].get("roadmap_refs") or [])
+    if risks:
+        common["RISK_CHECKS"] = risks
     return {**common, "REVIEW_KIND": ctx["review_kind"], "FROZEN_MANDATE": mandate,
             "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
             "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
