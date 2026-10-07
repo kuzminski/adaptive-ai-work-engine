@@ -740,10 +740,19 @@ def forecast_view(body: Mapping[str, Any]) -> dict[str, Any]:
         detection = prun.detection_snapshot()
         current = str(body.get("current_profile_id") or "") or None
         import product_recommendations as pr
+        current_chain = [str(x) for x in (body.get("current_chain") or []) if str(x).strip()]
         rec["apply"] = {"slot": "implementer_default", "profile_id": rec["profile_id"],
                         "runnable": rec["profile_id"] in prun.pp.runnable_profiles(detection),
                         "differs": rec["profile_id"] != current, "current_profile_id": current,
                         "current_label": pr.profile_display(current) if current else None, "kind": out["kind"]}
+        if current_chain:
+            # An implementer chain owns the implementation slots (a manual slot would block START): the recommended
+            # model becomes step 1 and the rest of the current chain stays behind it as the escalation.
+            rec["apply"].update(mode="CHAIN", slot="implementer_chain",
+                                chain=[rec["profile_id"]] + [c for c in current_chain if c != rec["profile_id"]],
+                                current_chain=current_chain)
+        else:
+            rec["apply"]["mode"] = "SLOT"
     first = str(body.get("first_iteration") or body.get("goal") or "").strip()
     items = ([{"title": first, "kind": ex.classify_task(first)["kind"]}] if first else []) + [
         {"title": prun.HUMAN_GATE.sub("", d, count=1).strip() or d, "human_required": bool(prun.HUMAN_GATE.match(d)),

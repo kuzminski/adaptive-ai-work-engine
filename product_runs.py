@@ -317,7 +317,9 @@ def split_directions(values: Any) -> list[str]:
 def _clean_recommendation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping) or not value.get("profile_id"):
         return None
+    chain = value.get("chain")
     return {"source": "EXPERIENCE", "slot": str(value.get("slot") or "implementer_default")[:60],
+            "chain": [str(c)[:80] for c in chain][:12] if isinstance(chain, list) else None,
             "profile_id": str(value["profile_id"])[:80], "kind": str(value.get("kind") or "")[:40],
             "previous_profile_id": str(value.get("previous_profile_id") or "")[:80] or None,
             "n": value.get("n") if isinstance(value.get("n"), int) else None,

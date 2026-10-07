@@ -138,14 +138,17 @@ function recommendationBoxHtml(f, p) {
   const rec = f.recommended;
   if (!rec) return "";
   const a = formState.advanced, ap = rec.apply || {};
-  const applied = a.profile_overrides && a.profile_overrides.implementer_default === rec.profile_id && a.recommendation;
+  const byChain = ap.mode === "CHAIN";
+  const applied = a.recommendation && a.recommendation.profile_id === rec.profile_id && (byChain
+    ? !!formState.implementer_chain && formState.implementer_chain[0] === rec.profile_id
+    : a.profile_overrides && a.profile_overrides.implementer_default === rec.profile_id);
   const evidence = `${fmtPct(rec.rate)} skuteczności, ${fmtCost(rec.cost_per_solved, f.recommended_unit)} za rozwiązane zadanie, ${esc(CONFIDENCE_LABEL[rec.confidence] || rec.confidence)} próba n=${esc(rec.n)}`;
   let action = "";
   if (applied) action = `<div class="note ok small" style="margin-top:6px">Zastosowano: domyślny model implementacji to <strong>${esc(rec.label)}</strong> (Twoja decyzja). <button class="link" id="rec-undo">Cofnij</button></div>`;
   else if (!ap.runnable) action = `<div class="small muted" style="margin-top:6px">Ten model nie jest teraz dostępny na tym komputerze, więc nie mogę go zaproponować do użycia.</div>`;
   else if (!ap.differs) action = `<div class="small muted" style="margin-top:6px">To już model, który zostanie użyty.</div>`;
   else action = `<div style="margin-top:8px"><button id="rec-apply">Użyj ${esc(rec.label)} jako domyślnego modelu implementacji</button>
-      <span class="small muted">zamiast ${esc(ap.current_label || "obecnego")} · zmiana tylko dla tego zadania · możesz cofnąć</span></div>`;
+      <span class="small muted">zamiast ${esc(ap.current_label || "obecnego")} · ${byChain ? "reszta obecnego łańcucha zostaje jako eskalacja · " : ""}zmiana tylko dla tego zadania · możesz cofnąć</span></div>`;
   return `<div class="small" style="margin-top:6px">Dla pracy typu <strong>${esc(f.kind_label)}</strong> najlepiej sprawdza się u Ciebie: <strong>${esc(rec.label)}</strong> — ${evidence}.</div>${action}`;
 }
 function explorationBoxHtml(ex) {
@@ -165,6 +168,7 @@ async function loadForecastBox(p) {
   try {
     const f = await api("/api/experience/forecast", {goal: p.goal, first_iteration: p.first_iteration, directions: dirs, chain_mode: a.chain_mode !== false,
       current_profile_id: ((p.implementer_policy || {}).implementer_default || {}).profile_id, continuous: a.continue_autonomously !== false,
+      current_chain: (formState.implementer_chain || (p.implementer_chain && p.implementer_chain.source !== "SLOTS" ? p.implementer_chain.steps.map((x) => x.profile_id) : [])),
       max_iterations: a.max_iterations ? Number(a.max_iterations) : null});
     f.recommended_unit = f.recommended_unit || f.unit;
     const per = f.per_iteration;
@@ -180,13 +184,22 @@ async function loadForecastBox(p) {
     on("rec-apply", () => {
       const rec = f.recommended, ap = rec.apply;
       if (!confirm(`Użyć modelu ${rec.label} jako domyślnego modelu implementacji w tym zadaniu?\n\nDla pracy typu „${f.kind_label}” u Ciebie: ${fmtPct(rec.rate)} skuteczności, ${fmtCost(rec.cost_per_solved, f.recommended_unit)} za rozwiązane zadanie (n=${rec.n}).\nZastępuje: ${ap.current_label || "obecny wybór"}.\n\nZmiana dotyczy tylko tego zadania i można ją cofnąć. Trudniejsze iteracje nadal eskalują zgodnie z polityką.`)) return;
-      a.profile_overrides = {...(a.profile_overrides || {}), implementer_default: rec.profile_id};
-      a.recommendation = {slot: "implementer_default", profile_id: rec.profile_id, kind: f.kind, previous_profile_id: ap.current_profile_id, n: rec.n, rate: rec.rate, cost_per_solved: rec.cost_per_solved};
+      formState.recUndo = {chain: formState.implementer_chain ? formState.implementer_chain.slice() : null, overrides: {...(a.profile_overrides || {})}};
+      if (ap.mode === "CHAIN") {
+        formState.implementer_chain = ap.chain.slice();
+        ["implementer_default", "implementer_harder", "implementer_hard", "repair_default", "repair_hard", "review_pretreatment"].forEach((k) => delete (a.profile_overrides || {})[k]);
+      } else {
+        a.profile_overrides = {...(a.profile_overrides || {}), implementer_default: rec.profile_id};
+      }
+      a.recommendation = {slot: ap.slot, profile_id: rec.profile_id, kind: f.kind, previous_profile_id: ap.current_profile_id, n: rec.n, rate: rec.rate,
+                          cost_per_solved: rec.cost_per_solved, chain: ap.mode === "CHAIN" ? ap.chain : null};
       stepStart(wiz);
     });
     on("rec-undo", () => {
-      const o = {...(a.profile_overrides || {})}; delete o.implementer_default;
-      a.profile_overrides = o; a.recommendation = null;
+      const undo = formState.recUndo || {chain: null, overrides: {}};
+      if (a.recommendation && a.recommendation.slot === "implementer_chain") formState.implementer_chain = undo.chain;
+      else { const o = {...(a.profile_overrides || {})}; delete o.implementer_default; a.profile_overrides = o; }
+      a.recommendation = null; formState.recUndo = null;
       stepStart(wiz);
     });
     const ex = document.getElementById("exp-run");

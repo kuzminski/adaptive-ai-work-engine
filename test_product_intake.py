@@ -215,8 +215,30 @@ def test_forecast_view_proposes_a_model_with_the_facts_the_button_needs(home):
     assert out["kind"] == "BUGFIX" and out["roadmap"]["total"]["iterations"] == 2 and out["roadmap"]["gates"][0]["title"] == "Zdecyduj o logo"
     apply = out["recommended"]["apply"]
     assert apply == {"slot": "implementer_default", "profile_id": "GPT6_LUNA_HIGH", "runnable": True, "differs": True,
-                     "current_profile_id": "TERRA_HIGH", "current_label": apply["current_label"], "kind": "BUGFIX"}
+                     "current_profile_id": "TERRA_HIGH", "current_label": apply["current_label"], "kind": "BUGFIX",
+                     "mode": "SLOT"}
     assert same["recommended"]["apply"]["differs"] is False             # already the model that will be used: no button
+
+
+def test_with_an_implementer_chain_the_recommendation_becomes_step_one_and_keeps_the_escalation(home):
+    from unittest import mock
+    history = many("BUGFIX", "TERRA_HIGH", 8, 8, 0.02)
+    chain = ["GPT6_LUNA_HIGH", "TERRA_HIGH", "GPT6_LUNA_MAX"]
+    with mock.patch.object(pv, "_history", return_value={"rows": history, "summaries": [], "records": []}), \
+            mock.patch.object(pv.prun, "detection_snapshot", return_value={}), \
+            mock.patch.object(pv.prun.pp, "runnable_profiles", return_value=set(chain)):
+        out = pv.forecast_view({"goal": "Napraw błąd", "directions": [], "current_profile_id": "GPT6_LUNA_HIGH", "current_chain": chain})
+    apply = out["recommended"]["apply"]
+    assert apply["mode"] == "CHAIN" and apply["slot"] == "implementer_chain" and apply["differs"] is True
+    assert apply["chain"] == ["TERRA_HIGH", "GPT6_LUNA_HIGH", "GPT6_LUNA_MAX"]       # no duplicate, escalation kept in order
+    assert apply["current_chain"] == chain
+
+
+def test_the_audit_record_keeps_the_applied_chain():
+    form = prun.normalize_form({"goal": "Zbuduj coś ciekawego", "advanced": {"recommendation": {
+        "slot": "implementer_chain", "profile_id": "TERRA_HIGH", "chain": ["TERRA_HIGH", "GPT6_LUNA_HIGH"], "kind": "BUGFIX"}}})
+    assert form["advanced"]["recommendation"]["chain"] == ["TERRA_HIGH", "GPT6_LUNA_HIGH"]
+    assert form["advanced"]["recommendation"]["slot"] == "implementer_chain"
 
 
 def test_a_recommended_profile_that_cannot_run_here_is_flagged_not_hidden():
