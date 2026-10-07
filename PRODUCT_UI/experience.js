@@ -229,7 +229,7 @@ function intakeResultHtml(r) {
     <div class="small muted" style="margin-top:8px">Rozpisanie kosztowało: ${r.cost.cost_usd != null ? fmtCost(r.cost.cost_usd, "USD") : fmtCost(r.cost.proxy_units || 0, "proxy")}
       (${fmtTok((r.cost.tokens || {}).input_total || 0)} tokenów wej. / ${fmtTok((r.cost.tokens || {}).output || 0)} wyj.) · model: ${esc((r.planner || {}).model || (r.planner || {}).profile_id || "—")}.</div>
     <div class="actions"><button class="primary" id="intake-apply">Użyj w kreatorze</button><button id="intake-close">Odrzuć rozpis</button>
-      <span class="small muted">Wypełni pola Cel, Pierwsza iteracja, Kierunek i kryteria — możesz je dalej edytować. Nic nie startuje.</span></div></div>`;
+      <span class="small muted">Wypełni pola Cel, Pierwsza iteracja, Kierunek, kryteria i <strong>Znane ryzyka</strong> (podniosą progi review — zobaczysz je w podsumowaniu) — możesz je dalej edytować. Nic nie startuje.</span></div></div>`;
 }
 function intakeHtml() {
   const st = formState.intake || {};

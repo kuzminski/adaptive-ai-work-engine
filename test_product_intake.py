@@ -77,12 +77,27 @@ def test_prefill_marks_human_only_items_so_the_product_makes_them_human_required
     assert prefill["directions"].splitlines() == ["- Napraw zaokrąglanie groszy w rozliczeniu", "- Dodaj eksport rozliczenia do CSV",
                                                   "- [człowiek] Podłącz płatności online"]
     assert prefill["advanced"]["required_evidence"] == "unit tests" and prefill["advanced"]["forbidden_areas"] == ".env"
+    assert prefill["advanced"]["risks"] == [{"description": "zaokrąglenia", "severity": "HIGH", "item_ids": [], "source": "INTAKE"}]
     form = prun.normalize_form({"goal": prefill["goal"], "first_iteration": prefill["first_iteration"], "directions": prefill["directions"]})
     mandate = prun.build_mandate(form, "M1", {})
     ac.validate_mandate(mandate)                                    # the engine accepts it
     gated = [i for i in mandate["roadmap_mandate"]["items"] if i.get("human_required")]
     assert [g["title"] for g in gated] == ["Podłącz płatności online"]
     assert all(not i.get("human_required") for i in mandate["roadmap_mandate"]["items"] if i["item_id"] in ("STEP_1", "STEP_2", "STEP_3"))
+
+
+def test_intake_risks_reach_the_mandate_register_and_set_charter_floors():
+    p = pi.normalize(raw_proposal(risks=[{"severity": "HIGH", "text": "błędy zaokrągleń"}, {"severity": "LOW", "text": "drobiazg"}]))
+    pf = pi.to_prefill(p)
+    form = prun.normalize_form({"goal": pf["goal"], "first_iteration": pf["first_iteration"], "directions": pf["directions"],
+                                "advanced": pf["advanced"]})
+    register = form["advanced"]["risks"]
+    assert [(r["severity"], r["source"], r["item_ids"]) for r in register] == [("HIGH", "INTAKE", []), ("LOW", "INTAKE", [])]
+    mandate = prun.build_mandate(form, "M1", {})
+    mandate = ac.validate_mandate(mandate)
+    assert [r["description"] for r in mandate["roadmap_mandate"]["risk_register"]] == ["błędy zaokrągleń", "drobiazg"]
+    floors = ac.mandated_risk_floors(mandate)
+    assert floors and all(f["implementation_floor"] == "HARDER" and f["final_review_floor"] == "HARD" for f in floors)   # LOW adds none
 
 
 def test_the_human_marker_is_case_and_language_tolerant():

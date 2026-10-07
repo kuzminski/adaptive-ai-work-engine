@@ -163,9 +163,12 @@ def normalize(raw: Any) -> dict[str, Any]:
 def to_prefill(p: Mapping[str, Any]) -> dict[str, Any]:
     """The wizard's fields. Human-only items carry the `[człowiek]` marker the product turns into human-required items."""
     lines = [("[człowiek] " if i["human_required"] else "") + i["title"] for i in p["roadmap"]]
+    # Risks go to the product's risk register as INTAKE rows for the whole run: the wizard shows them with the floors they
+    # set (MEDIUM and above raise the final-review floor, HIGH also the implementation floor) and the user can edit or delete them.
+    risks = [{"description": r["text"], "severity": r["severity"], "item_ids": [], "source": "INTAKE"} for r in p["risks"]]
     return {"goal": p["goal"], "first_iteration": p["first_iteration"], "directions": "\n".join(f"- {line}" for line in lines),
             "advanced": {"acceptance_criteria": "\n".join(p["acceptance_criteria"]), "required_evidence": "\n".join(p["required_evidence"]),
-                         "forbidden_areas": "\n".join(p["forbidden_areas"])}}
+                         "forbidden_areas": "\n".join(p["forbidden_areas"]), "risks": risks}}
 
 
 def forecast_items(p: Mapping[str, Any]) -> list[dict[str, Any]]:
