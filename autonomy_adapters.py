@@ -132,13 +132,14 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "chain_plan": {"type": ["array", "null"], "items": {
                      "type": "object", "additionalProperties": False,
                      "required": ["goal", "roadmap_refs", "scope_justification", "acceptance_criteria",
-                                  "touched_areas", "implementation_complexity", "complexity_evidence"],
+                                  "touched_areas", "implementation_complexity", "complexity_evidence", "work_packet"],
                      "properties": {"goal": {"type": "string"}, "roadmap_refs": _STRS,
                                     "scope_justification": {"type": "string"}, "acceptance_criteria": _STRS,
                                     "touched_areas": _STRS,
                                     "implementation_complexity": {"type": "string",
                                                                   "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
-                                    "complexity_evidence": _STRS}}},
+                                    "complexity_evidence": _STRS,
+                                    "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}}},
                  "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
@@ -308,11 +309,13 @@ CHAIN_INSTRUCTIONS: dict[str, str] = {
     "plan": (" CHAIN PLANNING: CHAIN_PLANNING.slots_after_this is how many further iterations may run back to back "
              "before one serious review. After the iteration you return now, outline those iterations in `chain_plan` "
              "(in execution order, at most slots_after_this entries, each with goal, roadmap_refs, scope_justification, "
-             "acceptance_criteria, touched_areas, implementation_complexity, complexity_evidence). Each entry must be a "
+             "acceptance_criteria, touched_areas, implementation_complexity, complexity_evidence, work_packet). Each entry must be a "
              "self-contained, bounded step that can be implemented and tested without re-planning, reference only "
              "pending roadmap items whose dependencies are met by this iteration or earlier entries (one item per "
              "iteration; an item is completed by its iteration), and stay inside the mandate. Return null or [] when "
-             "fewer steps are justified. Entries are re-validated before use; an invalid one is dropped."),
+             "fewer steps are justified. Entries are re-validated before use; an invalid one is dropped. Give an entry "
+             "a work_packet (same rules as the iteration's own) only for paths that already exist or that an earlier "
+             "entry creates; otherwise null (that iteration then runs from its acceptance criteria alone)."),
     "review_light": (" CHAIN MODE, LIGHT REVIEW (CHAIN.mode LIGHT): this is a quick mid-chain check, not the serious "
                      "review. Look only for defects that harm real behaviour: crashes, wrong results, data loss, "
                      "security holes, a failed or missing required check, an acceptance criterion not met. Report "

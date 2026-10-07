@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+import work_packet as wp
+
 SCHEMA = "AAW_CHAIN_MODE_V1"
 LIGHT, CLOSE, POLISH = "LIGHT", "CHAIN_CLOSE", "POLISH"
 REVIEW_MODES = (LIGHT, CLOSE, POLISH)
@@ -187,6 +189,7 @@ def build_polish_plan(mandate: Mapping[str, Any], backlog: Sequence[Mapping[str,
     criteria.append("every item above is fixed, or reported as deliberately left with a one-line reason")
     criteria.append("no change of behaviour, public interface or scope; every recorded check still passes")
     files = sorted({r["file"] for r in selected if r.get("file")})
+    packet = _polish_packet(selected, files)
     plan = {"status": "ITERATION", "mandate_hash": mandate["mandate_hash"], "directional_charter_hash": charter_hash,
             "goal": "Polish: resolve the minor findings deferred during the implementation chains "
                     "(cosmetics, naming, small edge cases, docs) without changing behaviour or scope",
@@ -195,14 +198,31 @@ def build_polish_plan(mandate: Mapping[str, Any], backlog: Sequence[Mapping[str,
             "acceptance_criteria": criteria, "touched_areas": files, "decisions": [], "skipped_items": [],
             "implementation_complexity": "NORMAL", "complexity_evidence": [],
             "semantic_verification_required": False, "semantic_verification_reason": None,
-            "polish_findings": [r["finding_key"] for r in selected]}
+            "polish_findings": [r["finding_key"] for r in selected], "work_packet": packet}
     return plan, selected, out_of_scope
+
+
+def _polish_packet(selected: Sequence[Mapping[str, Any]], files: Sequence[str]) -> dict[str, Any]:
+    """A work packet for the polish pass, built from the recorded findings (no planner call, no invented paths)."""
+    steps = [{"step_id": f"P{n}", "action": f"Resolve finding {r['finding_key']} ({r['severity']})",
+              "files": [r["file"]] if r.get("file") else [], "details": str(r["summary"]),
+              "verify": "re-read the change and re-run the recorded checks; or note a one-line reason for leaving it"}
+             for n, r in enumerate(selected, 1)]
+    return {"files_to_read": list(files), "files_to_change": list(files), "steps": steps, "verification_commands": [],
+            "definition_of_done": [f"{r['finding_key']} is fixed, or left with a one-line reason" for r in selected]
+                                  + ["every check recorded earlier in the run still passes"],
+            "pitfalls": ["do not change behaviour, public interfaces or scope", "do not touch files no finding names",
+                         "a finding that no longer reproduces is closed without a change"],
+            "out_of_scope": ["new features", "refactors that are not needed to resolve a listed finding"],
+            "needs_strong_implementer": False, "strong_implementer_reason": None}
 
 
 # -- chain plan -------------------------------------------------------------------------------
 
 STUB_KEYS = ("goal", "roadmap_refs", "scope_justification", "acceptance_criteria", "touched_areas",
-             "implementation_complexity", "complexity_evidence")
+             "implementation_complexity", "complexity_evidence", "work_packet")
+STALE_PACKET_NOTE = ("this packet was drafted before the earlier iterations of the chain ran: re-read each file before "
+                     "editing it, and where it disagrees with the repository as it is now, follow the repository")
 
 
 def valid_stub(stub: Any) -> bool:
@@ -215,7 +235,8 @@ def valid_stub(stub: Any) -> bool:
             and all(isinstance(c, str) and c.strip() for c in stub["acceptance_criteria"])
             and isinstance(stub.get("touched_areas"), list) and all(isinstance(a, str) for a in stub["touched_areas"])
             and stub.get("implementation_complexity", "NORMAL") in ("NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT")
-            and isinstance(stub.get("complexity_evidence", []), list))
+            and isinstance(stub.get("complexity_evidence", []), list)
+            and (stub.get("work_packet") is None or isinstance(stub.get("work_packet"), Mapping)))
 
 
 def clean_stubs(stubs: Any, limit: int) -> list[dict[str, Any]]:
@@ -226,13 +247,38 @@ def clean_stubs(stubs: Any, limit: int) -> list[dict[str, Any]]:
     for stub in stubs:
         if not valid_stub(stub):
             break          # order matters: a broken stub makes everything after it untrustworthy
-        out.append({k: stub.get(k) for k in STUB_KEYS})
+        row = {k: stub.get(k) for k in STUB_KEYS}
+        row["work_packet"] = _clean_packet(stub.get("work_packet"))
+        out.append(row)
         if len(out) >= limit:
             break
     return out
 
 
+def _clean_packet(packet: Any) -> dict[str, Any] | None:
+    """Keep only the work-packet fields and mark the packet as drafted ahead of time; None if there is none."""
+    if not isinstance(packet, Mapping):
+        return None
+    out = {k: packet.get(k) for k in wp.WORK_PACKET_SCHEMA["required"]}
+    for key in ("files_to_read", "files_to_change", "definition_of_done", "pitfalls", "out_of_scope"):
+        out[key] = [str(x) for x in out[key]] if isinstance(out[key], list) else []
+    out["steps"] = [s for s in out["steps"] if isinstance(s, Mapping)] if isinstance(out["steps"], list) else []
+    out["verification_commands"] = ([c for c in out["verification_commands"] if isinstance(c, Mapping)]
+                                    if isinstance(out["verification_commands"], list) else [])
+    out["needs_strong_implementer"] = out["needs_strong_implementer"] is True
+    if STALE_PACKET_NOTE not in out["pitfalls"]:
+        out["pitfalls"] = out["pitfalls"] + [STALE_PACKET_NOTE]
+    return out
+
+
 def stub_to_plan(stub: Mapping[str, Any], *, mandate_hash: str, charter_hash: str | None) -> dict[str, Any]:
+    plan = _stub_plan(stub, mandate_hash=mandate_hash, charter_hash=charter_hash)
+    if stub.get("work_packet"):           # no packet key at all stays a legacy plan, which is not penalised
+        plan["work_packet"] = _clean_packet(stub["work_packet"])
+    return plan
+
+
+def _stub_plan(stub: Mapping[str, Any], *, mandate_hash: str, charter_hash: str | None) -> dict[str, Any]:
     return {"status": "ITERATION", "mandate_hash": mandate_hash, "directional_charter_hash": charter_hash,
             "goal": stub["goal"], "roadmap_refs": list(stub["roadmap_refs"]),
             "scope_justification": stub["scope_justification"],

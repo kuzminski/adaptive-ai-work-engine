@@ -128,6 +128,32 @@ def test_polish_plan_respects_the_mandate_areas_and_orders_by_severity():
     assert chain.build_polish_plan(mandate, backlog[2:3], charter_hash=None, max_findings=2)[0] is None
 
 
+def test_polish_plan_carries_a_work_packet_built_from_the_findings():
+    import work_packet as wp
+    mandate = ac.validate_mandate(items("A"))
+    backlog = [{"finding_key": "med", "severity": "MEDIUM", "summary": "rename helper", "file": "src/b.py", "status": "OPEN", "at": "2"}]
+    plan_, _, _ = chain.build_polish_plan(mandate, backlog, charter_hash=None, max_findings=2)
+    packet = plan_["work_packet"]
+    assert packet["files_to_change"] == ["src/b.py"] and [s["step_id"] for s in packet["steps"]] == ["P1"]
+    assert "med" in packet["definition_of_done"][0] and packet["needs_strong_implementer"] is False
+    assert not wp.lint_work_packet(plan_)["issues"].count("NO_STEPS")
+
+
+def test_stub_work_packets_are_cleaned_marked_as_drafted_ahead_and_optional():
+    packet = {"files_to_read": ["src/export/core.py"], "files_to_change": ["src/export/core.py"],
+              "steps": [{"step_id": "1", "action": "add the export header", "files": ["src/export/core.py"], "details": "d", "verify": "v"}, "junk"],
+              "verification_commands": [], "definition_of_done": ["header exported"], "pitfalls": [], "out_of_scope": [],
+              "needs_strong_implementer": False, "strong_implementer_reason": None, "extra": 1}
+    kept = chain.clean_stubs([stub("B", work_packet=packet), stub("C")], 5)
+    assert kept[0]["work_packet"]["steps"] == [packet["steps"][0]] and "extra" not in kept[0]["work_packet"]
+    assert chain.STALE_PACKET_NOTE in kept[0]["work_packet"]["pitfalls"] and kept[1]["work_packet"] is None
+    with_packet = chain.stub_to_plan(kept[0], mandate_hash="m", charter_hash=None)
+    legacy = chain.stub_to_plan(kept[1], mandate_hash="m", charter_hash=None)
+    assert with_packet["work_packet"]["files_to_change"] == ["src/export/core.py"]
+    assert "work_packet" not in legacy                                     # no key = legacy plan, not penalised
+    assert chain.clean_stubs([stub("B", work_packet="nope")], 3) == []     # a malformed packet breaks the stub
+
+
 def test_clean_stubs_keeps_the_valid_prefix_and_respects_the_limit():
     good = [stub("A"), stub("B"), stub("C")]
     assert len(chain.clean_stubs(good, 2)) == 2
@@ -300,6 +326,19 @@ def test_chain_plan_lets_one_planner_call_drive_the_whole_chain(tmp_path):
     assert all("chain_plan" not in i["plan"] for i in state["iterations"])        # never leaked to the implementer
     assert h.ctxs["plan"][0]["chain"]["slots_after_this"] == 2
     assert events(c, "CHAIN_PLAN_RECORDED")[0]["payload"]["kept"] == 2
+
+
+def test_a_stub_packet_reaches_the_implementer_in_the_iteration_plan(tmp_path):
+    packet = {"files_to_read": [], "files_to_change": ["src/export/b.py"],
+              "steps": [{"step_id": "1", "action": "write the b module", "files": ["src/export/b.py"], "details": "d", "verify": "v"}],
+              "verification_commands": [], "definition_of_done": ["b exists"], "pitfalls": [], "out_of_scope": [],
+              "needs_strong_implementer": False, "strong_implementer_reason": None}
+    h = harness(tmp_path, "A", "B")
+    h.script("plan", plan(["A"], chain_plan=[stub("B", work_packet=packet)]))
+    state = h.controller().run()
+    assert state["iterations"][1]["lineage"]["source"] == "CHAIN_PLAN"
+    assert state["iterations"][1]["plan"]["work_packet"]["files_to_change"] == ["src/export/b.py"]
+    assert chain.STALE_PACKET_NOTE in state["iterations"][1]["plan"]["work_packet"]["pitfalls"]
 
 
 def test_an_invalid_stub_falls_back_to_the_planner_without_escalating(tmp_path):
