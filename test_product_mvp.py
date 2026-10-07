@@ -99,9 +99,12 @@ def env(tmp_path, monkeypatch):
 
 
 def form(env, **extra):
+    # These suites exercise the classic review-after-every-iteration lifecycle; chain mode has its own tests
+    # (test_autonomy_chain.py) and the product switch is `advanced.chain_mode`.
+    advanced = {"chain_mode": False, **extra.pop("advanced", {})}
     return {"repo": str(env.repo), "goal": "Build a tiny greeting module",
             "first_iteration": "Add greet(name) with a unit test",
-            "directions": ["multi-language greetings"], **extra}
+            "directions": ["multi-language greetings"], "advanced": advanced, **extra}
 
 
 def wait_for(run_id, predicate, timeout=90, interval=0.15):
@@ -379,7 +382,7 @@ def test_stop_during_execute_waits_then_pauses_and_resume_completes(env):
     assert stopping
     prun.resume_task(run_id)
     view = wait_for(run_id, settled)
-    assert view["status"] == pv.S_GATE
+    assert view["status"] == pv.S_GATE, (view.get("status_detail"), view.get("worker_exit"))
     assert len([c for c in env.calls() if c["role"] == "IMPLEMENTER"]) == 1     # never replayed
     assert_no_merge_push(env)
 
@@ -406,7 +409,7 @@ def test_stop_during_review_cancels_read_only_call_and_resume_replays_with_new_i
     assert any(b["kind"] == "CANCELLED" for t in view["timeline"] for b in t["briefs"])
     prun.resume_task(run_id)
     view = wait_for(run_id, settled)
-    assert view["status"] == pv.S_GATE
+    assert view["status"] == pv.S_GATE, (view.get("status_detail"), view.get("worker_exit"))
     state = json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text())
     reviews = [e for e in state["executions"] if e["executor"] == "review"]
     assert reviews[-1]["retry_of_execution_id"] == cancelled_id
@@ -471,6 +474,7 @@ def test_accept_reject_and_continue_never_merge_or_push(env):
     assert git(task["workspace"]["worktree"], "rev-parse", "HEAD") == base["commit"]
     assert_no_merge_push(env)
     prefill = cont["prefill"]
+    assert prefill["advanced"]["chain_mode"] is False           # the follow-up keeps the mode of the run it continues
     prefill.update(first_iteration="Add a farewell function", directions=[])
     follow_up = prun.start_task(prefill, detection=prun.detection_snapshot())["run_id"]
     view = wait_for(follow_up, settled)

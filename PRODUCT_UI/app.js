@@ -68,6 +68,7 @@ async function route() {
     if (page === "new") return renderWizard();
     if (page === "runs" && arg) return renderRun(arg);
     if (page === "runs") return renderRuns();
+    if (page === "experience") return renderExperience();
     if (page === "settings") return renderSettings();
     return renderHome();
   } catch (e) {
@@ -250,7 +251,8 @@ function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
           planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
-          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}, risks: ""}};
+          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}, risks: "",
+                     chain_mode: true, exploration: null, recommendation: null}, intake: {}};
 }
 // Known risks: wizard text, or rows from the idea intake / a continuation ({description, severity, item_ids|points}).
 const RISK_WORD = {LOW: "niskie", MEDIUM: "średnie", HIGH: "wysokie", CRITICAL: "krytyczne"};
@@ -539,8 +541,10 @@ function stepGoal(box) {
     ${draftBanner()}
     ${editorHtml("goal", f.goal, {rows: 5, placeholder: "np. Prosta aplikacja do śledzenia wydatków z eksportem do CSV"})}
     <div class="small muted" id="draft-state"></div>
-    ${presetPickerHtml()}`;
+    ${presetPickerHtml()}
+    ${intakeHtml()}`;
   bindDraftBanner();
+  bindIntake();
   bindEditor("goal", (v) => { f.goal = v; draftSave(); refreshNext(); });
   bindPresets(() => renderWizard());
   document.getElementById("goal").focus();
@@ -577,6 +581,8 @@ function formPayload() {
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
                      continue_autonomously: a.continue_autonomously !== false,
+                     chain_mode: a.chain_mode !== false, exploration: typeof a.exploration === "boolean" ? a.exploration : null,
+                     recommendation: a.recommendation || null,
                      profile_overrides: a.profile_overrides, risks: a.risks || ""}};
 }
 function risksRow(p) {
@@ -611,6 +617,7 @@ async function stepStart(box) {
       ${risksRow(p)}
       <tr><td>Limity</td><td>bezpiecznik: maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację <span class="small muted">(to nie jest cel, tylko hamulec)</span></td></tr>
     </table>
+    <div id="forecast-box"></div>
     <ul class="safety">${p.safety.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
     <details style="margin-top:12px"><summary>Zaawansowane</summary>
       <label class="field">Kryteria akceptacji pierwszej iteracji <span class="hint">(po jednym w linii; puste = domyślne)</span></label>
@@ -619,6 +626,8 @@ async function stepStart(box) {
       <textarea id="ev">${esc(a.required_evidence)}</textarea>
       <label class="field">Obszary zabronione <span class="hint">(ścieżki, po jednej w linii)</span></label>
       <textarea id="forb">${esc(a.forbidden_areas)}</textarea>
+      <label class="check" style="margin-top:12px"><input type="checkbox" id="chainmode" ${a.chain_mode === false ? "" : "checked"}> Tryb łańcuchowy
+        <span class="hint">(długie serie iteracji z lekkim review, jedno poważne review na końcu serii, drobne uwagi na polerowanie; odznacz, by mieć pełne review po każdej iteracji)</span></label>
       <label class="field">Znane ryzyka <span class="hint">(po jednym w linii, np. „[wysokie] utrata danych przy zapisie (punkty: 1, 3)”; numery jak na liście „Kierunek (roadmapa)” powyżej, 1 = pierwsza iteracja; poziom: niskie / średnie / wysokie / krytyczne, domyślnie średnie; bez „punkty” = całe zadanie)</span></label>
       <textarea id="risks">${esc(risksText(a.risks))}</textarea>
       <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji (bezpiecznik) <input type="number" id="maxit" min="1" max="${esc((boot.limits || {}).hard_max_iterations || 200)}" value="${esc(a.max_iterations)}"></label>
@@ -630,9 +639,11 @@ async function stepStart(box) {
     </details>
     <div class="actions start-row"><button class="primary start-btn" id="start" ${p.can_start ? "" : "disabled"}>START</button>
       <span class="small muted">${p.can_start ? "AAW zacznie pracę w tle. Możesz zamknąć to okno — praca trwa dalej." : "Popraw powyższe, aby wystartować."}</span></div>`;
+  loadForecastBox(p);
   on("apply-adv", () => {
     a.acceptance_criteria = val("acc"); a.required_evidence = val("ev"); a.forbidden_areas = val("forb"); a.risks = val("risks");
-    a.max_iterations = val("maxit"); a.max_repair_attempts = val("maxrep"); stepStart(box);
+    a.max_iterations = val("maxit"); a.max_repair_attempts = val("maxrep");
+    a.chain_mode = document.getElementById("chainmode").checked; stepStart(box);
   });
   on("start", async (e) => {
     e.target.disabled = true;
@@ -674,7 +685,6 @@ function processHtml(v) {
         <div class="stat"><div class="k">Roadmapa</div><div class="v">${esc(p.roadmap.done)} / ${esc(p.roadmap.total)}${p.standing && p.standing.status === "PENDING" ? ` <span class="small muted">+ kontynuacja</span>` : ""}</div></div>
         <div class="stat"><div class="k">Iteracje</div><div class="v">${esc(p.iterations_done ?? 0)} <span class="small muted">/ bezpiecznik ${esc(p.max_iterations ?? "—")}</span></div></div>
       </div>
-      <div class="small muted" style="margin-top:8px">AAW nie pokazuje szacowanego czasu zakończenia — nie ma danych, by podać go uczciwie.</div>
       ${v.status_detail ? `<div class="note warn" style="margin-top:12px">${esc(v.status_detail)}</div>` : ""}
       ${stopInfo(v)}
     </div></div>
@@ -765,6 +775,7 @@ function gateHtml(v) {
       ${g.planner_end_reason ? `<div class="note small">Planista zakończył pracę autonomiczną: ${esc(g.planner_end_reason)}</div>` : ""}
       ${g.could_continue ? `<div class="note warn small">AAW mógł pracować dalej — zatrzymał go bezpiecznik lub eskalacja, nie brak pracy. „Dodaj kierunek” startuje nowe zadanie od tego wyniku.</div>` : ""}</div>
     <div class="sec"><h3>Ostrzeżenia</h3>${list(g.warnings, "Brak.")}</div>
+    ${settlementHtml(g.settlement)}
     <div class="sec"><h3>Bieżący kandydat</h3><div class="kv small">
       <div>Zmienione pliki</div><div class="mono">${esc((c.changed_files || []).join(", ") || "—")}</div>
       ${c.last_repair ? `<div>Ostatnia naprawa</div><div class="small">${c.last_repair.code_changed ? "zmieniła kod" : "bez zmian w kodzie (cała iteracja — lista powyżej)"}${(c.last_repair.signals || []).length ? " · postęp: " + esc(c.last_repair.signals.join(", ")) : ""}</div>` : ""}
@@ -790,6 +801,8 @@ function technicalHtml(v) {
     <div>Repozytorium</div><div class="mono">${esc(w.repo)}</div>
     <div>Worktree (izolowana kopia)</div><div class="mono">${esc(w.worktree)}</div>
     <div>Gałąź / baza</div><div class="mono">${esc(w.branch)} @ ${esc((w.base_commit || "").slice(0, 12))}</div>
+    ${(v.setup_notes || {}).recommendation ? `<div>Zastosowana rekomendacja</div><div class="small">${esc(v.setup_notes.recommendation.kind)}: ${esc(v.setup_notes.recommendation.profile_id)} zamiast ${esc(v.setup_notes.recommendation.previous_profile_id || "—")} (potwierdzone przez użytkownika)</div>` : ""}
+    ${(v.setup_notes || {}).exploration ? `<div>Eksploracja</div><div class="small">włączona: do ${esc(v.setup_notes.exploration.max_per_run)} iteracji, kandydaci: ${esc((v.setup_notes.exploration.candidates || []).join(", "))}</div>` : ""}
     <div>Bieżące wywołanie (execution_id)</div><div class="mono">${esc((v.process || {}).execution_id || "—")}</div>
     <div>Blokada runu</div><div class="mono">${esc(JSON.stringify((v.controls || {}).lock_token || null))}</div>
   </div><table style="margin-top:12px">${slots.map((s) => `<tr><td>${esc(s.label)}</td><td class="mono">${esc(s.profile_id)} · ${esc(s.runtime_model_id || "")}/${esc(s.effort || "")} · ${esc(s.status)}${s.exact_mapping_of ? " (dokładne mapowanie " + esc(s.exact_mapping_of) + ")" : ""}</td></tr>`).join("")}</table>
@@ -812,7 +825,7 @@ async function renderRun(runId) {
     const techOpen = document.getElementById("tech")?.open;
     view.innerHTML = `<div class="muted small"><a href="#/home">Home</a> › ${esc(v.project || "")}</div>
       <h1 class="run-title">${esc(v.goal)}</h1>${bannerHtml(v)}
-      ${gateHtml(v)}${processHtml(v)}${directionHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
+      ${gateHtml(v)}${liveHtml(v)}${processHtml(v)}${directionHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
     const tech = document.getElementById("tech");
     if (techOpen) tech.open = true;
     document.body.classList.toggle("show-adv", !!techOpen);
@@ -859,6 +872,7 @@ function bindRun(runId, v) {
     const r = await act("continue", {mode});
     if (!r) return;
     formState = Object.assign(defaultForm(), r.prefill);
+    formState.advanced = Object.assign(defaultForm().advanced, r.prefill.advanced || {});
     formState.directions = (r.prefill.directions || []).join("\n");
     if (r.prefill.risks) { formState.advanced.risks = risksText(r.prefill.risks); delete formState.risks; }
     formState.planning = r.prefill.planning || boot.settings.planning;
@@ -892,6 +906,14 @@ async function renderSettings() {
       <div>Aktualizacje rekomendacji online</div><div><label><input type="checkbox" id="online" ${s.online_recommendation_updates ? "checked" : ""}> sprawdzaj przy starcie (tylko odczyt pliku z GitHub AAW)</label></div>
       <div>Katalog rekomendacji</div><div>${esc(boot.catalog.version)} (${esc(boot.catalog.source)}) <button class="link" id="upd">Sprawdź aktualizację teraz</button></div>
     </div><div class="actions"><button class="primary" id="save">Zapisz</button></div></div>
+    <div class="panel"><h3>Eksploracja (opcjonalnie)</h3>
+      <p class="hint">Domyślnie wyłączona. Gdy ją włączysz, mały, widoczny odsetek <strong>zwykłych</strong> iteracji wykona inny model — uruchamialny u Ciebie, tego samego lub niższego kosztu niż domyślny —
+        żeby uzupełnić Twój benchmark danymi z prawdziwej pracy (bez osobnego laboratorium). Nigdy: pierwsza iteracja, naprawy, trudniejsze iteracje, zadania o krytycznym zakresie, model niedostępny teraz.
+        Każdy taki krok jest oznaczony w przebiegu i na stronie „Doświadczenie”. Możesz ją też włączyć lub wyłączyć dla pojedynczego zadania w podsumowaniu.</p>
+      <label class="check"><input type="checkbox" id="expl" ${s.exploration_enabled ? "checked" : ""}> Włącz eksplorację dla nowych zadań</label>
+      <div class="inline wrap" style="margin-top:10px"><label class="small">Maks. odsetek zwykłych iteracji (%) <input type="number" id="expl-pct" min="1" max="50" value="${esc(s.exploration_max_percent)}"></label>
+        <label class="small">Maks. iteracji eksploracyjnych na zadanie <input type="number" id="expl-max" min="1" max="10" value="${esc(s.exploration_max_per_run)}"></label></div>
+      <div class="actions"><button class="primary" id="save-expl">Zapisz</button></div></div>
     <details><summary>Zaawansowane</summary><div class="panel" style="margin-top:10px">
       <div class="kv small"><div>Folder danych</div><div class="mono">${esc(boot.data_home)}</div>
       <div>Wersja</div><div>${esc(boot.release.name)} (${esc(boot.release.release)})${boot.frozen ? " · portable" : " · źródła"}</div>
@@ -916,6 +938,13 @@ async function renderSettings() {
     const body = {online_recommendation_updates: document.getElementById("online").checked};
     view.querySelectorAll("[data-setting]").forEach((el) => (body[el.dataset.setting] = el.value));
     try { boot.settings = await api("/api/settings", body); toast("Zapisano."); } catch (e) { toast(e.message); }
+  });
+  on("save-expl", async () => {
+    try {
+      boot.settings = await api("/api/settings", {exploration_enabled: document.getElementById("expl").checked,
+        exploration_max_percent: Number(val("expl-pct")), exploration_max_per_run: Number(val("expl-max"))});
+      toast("Zapisano ustawienia eksploracji.");
+    } catch (e) { toast(e.message); }
   });
   on("upd", async () => {
     const r = await api("/api/recommendations/update", {});

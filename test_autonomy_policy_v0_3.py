@@ -17,7 +17,9 @@ IDS = {key: f"PROFILE::{key}" for key in ap.PROFILE_KEYS}
 
 
 def production_roles():
-    return ac.load_roles(ROOT / "AUTONOMY_ROLES.json", ROOT / "IMPLEMENTER_PROFILES.json")
+    roles = ac.load_roles(ROOT / "AUTONOMY_ROLES.json", ROOT / "IMPLEMENTER_PROFILES.json")
+    roles.pop("chain", None)   # these tests pin the classic per-iteration cycle; chain mode has its own tests
+    return roles
 
 
 def policy_harness(tmp_path, *, mandate=None, env=None):

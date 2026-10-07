@@ -327,5 +327,19 @@
       "reviewer": "SOL_6_1_LIGHT",
       "final_reviewer": "SOL_5_6_LIGHT"
     }
+  },
+  "chain": {
+    "_comment": "Chain mode (autonomy_chain.py): the strong planner outlines a whole chain once; iterations run back to back with deterministic self-verification and one cheap review that only a CRITICAL defect can fail; the last iteration of a chain gets the serious review (floor: close_final_floor) over the whole diff; HIGH/CRITICAL defects are repaired, smaller ones are deferred and polished at the very end. Set enabled to false for the classic per-iteration review cycle. A run keeps the config it started with.",
+    "enabled": true,
+    "length": 8,
+    "mid_chain_review": "PRIMARY",
+    "mid_repair_min_severity": "CRITICAL",
+    "close_repair_min_severity": "HIGH",
+    "close_final_floor": "HARD",
+    "plan_batching": true,
+    "polish": {
+      "enabled": true,
+      "max_findings": 12
+    }
   }
 }

@@ -15,9 +15,44 @@ Details: `AAW_RISK_REGISTER_CHARTER_V0_1.md`.
   shows what the risks enforced. Summary table stacks on phones.
 - Windows walkthrough uses the example presets (the old example buttons are gone).
 
-## Unreleased — long-form fields, example presets, count-free autonomy
 
-Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
+## Unreleased — chain mode, telemetry V1, AAW-Bench
+
+Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
+- **Chain mode** (`autonomy_chain.py`, `chain` block of `AUTONOMY_ROLES.json`, on by default; `enabled: false` restores
+  the classic cycle): iterations run in chains of 8 with deterministic self-verification and one cheap review that only
+  a CRITICAL defect can fail; the last iteration of a chain gets the serious review (final-review tier floor `HARD`) over
+  the whole diff; HIGH/CRITICAL defects are repaired, smaller ones go to `deferred_findings` and are polished once at the
+  end of the run; the planner may outline a whole chain (`chain_plan`, every stub re-validated by `check_plan`).
+- **Telemetry V1** (`aaw_telemetry.py`, `MODEL_PRICING.json`): one record per executor call in
+  `AUTONOMY/telemetry.jsonl` (tokens, cost REPORTED/ESTIMATED/UNPRICED, wall time, category, chain), reports by
+  category/role/profile/chain, legacy runs rebuilt from state. Prices are NOT_VERIFIED list prices.
+- **AAW-Bench** (`BENCH/`): 9 verified tasks scored by hidden tests through the production controller and `execute`
+  executor; cost per solved task, Pareto front, escalation ladders and per-tier recommendations. Live run not done yet.
+- Product view: a provisional iteration is labelled "PASS (wstępnie)", open deferred findings are listed as warnings.
+- Review fixes during the project: the Human Gate now lists only findings the polish pass did not attempt; an
+  unrunnable final-review floor profile falls back instead of stopping the run.
+- Tests: `test_autonomy_chain.py` (34), `test_aaw_bench.py` (17). Lifecycle tests pin the classic cycle explicitly.
+- **Experience** (`aaw_experience.py`, `aaw_benchstats.py`, `PRODUCT_UI/experience.js`; `AAW_UX_REALTIME_EXPERIENCE_V0_1.md`):
+  the benchmark now builds itself from real runs (no lab step): per-task-kind cost per solved task with intervals, Pareto
+  front and a user-mix-weighted overall choice, "what would be optimal" statements with evidence, horizon ("how far runs get
+  without a human"), forecast for a running or new run (a range, or an explicit "no data"), settlement at the gate.
+  Run page: live journey strip, chain slots, cost meter and split, ticking timer, event feed. New page "Doświadczenie" with a
+  labelled synthetic preview (3 personas). API: `/api/experience`, `/api/experience/forecast`, `live` + `settlement` in `/api/runs/<id>`.
+  Product option `advanced.chain_mode` (default on).
+- Tests: `test_aaw_experience.py` (40), `test_product_experience.py` (7).
+- **Recommended model button** (wizard summary): applies the model that works best for this kind of work as the default
+  implementer for that task only, after an explicit confirmation, with an audit entry; undoable; never automatic.
+- **Opt-in controlled exploration** (`autonomy_explore.py`; settings + per-task switch; off by default): a small visible share of
+  ordinary iterations is implemented by another runnable model of the same or lower cost class to fill thin benchmark cells.
+  Never repairs, harder tiers, first iteration, critical scope; hard per-run budget; journaled and marked in the run and on the
+  Experience page. Role config key `exploration` (frozen per run).
+- **Idea intake** (`product_intake.py`, `/api/intake/propose`): one confirmed, read-only call to the planner turns a loose idea into
+  scope, roadmap, criteria, assumptions, open questions and risks, shown with horizon and cost before START. Roadmap lines
+  prefixed `[człowiek]` become human-required items. The wizard summary now forecasts the whole roadmap (iterations, chains,
+  cost/time ranges, chance of finishing without a human, gates).
+- Tests: `test_autonomy_explore.py` (20), `test_product_intake.py` (25).
+- Performance: the run page's live block is cached by file state and skipped on the Home list (the first version recomputed history and benchmark on every 0.15-1.5 s poll and slowed a product test by ~20 s).
 
 - Goal / First iteration / Direction fields are no longer cut (was 2000 / 2000 / 12 points × 400 chars);
   safety ceilings only (200k / 200k / 500k chars, 200 points), refused with a clear message, never truncated.
@@ -53,6 +88,21 @@ Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. 
   `AGY_GEMINI_FLASH`, usable after a local probe. The interim Gemini CLI harness is removed. Routing
   alternatives are limited to profiles runnable on this machine.
 - Required-evidence matching tolerates naming variants ("Unit-tests (pytest)" substantiates "unit tests").
+
+## Unreleased — long-form fields, example presets, count-free autonomy
+
+Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
+
+- Goal / First iteration / Direction fields are no longer cut (was 2000 / 2000 / 12 points × 400 chars);
+  safety ceilings only (200k / 200k / 500k chars, 200 points), refused with a clear message, never truncated.
+- Direction text is split into points preserving multi-line Markdown; the verbatim text is kept in the mandate.
+- New "standing" roadmap item (`recurring: true`, id `CONTINUE`): an accepted iteration never completes it, so
+  PLAN → … → FINAL_REVIEW → ROADMAP_CHECK → PLAN continues until the planner skips it with a reason or a fuse
+  fires. Option `advanced.continue_autonomously` (default on; off = previous behaviour).
+- Iteration cap is a fuse: default 40 (was `len(items)+2`), hard ceiling 200 (was 50).
+- Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
+- UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
+  (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
 
 ## 0.3.0 — 2026-10-04 — Implementer chain chosen at start (includes 0.2.1)
 

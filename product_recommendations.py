@@ -438,6 +438,9 @@ def resolve_choices(choices: Mapping[str, str], *, runnable: set[str], catalog: 
         # Quota/trust/capability routing and provider failover ship with the engine's defaults; the repair
         # escalation ladder is derived from the policy profiles above (autonomy_policy.default_repair_escalation).
         config["routing"] = _routing_for_machine(routing, runnable)
+    chain_defaults = _chain_defaults()
+    if chain_defaults:
+        config["chain"] = chain_defaults        # chain mode (autonomy_chain): long chains, one serious review
     validated = None
     try:
         validated = ac.validate_roles(config, profiles)
@@ -461,6 +464,16 @@ def _routing_defaults() -> dict[str, Any] | None:
         return None
     routing = data.get("routing")
     return routing if isinstance(routing, dict) else None
+
+
+def _chain_defaults() -> dict[str, Any] | None:
+    """The `chain` block of AUTONOMY_ROLES.json (None if absent: the classic per-iteration cycle runs)."""
+    try:
+        data = json.loads((Path(__file__).resolve().parent / "AUTONOMY_ROLES.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    chain = data.get("chain")
+    return chain if isinstance(chain, dict) else None
 
 
 def _routing_for_machine(routing: Mapping[str, Any], runnable: set[str]) -> dict[str, Any]:

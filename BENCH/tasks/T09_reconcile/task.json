@@ -1,0 +1,16 @@
+{
+  "id": "T09_reconcile",
+  "difficulty": "HARD",
+  "title": "Implement bank statement reconciliation",
+  "goal": "Implement shop.ledger.reconcile exactly as specified in its docstring.",
+  "acceptance_criteria": [
+    "a statement line and a ledger entry may match only if their amounts are equal as Decimals (strings, ints and Decimals compare by value) and their dates differ by at most max_days",
+    "matching is one-to-one and greedy over statement lines ordered by (date, id)",
+    "among the candidates, an entry whose ref (case-insensitive, non-empty) occurs in the line's memo wins; otherwise the smallest date difference; remaining ties go to the smallest ledger id (string order)",
+    "returns {'matched': [(statement_id, ledger_id), ...] sorted by statement id, 'unmatched_statement': [ids sorted], 'unmatched_ledger': [ids sorted]} (string order)",
+    "ValueError for max_days < 0"
+  ],
+  "constraints": ["standard library only", "inputs are not mutated"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

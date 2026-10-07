@@ -58,6 +58,7 @@ operator-led workflows, not yet for unattended production automation.
 | Local Qwen preprocessing | EXPERIMENTAL |
 | Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
 | Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASED (0.2.0) — see `AAW_PRODUCT_MVP_V0_2.md` |
+| Chain mode (long chains, one serious review, polish) + telemetry + AAW-Bench | IMPLEMENTED, live validation pending — see `AAW_OPTIMIZATION_PROJECT_V0_1.md` |
 | Dynamic planner | PLANNED |
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
 | Implementer effectiveness (work packets, final self-audit, simple-error checks, difficulty routing, Antigravity CLI) | IMPLEMENTED (phase 1) — see `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md` |
