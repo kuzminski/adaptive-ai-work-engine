@@ -174,22 +174,83 @@ async function renderRuns() {
 
 // ── new task wizard ──────────────────────────────────────────────────────────
 const STEPS = ["Projekt", "Narzędzia AI", "Modele", "Cel", "Pierwsza iteracja", "Kierunek", "Start"];
-const EXAMPLES = [
-  {title: "Tracker wydatków (Python)", goal: "Prosta aplikacja w Pythonie do śledzenia wydatków: dodawanie wydatków, lista i eksport do CSV.",
-   first: "Model danych wydatku (kwota, kategoria, data, opis) i zapis/odczyt z pliku JSON, z testami jednostkowymi.",
-   dirs: "- polecenia w terminalu: dodaj, lista, usuń\n- eksport do CSV\n- podsumowanie miesięczne"},
-  {title: "Testy i walidacja w istniejącym projekcie", goal: "Zwiększ niezawodność istniejącego kodu: testy dla obecnego zachowania i czytelne błędy przy złych danych wejściowych.",
-   first: "Dodaj testy jednostkowe opisujące obecne zachowanie głównego modułu (bez zmiany logiki).",
-   dirs: "- walidacja danych wejściowych z czytelnymi komunikatami\n- krótka dokumentacja w README"},
-  {title: "Lista zadań w przeglądarce (HTML/JS)", goal: "Mała strona HTML/JavaScript z listą zadań do zrobienia, działająca bez serwera.",
-   first: "Strona index.html z dodawaniem i usuwaniem zadań zapisywanych w localStorage.",
-   dirs: "- filtrowanie: wszystkie / zrobione / do zrobienia\n- prosty, czytelny wygląd\n- eksport listy do pliku JSON"},
-];
+// ── long-text editor (first-class: prompts and roadmaps are long) ───────────
+// Plain <textarea> + auto-height, enlarge-to-full-screen, copy, counter. No length limit in the UI;
+// the server's safety ceiling (boot.limits.max_field_chars) is far above realistic prompts.
+function editorHtml(id, value, opts = {}) {
+  const rows = opts.rows || 5;
+  return `<div class="editor" id="ed-${id}">
+    <textarea id="${id}" rows="${rows}" spellcheck="false" placeholder="${esc(opts.placeholder || "")}">${esc(value)}</textarea>
+    <div class="editor-bar"><span class="editor-count small muted" id="cnt-${id}"></span>
+      <span class="editor-actions"><button type="button" class="ghost" data-ed-copy="${id}" title="Kopiuj całą treść">Kopiuj</button>
+      <button type="button" class="ghost" data-ed-expand="${id}" title="Edytuj w powiększeniu (Esc zamyka)">Powiększ ⤢</button></span></div></div>`;
+}
+function bindEditor(id, onChange) {
+  const t = document.getElementById(id), wrap = document.getElementById("ed-" + id);
+  if (!t || !wrap) return;
+  const count = document.getElementById("cnt-" + id);
+  const fit = () => {
+    if (wrap.classList.contains("expanded")) { t.style.height = ""; return; }
+    t.style.height = "auto";
+    t.style.height = Math.min(t.scrollHeight + 2, Math.round(window.innerHeight * 0.6)) + "px";
+  };
+  const refresh = () => {
+    const n = t.value.length, lines = t.value ? t.value.split("\n").length : 0;
+    count.textContent = n ? `${n.toLocaleString("pl-PL")} znaków · ${lines} ${lines === 1 ? "linia" : "linii"}` : "";
+    fit();
+  };
+  t.addEventListener("input", () => { refresh(); if (onChange) onChange(t.value); });
+  wrap.querySelector("[data-ed-copy]").onclick = async () => {
+    try { await navigator.clipboard.writeText(t.value); toast("Skopiowano do schowka."); }
+    catch (e) { t.select(); toast("Zaznaczono tekst — skopiuj Ctrl+C."); }
+  };
+  const expandBtn = wrap.querySelector("[data-ed-expand]");
+  const setExpanded = (on) => {
+    wrap.classList.toggle("expanded", on);
+    document.body.classList.toggle("editor-open", on);
+    expandBtn.textContent = on ? "Zamknij ✕" : "Powiększ ⤢";
+    refresh(); t.focus();
+  };
+  expandBtn.onclick = () => setExpanded(!wrap.classList.contains("expanded"));
+  t.addEventListener("keydown", (e) => { if (e.key === "Escape" && wrap.classList.contains("expanded")) { e.stopPropagation(); setExpanded(false); } });
+  refresh();
+  return {refresh, set(v) { t.value = v; refresh(); }};
+}
+// Draft of the three long fields survives reload / navigation (per browser; never sent anywhere).
+const DRAFT_KEY = "aaw.newtask.draft.v1";
+function draftRead() { try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); return d && (d.goal || d.first_iteration || d.directions) ? d : null; } catch (e) { return null; } }
+function draftSave() {
+  const f = formState; if (!f) return;
+  try {
+    if (!(f.goal || f.first_iteration || f.directions)) { localStorage.removeItem(DRAFT_KEY); return; }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({goal: f.goal, first_iteration: f.first_iteration, directions: f.directions, at: new Date().toISOString()}));
+    const el = document.getElementById("draft-state"); if (el) el.textContent = "Szkic zapisany lokalnie w tej przeglądarce — nie zginie po odświeżeniu.";
+  } catch (e) { /* storage unavailable: editing still works */ }
+}
+function draftClear() { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* ignore */ } }
+function presetPickerHtml() {
+  const presets = boot.presets || [];
+  if (!presets.length) return "";
+  return `<div class="preset-box"><div class="preset-head"><strong>Przykładowe wypełnienie</strong>
+      <span class="small muted">Wczytuje przykład do kroków 4–6. To tylko wzór — możesz go dowolnie zmienić; nic nie jest obowiązkowe.</span></div>
+    <div class="preset-list">${presets.map((x) => `<button type="button" class="preset" data-preset="${esc(x.id)}"><strong>${esc(x.title)}</strong><span class="small muted">${esc(x.description || "")}</span></button>`).join("")}</div></div>`;
+}
+function bindPresets(onLoaded) {
+  view.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
+    const x = (boot.presets || []).find((p) => p.id === b.dataset.preset);
+    if (!x) return;
+    const f = formState;
+    if ((f.goal || f.first_iteration || f.directions) && !confirm("Zastąpić obecną treść pól Cel / Pierwsza iteracja / Kierunek przykładem?")) return;
+    f.goal = x.goal; f.first_iteration = x.first_iteration; f.directions = x.directions;
+    draftSave(); onLoaded();
+    toast("Wczytano przykład — zmień go dowolnie.");
+  }));
+}
 function defaultForm() {
   const s = boot.settings;
   return {step: boot.settings.first_run_completed ? 0 : -1, repo: "", repoInfo: null, goal: "", first_iteration: "", directions: "",
           planning: s.planning, implementation: s.implementation, review: s.review, implementer_chain: null, base: null, setup: null, preview: null,
-          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", profile_overrides: {}}};
+          advanced: {acceptance_criteria: "", required_evidence: "", forbidden_areas: "", max_iterations: "", max_repair_attempts: "", continue_autonomously: true, profile_overrides: {}}};
 }
 function stepperHtml(step) {
   return `<ol class="stepper">${STEPS.map((name, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}" data-goto="${i}"><span>${i < step ? "✓" : i + 1}</span>${esc(name)}</li>`).join("")}</ol>`;
@@ -451,48 +512,60 @@ function advancedSlotsHtml() {
     <table>${Object.entries(boot.slot_labels).filter(([slot]) => !(chainActive() && CHAIN_SLOTS.includes(slot))).map(([slot, label]) => `<tr><td>${esc(label)}</td><td><select data-slot="${esc(slot)}">${opts(slot)}</select></td></tr>`).join("")}</table>`;
 }
 
+function draftBanner() {
+  const d = draftRead(), f = formState;
+  if (!d || f.goal || f.first_iteration || f.directions) return "";
+  return `<div class="note small" id="draft-banner">Znaleziono niedokończony szkic z ${esc(fmtTime(d.at))}. <button type="button" class="link" id="draft-restore">Przywróć</button> · <button type="button" class="link" id="draft-drop">Odrzuć</button></div>`;
+}
+function bindDraftBanner() {
+  on("draft-restore", () => { const d = draftRead(); if (d) { Object.assign(formState, {goal: d.goal || "", first_iteration: d.first_iteration || "", directions: d.directions || ""}); renderWizard(); } });
+  on("draft-drop", () => { draftClear(); document.getElementById("draft-banner")?.remove(); });
+}
 function stepGoal(box) {
   const f = formState;
   box.innerHTML = `<h2>4. Co chcesz osiągnąć?</h2>
-    <p class="hint">Opisz cel całego zadania własnymi słowami — tak, jak powiedziałbyś to współpracownikowi.</p>
-    <textarea id="goal" rows="4" placeholder="np. Prosta aplikacja do śledzenia wydatków z eksportem do CSV">${esc(f.goal)}</textarea>
-    <div class="examples"><span class="small muted">Przykłady (kliknij, aby wypełnić kroki 4–6):</span>
-      ${EXAMPLES.map((x, i) => `<button class="link" data-example="${i}">${esc(x.title)}</button>`).join("")}</div>`;
-  const t = document.getElementById("goal");
-  t.addEventListener("input", () => { f.goal = t.value; refreshNext(); });
-  box.querySelectorAll("[data-example]").forEach((b) => (b.onclick = () => {
-    const x = EXAMPLES[Number(b.dataset.example)];
-    f.goal = x.goal; f.first_iteration = x.first; f.directions = x.dirs; t.value = x.goal; refreshNext();
-    toast("Wypełniono cel, pierwszą iterację i kierunek przykładem — możesz je zmienić.");
-  }));
-  t.focus();
+    <p class="hint">Opisz cel całego zadania własnymi słowami. Możesz wkleić długi prompt (także w Markdown) — pole nie ma limitu i rośnie razem z treścią.</p>
+    ${draftBanner()}
+    ${editorHtml("goal", f.goal, {rows: 5, placeholder: "np. Prosta aplikacja do śledzenia wydatków z eksportem do CSV"})}
+    <div class="small muted" id="draft-state"></div>
+    ${presetPickerHtml()}`;
+  bindDraftBanner();
+  bindEditor("goal", (v) => { f.goal = v; draftSave(); refreshNext(); });
+  bindPresets(() => renderWizard());
+  document.getElementById("goal").focus();
 }
 function stepFirst(box) {
   const f = formState;
   box.innerHTML = `<h2>5. Pierwsza iteracja <span class="hint">(opcjonalnie)</span></h2>
-    <p class="hint">Konkretny, mały zakres na start. Zostaw puste, a AAW zacznie od celu z kroku 4.</p>
-    <textarea id="first" rows="4" placeholder="np. Model danych wydatku i zapis do pliku JSON z testami">${esc(f.first_iteration)}</textarea>`;
-  const t = document.getElementById("first");
-  t.addEventListener("input", () => { f.first_iteration = t.value; });
-  t.focus();
+    <p class="hint">Konkretny, mały zakres na start. Zostaw puste, a AAW zacznie od celu z kroku 4. Dokładny tekst trafia do silnika bez skracania.</p>
+    ${editorHtml("first", f.first_iteration, {rows: 5, placeholder: "np. Model danych wydatku i zapis do pliku JSON z testami"})}
+    <div class="small muted" id="draft-state"></div>`;
+  bindEditor("first", (v) => { f.first_iteration = v; draftSave(); });
+  document.getElementById("first").focus();
 }
 function stepDirections(box) {
   const f = formState;
-  box.innerHTML = `<h2>6. Dalszy kierunek <span class="hint">(opcjonalnie, każdy punkt w osobnej linii)</span></h2>
-    <div class="note small">Podaj <strong>szerokie kierunki</strong>, nie szczegółowy plan. Im dalszy etap, tym mniej wiadomo o jego dokładnej formie — AAW zaplanuje szczegóły, gdy do nich dojdzie, i zatrzyma się, gdy zabraknie punktów.</div>
-    <textarea id="dirs" rows="5" placeholder="- interfejs w terminalu&#10;- eksport do CSV&#10;- raport miesięczny">${esc(f.directions)}</textarea>`;
-  const t = document.getElementById("dirs");
-  t.addEventListener("input", () => { f.directions = t.value; });
-  t.focus();
+  const lim = boot.limits || {};
+  box.innerHTML = `<h2>6. Kierunek / roadmapa <span class="hint">(opcjonalnie)</span></h2>
+    <div class="note small">Podaj <strong>szerokie kierunki</strong>, nie szczegółowy plan. Każdy punkt zaczyna się od nowej, niewciętej linii (opcjonalnie z „-”, „*” lub „1.”); wcięte linie i opisy należą do poprzedniego punktu, a nagłówki Markdown (#) tylko porządkują tekst.
+      <strong>Po wykonaniu punktów AAW nie zatrzymuje się</strong> — planista sam wybiera kolejne uzasadnione kroki, dopóki ma sensowną pracę i nie zadziała bezpiecznik (STOP, limit iteracji, eskalacja).</div>
+    ${editorHtml("dirs", f.directions, {rows: 8, placeholder: "- interfejs w terminalu\n- eksport do CSV\n- raport miesięczny"})}
+    <div class="small muted" id="draft-state"></div>
+    <label class="check"><input type="checkbox" id="cont" ${f.advanced.continue_autonomously === false ? "" : "checked"}> Kontynuuj autonomicznie po wykonaniu punktów roadmapy
+      <span class="hint">(odznacz, aby AAW zakończył pracę, gdy lista punktów zostanie zrobiona; bezpiecznik iteracji: domyślnie ${esc(lim.default_max_iterations || 40)}, maks. ${esc(lim.hard_max_iterations || 200)})</span></label>`;
+  bindEditor("dirs", (v) => { f.directions = v; draftSave(); });
+  document.getElementById("cont").onchange = (e) => { f.advanced.continue_autonomously = e.target.checked; };
+  document.getElementById("dirs").focus();
 }
 function formPayload() {
   const f = formState, a = f.advanced;
   const lines = (t) => String(t || "").split("\n").map((x) => x.trim()).filter(Boolean);
-  return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: lines(f.directions),
+  return {repo: f.repo, goal: f.goal, first_iteration: f.first_iteration, directions: String(f.directions || ""),
           planning: f.planning, implementation: f.implementation, review: f.review, implementer_chain: f.implementer_chain, base: f.base,
           advanced: {acceptance_criteria: lines(a.acceptance_criteria), required_evidence: lines(a.required_evidence),
                      forbidden_areas: lines(a.forbidden_areas), max_iterations: a.max_iterations ? Number(a.max_iterations) : null,
                      max_repair_attempts: a.max_repair_attempts ? Number(a.max_repair_attempts) : null,
+                     continue_autonomously: a.continue_autonomously !== false,
                      profile_overrides: a.profile_overrides}};
 }
 function slotRow(s) {
@@ -513,11 +586,12 @@ async function stepStart(box) {
     ${p.warnings.map((w) => `<div class="note warn small">${esc(w)}</div>`).join("")}
     <table class="summary-table">
       <tr><td>Projekt</td><td><strong>${esc(p.project.name || "")}</strong>${p.project.base ? " (kontynuacja)" : ""}</td></tr>
-      <tr><td>Cel</td><td>${esc(p.goal)}</td></tr>
-      <tr><td>Pierwsza iteracja</td><td>${esc(p.first_iteration)}</td></tr>
-      <tr><td>Kierunek (roadmapa)</td><td><ol style="margin:0;padding-left:18px">${p.roadmap.map((r) => `<li>${esc(r.title)}</li>`).join("")}</ol></td></tr>
+      <tr><td>Cel</td><td><div class="longtext">${esc(p.goal)}</div></td></tr>
+      <tr><td>Pierwsza iteracja</td><td><div class="longtext">${esc(p.first_iteration)}</div></td></tr>
+      <tr><td>Kierunek (roadmapa)</td><td><ol class="roadmap-list">${p.roadmap.filter((r) => !r.recurring).map((r) => `<li><div class="longtext">${esc(r.title)}</div></li>`).join("")}</ol>
+        ${p.continuous ? `<div class="note small">Po tych punktach AAW <strong>kontynuuje autonomicznie</strong>: planista wybiera kolejne uzasadnione kroki, aż uzna, że nie ma już sensownej pracy, albo zadziała bezpiecznik.</div>` : `<div class="note small">AAW zakończy pracę po wykonaniu powyższych punktów.</div>`}</td></tr>
       ${models("planning", "Planowanie")}${models("implementation", "Implementacja")}${models("review", "Review")}
-      <tr><td>Limity</td><td>maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację</td></tr>
+      <tr><td>Limity</td><td>bezpiecznik: maks. ${esc(p.limits.max_iterations)} iteracji · maks. ${esc(p.limits.max_repair_attempts)} napraw na iterację <span class="small muted">(to nie jest cel, tylko hamulec)</span></td></tr>
     </table>
     <ul class="safety">${p.safety.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>
     <details style="margin-top:12px"><summary>Zaawansowane</summary>
@@ -527,7 +601,7 @@ async function stepStart(box) {
       <textarea id="ev">${esc(a.required_evidence)}</textarea>
       <label class="field">Obszary zabronione <span class="hint">(ścieżki, po jednej w linii)</span></label>
       <textarea id="forb">${esc(a.forbidden_areas)}</textarea>
-      <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji <input type="number" id="maxit" min="1" max="50" value="${esc(a.max_iterations)}"></label>
+      <div class="inline" style="margin-top:12px"><label class="small">Maks. iteracji (bezpiecznik) <input type="number" id="maxit" min="1" max="${esc((boot.limits || {}).hard_max_iterations || 200)}" value="${esc(a.max_iterations)}"></label>
       <label class="small">Maks. napraw na iterację <input type="number" id="maxrep" min="1" max="6" value="${esc(a.max_repair_attempts)}"></label>
       <button id="apply-adv">Zastosuj</button></div>
       <h3 style="margin-top:16px">Wszystkie etapy i dokładne profile</h3>
@@ -544,7 +618,7 @@ async function stepStart(box) {
     e.target.disabled = true;
     try {
       const r = await api("/api/tasks/start", {form: formPayload()});
-      formState = null;
+      formState = null; draftClear();
       location.hash = `#/runs/${r.run_id}`;
     } catch (err) { toast(err.message, 9000); e.target.disabled = false; }
   });
@@ -577,13 +651,45 @@ function processHtml(v) {
         <div class="stat"><div class="k">Model</div><div class="v">${esc(p.model || "—")}</div></div>
         <div class="stat"><div class="k">Ten krok</div><div class="v">${running ? fmtDuration(p.step_elapsed_s ?? p.phase_elapsed_s) : "—"}</div></div>
         <div class="stat"><div class="k">Czas całkowity</div><div class="v">${fmtDuration(p.run_elapsed_s)}</div></div>
-        <div class="stat"><div class="k">Roadmapa</div><div class="v">${esc(p.roadmap.done)} / ${esc(p.roadmap.total)}</div></div>
+        <div class="stat"><div class="k">Roadmapa</div><div class="v">${esc(p.roadmap.done)} / ${esc(p.roadmap.total)}${p.standing && p.standing.status === "PENDING" ? ` <span class="small muted">+ kontynuacja</span>` : ""}</div></div>
+        <div class="stat"><div class="k">Iteracje</div><div class="v">${esc(p.iterations_done ?? 0)} <span class="small muted">/ bezpiecznik ${esc(p.max_iterations ?? "—")}</span></div></div>
       </div>
       <div class="small muted" style="margin-top:8px">AAW nie pokazuje szacowanego czasu zakończenia — nie ma danych, by podać go uczciwie.</div>
       ${v.status_detail ? `<div class="note warn" style="margin-top:12px">${esc(v.status_detail)}</div>` : ""}
       ${stopInfo(v)}
     </div></div>
     ${controlsHtml(v)}</div>`;
+}
+const ITEM_TEXT = {PENDING: "do zrobienia", DONE: "zrobione", SKIPPED: "pominięte", HUMAN_REQUIRED: "wymaga człowieka"};
+function directionHtml(v) {
+  const d = v.direction;
+  if (!d) return "";
+  const p = v.process || {};
+  const items = (p.roadmap_items || []).filter((r) => !r.recurring);
+  const standing = p.standing;
+  const wr = v.working_roadmap;
+  const history = v.working_roadmap_history || [];
+  const text = (t) => t ? `<div class="longtext tall">${esc(t)}</div>` : `<span class="muted">—</span>`;
+  const itemRow = (r) => `<li class="ri ${esc(r.status)}"><span class="ri-state">${esc(ITEM_TEXT[r.status] || r.status)}</span><div class="longtext">${esc(r.title)}</div>${r.reason ? `<div class="small muted">${esc(r.reason)}</div>` : ""}</li>`;
+  const standingLine = standing ? `<div class="note small">${standing.status === "SKIPPED"
+    ? `Planista zakończył pracę autonomiczną z uzasadnieniem: ${esc(standing.reason || "")}`
+    : `Praca autonomiczna po punktach roadmapy: <strong>aktywna</strong> (wykonano ${esc(standing.iterations)} iteracji kontynuacji).`}</div>` : "";
+  return `<details class="panel direction" ${v.status === "RUNNING" ? "" : "open"}><summary><strong>Kierunek i roadmapa</strong>
+      <span class="small muted">${esc(p.iterations_done ?? 0)} iteracji zakończonych · bezpiecznik ${esc(p.max_iterations ?? "—")}</span></summary>
+    <div class="dir-grid">
+      <div><h3>Kierunek użytkownika <span class="chk PASS">zamrożony</span></h3>
+        <div class="small muted">Nie jest zmieniany automatycznie — planista pracuje wewnątrz niego.</div>
+        <div class="k-label">Cel</div>${text(d.goal)}
+        <div class="k-label">Pierwsza iteracja</div>${text(d.first_iteration)}
+        <div class="k-label">Kierunek / roadmapa (oryginał)</div>${text(d.directions_text)}</div>
+      <div><h3>Bieżąca roadmapa robocza</h3>
+        ${items.length ? `<ul class="roadmap-state">${items.map(itemRow).join("")}</ul>` : `<div class="muted">Brak punktów.</div>`}
+        ${standingLine}
+        ${wr ? `<div class="k-label">Notatki planisty (iteracja ${esc(wr.index)}, ${esc(fmtTime(wr.at))})</div>${text(wr.notes)}
+          ${wr.next_step ? `<div class="k-label">Następny rekomendowany krok</div>${text(wr.next_step)}` : ""}
+          ${history.length > 1 ? `<details><summary class="small">Historia notatek (${history.length})</summary>${history.slice().reverse().map((h) => `<div class="k-label">Iteracja ${esc(h.index)} · ${esc(fmtTime(h.at))}</div>${text(h.notes)}`).join("")}</details>` : ""}` :
+          `<div class="small muted" style="margin-top:8px">Notatki planisty pojawią się po zaplanowaniu pierwszej iteracji.</div>`}</div>
+    </div></details>`;
 }
 function stopInfo(v) {
   const ev = ((v.stop_effect || {}).events || []).slice(-1)[0];
@@ -635,7 +741,9 @@ function gateHtml(v) {
   return `<div class="panel gate"><h2>Human Gate</h2>${decided}
     <div class="sec"><h3>Dlaczego AAW się zatrzymał</h3><div class="why">${esc(g.why)}</div></div>
     <div class="sec"><h3>Co zrobiono</h3>${list(g.done, "Żadna iteracja nie została zaakceptowana.")}</div>
-    <div class="sec"><h3>Co zostało</h3>${list(g.remaining, "Nic — roadmapa wyczerpana.")}</div>
+    <div class="sec"><h3>Co zostało</h3>${list(g.remaining, "Nic — roadmapa wyczerpana.")}
+      ${g.planner_end_reason ? `<div class="note small">Planista zakończył pracę autonomiczną: ${esc(g.planner_end_reason)}</div>` : ""}
+      ${g.could_continue ? `<div class="note warn small">AAW mógł pracować dalej — zatrzymał go bezpiecznik lub eskalacja, nie brak pracy. „Dodaj kierunek” startuje nowe zadanie od tego wyniku.</div>` : ""}</div>
     <div class="sec"><h3>Ostrzeżenia</h3>${list(g.warnings, "Brak.")}</div>
     <div class="sec"><h3>Bieżący kandydat</h3><div class="kv small">
       <div>Zmienione pliki</div><div class="mono">${esc((c.changed_files || []).join(", ") || "—")}</div>
@@ -684,7 +792,7 @@ async function renderRun(runId) {
     const techOpen = document.getElementById("tech")?.open;
     view.innerHTML = `<div class="muted small"><a href="#/home">Home</a> › ${esc(v.project || "")}</div>
       <h1 class="run-title">${esc(v.goal)}</h1>${bannerHtml(v)}
-      ${gateHtml(v)}${processHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
+      ${gateHtml(v)}${processHtml(v)}${directionHtml(v)}${timelineHtml(v)}${technicalHtml(v)}`;
     const tech = document.getElementById("tech");
     if (techOpen) tech.open = true;
     document.body.classList.toggle("show-adv", !!techOpen);

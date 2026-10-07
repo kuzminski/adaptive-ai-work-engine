@@ -18,6 +18,7 @@ The n-th call of a role uses step n (the last step repeats). A step may hold:
   session_id  provider session id to report (default: a fresh uuid4)
   sleep       seconds to sleep before answering
   fenced      (agy) no structured_output; the JSON answer is fenced inside prose in `response`
+  sleep_after_output  seconds to sleep after flushing the structured result
 
 Invoked as `agy` (`--print` without Claude's `--no-session-persistence`), it reads the
 role prompt from the file named in the `--print` text and answers with the Antigravity
@@ -109,6 +110,9 @@ def main() -> int:
     else:
         envelope["structured_output"] = _substitute(step.get("output") or {}, handoff)
     sys.stdout.write(json.dumps(envelope))
+    sys.stdout.flush()
+    if step.get("sleep_after_output"):
+        time.sleep(float(step["sleep_after_output"]))
     return 0
 
 

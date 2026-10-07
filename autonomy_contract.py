@@ -103,8 +103,13 @@ CLASSIFIED_STATUSES = frozenset({"BASELINE_FAILURE", "ENVIRONMENTAL_LIMITATION",
 ADVERSE_STATUSES = frozenset({"FAIL", "ERROR", "WARN", "WARNING", "SKIPPED"}) | CLASSIFIED_STATUSES
 
 # Absolute ceilings no mandate can raise: a human typo (max_iterations: 10**9)
-# must not turn into an unbounded autonomous run.
-HARD_MAX_ITERATIONS = 50
+# must not turn into an unbounded autonomous run. These are execution fuses,
+# not the definition of autonomy: the loop PLAN -> ... -> FINAL_REVIEW ->
+# ROADMAP_CHECK -> PLAN runs as long as the roadmap (including a standing
+# `recurring` item) offers justified work and no fuse fires. They are generous
+# on purpose (V0.1-V0.3 capped at 50).
+HARD_MAX_ITERATIONS = 200
+DEFAULT_MAX_ITERATIONS = 40
 HARD_MAX_REPAIR_ATTEMPTS = 6
 
 # Escalation codes (closed vocabulary; the journal and tests key on these).
@@ -123,6 +128,7 @@ E_PLANNER = "PLANNER_ESCALATED"
 E_GIT = "GIT_BOUNDARY_VIOLATION"
 E_INTERRUPTED = "INTERRUPTED_IN_FLIGHT"
 E_EXECUTOR = "EXECUTOR_FAILED"
+E_EXECUTOR_TIMEOUT = "EXECUTOR_TIMEOUT"
 E_UNEXPLAINED_END = "ROADMAP_END_UNJUSTIFIED"
 # V0.2
 E_ROLE_UNAVAILABLE = "ROLE_PROFILE_UNAVAILABLE"      # configured profile not runnable now; no substitution
@@ -203,6 +209,10 @@ def validate_mandate(data: Any) -> dict[str, Any]:
         _require(isinstance(item.get("title"), str) and item["title"].strip(), f"{item_id}: title is required")
         _require("human_required" not in item or type(item["human_required"]) is bool,
                  f"{item_id}: human_required must be a boolean")
+        _require("recurring" not in item or type(item["recurring"]) is bool,
+                 f"{item_id}: recurring must be a boolean")
+        _require(not (item.get("recurring") and item.get("human_required")),
+                 f"{item_id}: a recurring standing item cannot be human_required")
     for item in items:
         deps = item.get("depends_on", [])
         _require(isinstance(deps, list) and all(d in ids and d != item["item_id"] for d in deps),
@@ -297,6 +307,10 @@ def initial_roadmap(mandate: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
             "dependency_state": "HUMAN_REQUIRED" if human_required else "READY",
             "human_required": human_required,
         }
+        if item.get("recurring") is True:
+            # A standing item: an accepted iteration records progress on it but never completes it.
+            roadmap[item["item_id"]]["recurring"] = True
+            roadmap[item["item_id"]]["iterations"] = []
     refresh_dependency_states(roadmap)
     return roadmap
 

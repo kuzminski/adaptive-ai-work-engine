@@ -56,6 +56,7 @@ ESCALATION_TEXT = {
     ac.E_ROUTING: "Żaden odpowiedni model nie był dostępny (limity, zaufanie, możliwości lub awaria dostawcy) — nic nie zostało uruchomione.",
     ac.E_GIT: "Wykryto zmianę poza izolowaną kopią roboczą (np. ktoś edytował pliki w głównym folderze projektu albo gałąź main się zmieniła). AAW zatrzymał się, żeby niczego nie nadpisać.",
     ac.E_EXECUTOR: "Wywołanie modelu nie powiodło się (błąd CLI, limit czasu lub nieprawidłowa odpowiedź).",
+    ac.E_EXECUTOR_TIMEOUT: "Wywołanie modelu przekroczyło limit czasu. AAW zachował logi, wynik procesu i zmiany w izolowanej kopii.",
     ac.E_PLANNER: "Planista uznał, że dalsza praca wymaga decyzji człowieka.",
     ac.E_SCOPE: "Plan wychodził poza zakres zadania.",
     ac.E_EXTENSION: "Planista próbował zmienić lub rozszerzyć zadanie — to wymaga decyzji człowieka.",
@@ -71,7 +72,8 @@ ESCALATION_TEXT = {
 }
 HOLD_TEXT = {
     ac.HOLD_ROADMAP_EXHAUSTED: "Roadmapa wyczerpana — wszystkie punkty, które AAW mógł wykonać samodzielnie, są zrobione.",
-    ac.HOLD_ITERATION_CAP: "Wykorzystano limit iteracji, a w roadmapie zostały punkty.",
+    ac.HOLD_ITERATION_CAP: ("Osiągnięto bezpiecznik liczby iteracji ustawiony dla tego zadania, a w roadmapie jest jeszcze "
+                            "praca. Możesz zaakceptować wynik albo uruchomić kolejne zadanie z tego punktu."),
 }
 
 
@@ -231,7 +233,11 @@ def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any
         else:
             activity = "Zatrzymywanie…"
     roadmap = state.get("roadmap") or {}
-    done = sum(1 for r in roadmap.values() if r.get("status") == ac.R_DONE)
+    counted = {k: r for k, r in roadmap.items() if not r.get("recurring")}
+    done = sum(1 for r in counted.values() if r.get("status") == ac.R_DONE)
+    titles = {i["item_id"]: i["title"] for i in state["mandate"]["roadmap_mandate"]["items"]}
+    standing = next(({"item_id": k, "status": r.get("status"), "iterations": len(r.get("iterations") or []),
+                      "reason": r.get("reason")} for k, r in roadmap.items() if r.get("recurring")), None)
     current = next((n for n in nodes if n["state"] in ("active", "stopped", "failed")), None)
     phase_started = next((e.get("occurred_at") for e in reversed(events)
                           if e.get("event_type") == "PHASE_STARTED" and e.get("phase") == phase), None)
@@ -246,7 +252,13 @@ def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any
         "step_elapsed_s": _seconds_between(flight.get("started_at")) if flight and running else None,
         "run_elapsed_s": _seconds_between(state.get("started_at"),
                                           None if running else state.get("updated_at")),
-        "roadmap": {"done": done, "total": len(roadmap)},
+        "roadmap": {"done": done, "total": len(counted)},
+        "standing": standing,
+        "roadmap_items": [{"item_id": k, "title": titles.get(k, k), "status": r.get("status"),
+                           "recurring": bool(r.get("recurring")), "reason": r.get("reason")}
+                          for k, r in roadmap.items()],
+        "iterations_done": len(state.get("iterations") or []),
+        "max_iterations": state["mandate"]["roadmap_mandate"]["autonomy_bounds"]["max_iterations"],
         "eta": None,  # deliberately not shown: no data to estimate it honestly
     }
 
@@ -470,8 +482,19 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
             f"{'REPAIR → ' * len(it.get('repairs') or [])}PASS"
             for it in state.get("iterations", []) if it.get("status") == "ACCEPTED"]
     remaining = []
+    standing_end = None
+    standing_open = False
     for item_id, row in roadmap.items():
         if row.get("status") == ac.R_DONE:
+            continue
+        if row.get("recurring"):
+            # The standing "keep going" item is not a to-do point. Skipped with a reason = the planner's normal
+            # end of an autonomous run; still pending = a fuse (cap/stop/escalation) interrupted a run that could
+            # have continued.
+            if row.get("status") == ac.R_SKIPPED:
+                standing_end = row.get("reason")
+            else:
+                standing_open = True
             continue
         reason = row.get("reason")
         state_text = {ac.R_PENDING: "do zrobienia", ac.R_SKIPPED: "pominięty",
@@ -494,6 +517,14 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         elif close.get("close_reason") == "CANCELLED" and close.get("effect_certainty") == "UNKNOWN":
             warnings.append(f"Wywołanie {execution_id} zostało przerwane przez STOP — skutek po stronie providera "
                             "niepewny.")
+        elif close.get("close_reason") == "TIMEOUT":
+            result = _result(run_id, execution_id)
+            elapsed = result.get("wall_time_s")
+            limit = result.get("timeout_s") or (task.get("executor_limits") or {}).get("timeout_s")
+            retained = "Kompletny wynik strukturalny został zachowany." if result.get("result") else \
+                       "Zachowano log procesu i zmiany w worktree; brak kompletnego wyniku strukturalnego."
+            warnings.append(f"Wywołanie {execution_id} przekroczyło limit {limit}s"
+                            + (f" po {elapsed}s. " if elapsed else ". ") + retained)
     alternatives = [s for s in (task.get("resolution") or {}).get("slots", {}).values()
                     if s.get("status") == "ALTERNATIVE"]
     if alternatives:
@@ -503,14 +534,21 @@ def human_gate(run_id: str, state: Mapping[str, Any], task: Mapping[str, Any],
         warnings.insert(0, f"Szczegóły eskalacji [{escalation.get('code')}]: {escalation.get('detail')}")
     fingerprint = hold.get("candidate_fingerprint") or {}
     workspace = task.get("workspace") or {}
+    changed_files = fingerprint.get("changed_files", [])
+    if not changed_files and workspace.get("worktree"):
+        try:
+            changed_files = (prun.inspect_repo(str(workspace["worktree"])).get("dirty_files") or [])
+        except Exception:
+            changed_files = []
     decision = product_home.read_json(prun.product_dir(run_id) / "decision.json")
     awaiting = state.get("status") == ac.AWAITING_HUMAN
     return {
         "why": why, "hold_reason": hold.get("reason"), "escalation_code": escalation.get("code"),
-        "done": done, "remaining": remaining, "warnings": warnings,
+        "done": done, "remaining": remaining, "warnings": warnings, "planner_end_reason": standing_end,
+        "could_continue": standing_open,
         "candidate": {"candidate_id": hold.get("candidate_id"), "head": fingerprint.get("head"),
                       "diff_sha256": fingerprint.get("diff_sha256"),
-                      "changed_files": fingerprint.get("changed_files", []),
+                      "changed_files": changed_files,
                       "last_repair": hold.get("last_repair"),
                       "branch": workspace.get("branch"), "worktree": workspace.get("worktree"),
                       "base_commit": workspace.get("base_commit"), "promotable": bool(hold.get("promotable")),
@@ -550,7 +588,13 @@ def run_view(run_id: str) -> dict[str, Any]:
     events = _journal(run_id)
     ledger = _ledger(run_id)
     briefs = build_briefs(run_id, state, events, ledger)
-    return {**base, "process": process_view(run_id, state, status, events),
+    mandate_rm = state["mandate"]["roadmap_mandate"]
+    direction = {"goal": form.get("goal"), "first_iteration": form.get("first_iteration"),
+                 "directions_text": mandate_rm.get("direction_text") or "\n".join(mandate_rm.get("possible_directions", [])),
+                 "frozen": True}
+    return {**base, "direction": direction, "working_roadmap": state.get("working_roadmap"),
+            "working_roadmap_history": state.get("working_roadmap_history", []),
+            "process": process_view(run_id, state, status, events),
             "timeline": timeline(state, briefs, status), "gate": human_gate(run_id, state, task, ledger),
             "last_activity": events[-1].get("occurred_at") if events else state.get("updated_at"),
             "engine": {"status": state.get("status"), "phase": state.get("phase"),

@@ -69,9 +69,11 @@ class ExecutorFailure(RuntimeError):
     """
 
     def __init__(self, message: str, *, code: str | None = None, dispatched: bool | None = None,
-                 failure_class: str | None = None, retry_after_minutes: float | None = None) -> None:
+                 retryable: bool = False, failure_class: str | None = None,
+                 retry_after_minutes: float | None = None) -> None:
         super().__init__(message)
         self.code, self.dispatched = code, dispatched
+        self.retryable = bool(retryable)
         # RATE_LIMIT / TIMEOUT / AUTH / UNAVAILABLE feed provider health (model_router); None = not a provider signal.
         self.failure_class, self.retry_after_minutes = failure_class, retry_after_minutes
 
@@ -960,6 +962,7 @@ class AutonomyController:
         EXECUTION_CLOSED → state.
         """
         phase = self.state["phase"]
+        base_ctx = dict(ctx)
         if self._recovered and self._recovered["phase"] == phase and self._recovered["executor"] == name:
             adopted, self._recovered = self._recovered, None
             self._adopted_execution_id = adopted["execution_id"]
@@ -1062,6 +1065,14 @@ class AutonomyController:
             self.state["in_flight"] = None
             ref.update(self._execution_observations(descriptor_path, recorder))
             self.state["executions"].append(ref)
+            if exc.retryable and descriptor.get("retry_of_execution_id") is None:
+                self.state["in_flight"] = None
+                self._retry_of = execution_id
+                self.journal.append("EXECUTOR_RETRY_SCHEDULED", iteration_id=iteration_id, phase=phase,
+                                    payload={"execution_id": execution_id, "executor": name,
+                                             "reason": str(exc), "retry_limit": 1})
+                self._save()
+                return self._call(name, role, base_ctx)
             pool = self._pool_of(binding) or "?"
             if exc.failure_class:
                 self.state["router_state"] = mr.record_failure(
@@ -1219,6 +1230,7 @@ class AutonomyController:
             "workspace": self.env.describe(),
             "directional_charter": self.state.get("directional_charter"),
             "directional_charter_hash": self.state.get("directional_charter_hash"),
+            "working_roadmap": self.state.get("working_roadmap"),
             "iteration_contract": self.state["mandate"]["iteration_contract"] if index == 1 else None})
         if self.state["status"] != ac.RUNNING:
             return
@@ -1260,6 +1272,7 @@ class AutonomyController:
             self.journal.append("ROADMAP_ITEM_SKIPPED", phase=ac.PLAN, payload={"item_id": item_id, "reason": reason})
         if verdict["decision"] == ac.ACCEPT_END:
             self._done(outcome="NO_FURTHER_ACTION")
+            self.state["planning"] = None  # no iteration was created; do not show a phantom "planning" row
             self._await_human(ac.HOLD_ROADMAP_EXHAUSTED, "planner found no further justified action; "
                               "every autonomous roadmap item was individually skipped with a reason")
             return
@@ -1288,6 +1301,7 @@ class AutonomyController:
             "version": wp.VERSION, "present": lint["present"], "issues": lint["issues"], "metrics": lint["metrics"],
             "route": difficulty["route"], "reasons": difficulty["reasons"]})
         self.state["planning"] = None
+        self._record_working_roadmap(plan, index, iteration_id)
         self.journal.append("ITERATION_PLANNED", iteration_id=iteration_id, phase=ac.PLAN, payload={
             "index": index, "goal": plan["goal"], "roadmap_refs": plan.get("roadmap_refs", []),
             "scope_justification": plan["scope_justification"], "acceptance_criteria": plan["acceptance_criteria"],
@@ -1297,6 +1311,23 @@ class AutonomyController:
         self._done(outcome="PLANNED")
         self._goto(ac.EXECUTE)
         self._save()
+    def _record_working_roadmap(self, plan: Mapping[str, Any], index: int, iteration_id: str) -> None:
+        """Keep the planner's living notes SEPARATE from the frozen mandate.
+
+        The mandate (the human's direction) is hashed and never edited; this is advisory state the
+        planner rewrites each iteration and the operator reads. It grants no scope: `check_plan`
+        still binds every iteration to pending mandate items.
+        """
+        notes, next_step = plan.get("working_roadmap"), plan.get("next_recommended_step")
+        if not (isinstance(notes, str) and notes.strip()) and not (isinstance(next_step, str) and next_step.strip()):
+            return
+        previous = self.state.get("working_roadmap") or {}
+        entry = {"iteration_id": iteration_id, "index": index, "at": _now(),
+                 "notes": notes.strip() if isinstance(notes, str) and notes.strip() else previous.get("notes"),
+                 "next_step": next_step.strip() if isinstance(next_step, str) and next_step.strip() else None}
+        self.state["working_roadmap"] = entry
+        self.state.setdefault("working_roadmap_history", []).append(entry)
+
     # EXECUTE / SELF_VERIFY ---------------------------------------------------
 
     def _do_execute(self) -> None:
@@ -2009,6 +2040,13 @@ class AutonomyController:
         if result["verdict"] == ac.V_PASS:
             it["status"], it["outcome"], it["finished_at"] = "ACCEPTED", "PASS", _now()
             for item_id in it["lineage"]["roadmap_refs"]:
+                row = self.state["roadmap"][item_id]
+                if row.get("recurring") is True:
+                    # A standing item records progress but stays pending: ending it is the planner's
+                    # explicit, reasoned skip (or an execution fuse), never a side effect of one PASS.
+                    row.setdefault("iterations", []).append(it["iteration_id"])
+                    row["last_iteration_id"] = it["iteration_id"]
+                    continue
                 self.state["roadmap"][item_id] = {"status": ac.R_DONE, "iteration_id": it["iteration_id"], "reason": None}
             ac.refresh_dependency_states(self.state["roadmap"])
             self._ledger_dispositions(rx.DISP_RESOLVED, "iteration accepted by final review")
@@ -2114,6 +2152,93 @@ def _human_surface_lock(run_id: str, stats_root: Path | None) -> rl.RunLock:
     except rl.RunLockError as exc:
         raise ac.AutonomyError(str(exc)) from exc
     return lock
+
+
+def adopt_timed_out_side_effect_result(
+        run_id: str, *, execution_id: str, result: Mapping[str, Any], env: WorkspaceEnvironment,
+        operator: str, stats_root: Path | None = None) -> dict[str, Any]:
+    """Adopt verified partial work after an EXECUTE/REPAIR process timeout.
+
+    This is an explicit operator recovery action.  It never re-dispatches the
+    side-effecting call, never rewrites its TIMEOUT ledger close, and resumes at
+    SELF_VERIFY so the preserved work still passes the normal evidence and
+    independent-review pipeline.
+    """
+    root = Path(stats_root or STATS_ROOT)
+    if not isinstance(operator, str) or not operator.strip():
+        raise ac.AutonomyError("timeout recovery requires an operator identity")
+    if not isinstance(result, Mapping) or not isinstance(result.get("summary"), str):
+        raise ac.AutonomyError("timeout recovery requires a structured implementation result")
+    with _human_surface_lock(run_id, root):
+        state = load_state(run_id, root)
+        escalation = state.get("escalation") or {}
+        if state.get("status") != ac.AWAITING_HUMAN or state.get("phase") != ac.AWAITING_HUMAN:
+            raise ac.AutonomyError("timeout recovery is only possible from AWAITING_HUMAN")
+        if escalation.get("from_phase") not in ac.SIDE_EFFECT_PHASES:
+            raise ac.AutonomyError("timeout recovery requires an EXECUTE or REPAIR escalation")
+        if escalation.get("code") not in {ac.E_EXECUTOR, ac.E_EXECUTOR_TIMEOUT}:
+            raise ac.AutonomyError("timeout recovery requires an executor timeout escalation")
+        execution = next((row for row in reversed(state.get("executions", []))
+                          if row.get("execution_id") == execution_id), None)
+        if not execution or execution.get("phase") != escalation.get("from_phase") \
+                or execution.get("iteration_id") != escalation.get("iteration_id"):
+            raise ac.AutonomyError("execution does not match the escalated side-effecting phase")
+        close = ExecutionLedger.for_run(run_id, root).close_status(execution_id) or {}
+        if close.get("close_reason") != "TIMEOUT" or close.get("exit_code") != 124:
+            raise ac.AutonomyError("execution ledger does not prove a provider timeout with exit code 124")
+        env.restore(state.get("workspace_checkpoint") or {})
+        env.assert_safe()
+        actual_files = env.changed_files()
+        if not actual_files:
+            raise ac.AutonomyError("timeout recovery found no preserved worktree changes")
+        reported_files = result.get("changed_files")
+        if reported_files is not None and set(reported_files) != set(actual_files):
+            raise ac.AutonomyError("recovered result changed_files do not match the current worktree")
+
+        recovery_id = "REC_" + uuid.uuid4().hex
+        recovery_dir = autonomy_dir(run_id, root) / "RECOVERY" / recovery_id
+        recovery_dir.mkdir(parents=True, exist_ok=False)
+        state_path = autonomy_dir(run_id, root) / "autonomy_state.json"
+        events_path = autonomy_dir(run_id, root) / "autonomy_events.jsonl"
+        (recovery_dir / "autonomy_state.before.json").write_bytes(state_path.read_bytes())
+        if events_path.exists():
+            (recovery_dir / "autonomy_events.before.jsonl").write_bytes(events_path.read_bytes())
+
+        adopted = json.loads(json.dumps(dict(result), ensure_ascii=False, default=str))
+        adopted["changed_files"] = actual_files
+        adopted["recovered_after_timeout"] = True
+        adopted["source_execution_id"] = execution_id
+        iteration = next((row for row in state.get("iterations", [])
+                          if row.get("iteration_id") == escalation.get("iteration_id")), None)
+        if iteration is None:
+            raise ac.AutonomyError("escalated iteration is missing")
+        if iteration.get("execution") is not None:
+            raise ac.AutonomyError("iteration already has an adopted implementation result")
+        checks = [dict(row) for row in adopted.get("checks", []) if isinstance(row, Mapping)]
+        iteration["execution"] = adopted
+        iteration["executed_by"] = {key: execution.get(key) for key in
+                                    ("role", "profile", "model", "effort", "execution_id", "selection")}
+        for row in checks:
+            iteration.setdefault("evidence_state", {})[str(row.get("name"))] = str(row.get("status", "")).upper()
+            iteration.setdefault("checks", []).append(row)
+        recovery = {
+            "recovery_id": recovery_id, "at": _now(), "operator": operator.strip(),
+            "kind": "TIMED_OUT_SIDE_EFFECT_RESULT_ADOPTED", "execution_id": execution_id,
+            "iteration_id": iteration["iteration_id"], "from_phase": escalation["from_phase"],
+            "ledger_close": close, "changed_files": actual_files, "backup_dir": str(recovery_dir),
+            "previous_escalation": escalation, "previous_hold": state.get("hold"),
+        }
+        (recovery_dir / "recovered_result.json").write_text(
+            json.dumps(adopted, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        state.setdefault("recovery_history", []).append(recovery)
+        state["status"], state["phase"] = ac.RUNNING, ac.SELF_VERIFY
+        state["escalation"], state["hold"], state["in_flight"] = None, None, None
+        _save_state(run_id, state, root)
+        AutonomyJournal(events_path, run_id).append(
+            "TIMEOUT_PARTIAL_PROGRESS_ADOPTED", iteration_id=iteration["iteration_id"], phase=ac.SELF_VERIFY,
+            payload={key: recovery[key] for key in ("recovery_id", "operator", "execution_id", "from_phase",
+                                                     "changed_files", "backup_dir")})
+        return state
 
 
 def approve_promotion(run_id: str, *, approver: str, candidate_id: str, early_end: bool = False,

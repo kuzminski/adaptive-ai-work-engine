@@ -40,6 +40,7 @@ from typing import Any, Mapping, Sequence
 import provider_adapters as pa
 import work_packet as wp
 import workflow_runner as wr
+import autonomy_contract as ac
 from autonomy_controller import ExecutorFailure, RoleUnavailable, _write_once
 from execution_contract import update_execution
 from autonomy_contract import LEVEL_BY_KIND, REQUIRED_CHARTER_GATE_CONDITIONS, directional_charter_template
@@ -47,6 +48,8 @@ from model_catalog import CatalogError, validate_model_effort
 
 ADAPTER_ID = "AAW_AUTONOMY_DIRECT_CLI_V0.3"
 SUPPORTED_HARNESSES = ("codex", "claude", "agy")
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 3600
+MIN_SIDE_EFFECT_TIMEOUT_SECONDS = 3600
 # Antigravity CLI (`agy`, successor of the Gemini CLI). In print mode it does not read stdin when the
 # prompt is given by flag, and a handoff with a diff exceeds the Windows command-line limit, so the
 # full role prompt is written to a file in the system temp directory (readable by agy by default)
@@ -123,6 +126,8 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "complexity_evidence": _STRS,
                  "semantic_verification_required": {"type": "boolean"},
                  "semantic_verification_reason": {"type": ["string", "null"]},
+                 "working_roadmap": {"type": ["string", "null"]},
+                 "next_recommended_step": {"type": ["string", "null"]},
                  "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
@@ -220,6 +225,15 @@ ROLE_INSTRUCTIONS: dict[str, str] = {
              "choices with AUTO / AUTO_WITHIN_SCOPE kinds. skipped_items PERMANENTLY removes a roadmap item from this "
              "run: list an item there only with a reason why it should never be done autonomously; never list an item "
              "merely because it is waiting for its dependencies (it stays pending for a later iteration). "
+             "A roadmap item marked recurring is a standing item: it is not completed by an accepted iteration. "
+             "While user direction items remain pending, prefer them; once only the recurring item remains, "
+             "inspect the repository and choose the next most valuable bounded step toward MANDATE.roadmap_mandate.objective "
+             "(missing functionality, integration, tests, UX, documentation) and reference the recurring item in "
+             "roadmap_refs. Only when no sensible further work remains, return NO_FURTHER_ACTION and list the recurring "
+             "item in skipped_items with the concrete reason. On every ITERATION plan, set working_roadmap to the "
+             "updated working roadmap (Markdown: done, open problems, decisions, next steps) and next_recommended_step "
+             "to the single next step; both are advisory notes for the operator and never change the user's direction "
+             "or grant scope. "
              + wp.PLANNER_RULES + " Do not modify any file."),
     "execute": ("You are the AAW IMPLEMENTER. Implement exactly PLAN inside WORKTREE_PATH. Respect CONSTRAINTS and "
                 "FORBIDDEN_CHANGES. Do not merge, push, rebase, switch branches, or touch any other checkout; leave "
@@ -341,6 +355,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 "FROZEN_DIRECTIONAL_CHARTER": ctx.get("directional_charter"),
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
+                "WORKING_ROADMAP": ctx.get("working_roadmap"),
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
     if name in ("execute", "repair", "self_verify", "diagnose"):
         it = ctx["iteration"]
@@ -458,7 +473,8 @@ class DirectRoleExecutor:
 
     fixture_class = "REAL_PROVIDER_DIRECT_CLI"
 
-    def __init__(self, name: str, *, timeout: int = 1800, max_turns: int = 30) -> None:
+    def __init__(self, name: str, *, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+                 max_turns: int = 30) -> None:
         self.name, self.timeout, self.max_turns = name, timeout, max_turns
 
     def preflight(self, binding: Mapping[str, Any]) -> str | None:
@@ -504,25 +520,32 @@ class DirectRoleExecutor:
                 provider_meta["schema_rejected"] = True
                 raw = None
         elapsed = round(time.monotonic() - started, 3)
+        valid = isinstance(raw, dict)
+        timeout_result = rc == 124 and valid
         update_execution(descriptor_path, execution["execution_id"],
                          provider_session_id=str(session) if session else None,
-                         status="COMPLETED" if rc == 0 else "FAILED")
+                         status="COMPLETED" if rc == 0 or timeout_result else "FAILED")
         result_path = Path(execution["result_path"])
         _write_once(result_path, {
             "execution_id": execution["execution_id"], "role": ctx["role"], "executor": self.name,
             "recorded_by": ADAPTER_ID, "result": raw, "exit_code": rc, "provider_session_id": session,
             "harness": runtime["harness"], "model": runtime["model"], "effort": runtime["effort"],
-            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "usage": usage, "provider_meta": provider_meta,
+            "profile_id": runtime["profile_id"], "wall_time_s": elapsed, "timeout_s": self.timeout,
+            "result_recovered_after_timeout": timeout_result,
+            "usage": usage, "provider_meta": provider_meta,
             "stderr_tail": (stderr or "")[-4000:], "stdout_tail": (stdout or "")[-4000:] if raw is None else None})
         close = wr._close_from_returncode(rc, provider_session_id=session)
-        valid = rc == 0 and isinstance(raw, dict)
+        valid = (rc == 0 or rc == 124) and isinstance(raw, dict)
         if rc == 0 and not valid:
             close["effect_certainty"] = "PARTIAL"  # process exited cleanly; only the structured result is untrusted
         recorder.close(outcome="RESULT_RECEIVED" if valid else ("INVALID" if rc == 0 else "BLOCKED"),
                        result_refs=[str(result_path)], detail=None if valid else (stderr or stdout)[-2000:], **close)
-        if rc != 0:
+        if rc != 0 and not timeout_result:
+            retryable = rc == 124 and self.name in READ_ONLY_EXECUTORS and ctx.get("role") != "initial_planner"
+            code = ac.E_EXECUTOR_TIMEOUT if rc == 124 else None
             failure_class, retry_after = classify_failure(rc, stdout, stderr)
-            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", dispatched=True,
+            raise ExecutorFailure(f"{self.name}: provider process exited rc={rc}", code=code,
+                                  dispatched=True, retryable=retryable,
                                   failure_class=failure_class, retry_after_minutes=retry_after)
         if not valid and self.name not in ("review", "final_review"):
             raise ExecutorFailure(f"{self.name}: provider returned no structured result", dispatched=True)
@@ -547,7 +570,7 @@ class DirectRoleExecutor:
         if harness == "codex":
             _, session, usage = wr.parse_codex_events(stdout)
             raw = None
-            if rc == 0 and final_path.is_file():
+            if final_path.is_file():
                 try:
                     raw = json.loads(final_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
@@ -597,7 +620,7 @@ def core_shape_ok(name: str, raw: Any) -> bool:
     return isinstance(raw, dict) and all(key in raw for key in CORE_REQUIRED.get(name, []))
 
 
-def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30,
+def build_direct_executors(*, timeout: int = DEFAULT_PROVIDER_TIMEOUT_SECONDS, max_turns: int = 30,
                            review_pretreatment: bool = False) -> dict[str, DirectRoleExecutor]:
     """The production executor set for `AutonomyController`.
 
@@ -605,8 +628,15 @@ def build_direct_executors(*, timeout: int = 1800, max_turns: int = 30,
     round that may only re-index evidence the deterministic packet already
     carries (it can never change a verdict), so it cost time and quota on every
     REVIEW without changing outcomes. Pass `review_pretreatment=True` to keep it.
+    Side-effecting roles (execute, repair) never get less than
+    MIN_SIDE_EFFECT_TIMEOUT_SECONDS: a timeout there abandons real work.
     """
     names = ["plan", "execute", "self_verify", "review", "repair", "final_review", "diagnose"]
     if review_pretreatment:
         names.insert(3, "prepare_packet")
-    return {name: DirectRoleExecutor(name, timeout=timeout, max_turns=max_turns) for name in names}
+    return {name: DirectRoleExecutor(
+                name,
+                timeout=max(int(timeout), MIN_SIDE_EFFECT_TIMEOUT_SECONDS)
+                if name in ("execute", "repair") else int(timeout),
+                max_turns=max_turns)
+            for name in names}
