@@ -140,6 +140,16 @@ def wait_text(page, selector: str, predicate, timeout: float = 60.0, interval: f
     raise AssertionError(f"timeout waiting on {selector}; last text: {last!r}")
 
 
+def classic_review(page) -> None:
+    """The scripted reviewers below follow the classic cycle (review after every iteration, repair on a finding), so the
+    walkthrough switches the wizard's chain mode off - the same checkbox a user finds under "Zaawansowane"."""
+    page.wait_for_selector("#start:not([disabled])", timeout=30000)
+    page.click("details:has(#chainmode) > summary")
+    page.uncheck("#chainmode")
+    page.click("#apply-adv")
+    page.wait_for_selector("#start:not([disabled])", timeout=30000)
+
+
 def dump_diagnostics(base: Path, tail: int = 60) -> None:
     """On failure print what the background worker and the engine wrote, so a CI log explains the stall."""
     home = base / "aaw_home"
@@ -255,7 +265,7 @@ def run(args: argparse.Namespace) -> int:
             report.step("4–6 goal, first iteration, direction (example used)", 4,
                         "a real user types 1–3 sentences here instead of using an example")
             # 7. summary → START
-            page.wait_for_selector("#start:not([disabled])", timeout=30000)
+            classic_review(page)
             report.shot(page, "step7_summary")
             page.click("#start")
             t_start = time.time() - report.t0
@@ -387,7 +397,7 @@ def stop_now_flow(page, report: Report, sandbox: dict, scenario: Path) -> None:
     page.click("#next")
     page.click("#next")
     page.click("#next")
-    page.wait_for_selector("#start:not([disabled])", timeout=30000)
+    classic_review(page)
     page.click("#start")
     wait_text(page, ".banner", lambda t: "Implementacja" in t, 90)
     # press STOP NOW only once the provider process is really running (it logs its start)
