@@ -140,6 +140,24 @@ def wait_text(page, selector: str, predicate, timeout: float = 60.0, interval: f
     raise AssertionError(f"timeout waiting on {selector}; last text: {last!r}")
 
 
+def dump_diagnostics(base: Path, tail: int = 60) -> None:
+    """On failure print what the background worker and the engine wrote, so a CI log explains the stall."""
+    home = base / "aaw_home"
+    for log in sorted(home.rglob("worker.log")) + sorted(home.rglob("worker_exit.json")):
+        print(f"== {log.relative_to(base)}")
+        try:
+            print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-tail:]))
+        except OSError as exc:
+            print(f"(unreadable: {exc})")
+    for journal in sorted(home.rglob("journal.jsonl"))[:2]:
+        print(f"== {journal.relative_to(base)} (last 15 events)")
+        for line in journal.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]:
+            print(line[:300])
+    print("== run directory listing")
+    for path in sorted(home.rglob("*"))[:80]:
+        print(str(path.relative_to(base)))
+
+
 def run(args: argparse.Namespace) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -333,6 +351,8 @@ def run(args: argparse.Namespace) -> int:
                                                       "passed")}, indent=2))
         return 0 if report_data["passed"] else 1
     finally:
+        if sys.exc_info()[0] is not None or any(not c["ok"] for c in report.checks):
+            dump_diagnostics(base)
         try:
             token = json.loads((base / "aaw_home" / "ui.json").read_text())["token"]
             request = urllib.request.Request(url + "api/quit", data=b"{}", headers={
