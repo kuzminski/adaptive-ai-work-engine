@@ -38,6 +38,25 @@ Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
 - Tests: `test_autonomy_explore.py` (20), `test_product_intake.py` (25).
 - Performance: the run page's live block is cached by file state and skipped on the Home list (the first version recomputed history and benchmark on every 0.15-1.5 s poll and slowed a product test by ~20 s).
 
+## Unreleased — implementer effectiveness (phase 1)
+
+Details and the full repair plan: `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`. Lifecycle unchanged.
+- Plans carry a mandatory **work packet** (files to read/change, small ordered steps with per-step verification,
+  exact verification commands mapped to the required evidence, definition of done, pitfalls, out-of-scope),
+  written for a weaker implementer that must not re-plan (`work_packet.py`).
+- **Final self-audit** at the end of every implement/repair call (checklist A1–A7); a failed item is repaired
+  before any reviewer is called. **Deterministic simple-error checks** in SELF_VERIFY: conflict markers, Python
+  and JSON syntax, "done" with no change.
+- **Difficulty routing**: visibly hard iterations (label, size, cross-cutting, under-specified packet, planner
+  request) go to GPT-6.1 Sol medium up front (new slot `implementer_strong`); a finding that survives the weak
+  repairer goes straight to it with diagnosis first (EFFORT_UP skipped). Next iterations are planned by
+  GPT-6.1 Sol medium (new slot `continuation_planner`) instead of Sol 5.6 light.
+- Review pretreatment is off by default (one model call per review round with no effect on the verdict).
+- **Gemini CLI** support (detection, login status, "Sprawdź modele", role dispatch); profiles `GEMINI_3_1_PRO`,
+  `GEMINI_3_FLASH`, usable after a local probe. Routing alternatives are limited to profiles runnable on this
+  machine.
+- Required-evidence matching tolerates naming variants ("Unit-tests (pytest)" substantiates "unit tests").
+
 ## Unreleased — long-form fields, example presets, count-free autonomy
 
 Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
@@ -52,7 +71,8 @@ Details and rationale: `AAW_LONG_AUTONOMY_V0_1.md`.
 - Planner writes advisory `working_roadmap` / `next_recommended_step`, stored apart from the frozen mandate.
 - UI: first-class long-text editor (autosize, enlarge, copy, counter, local draft), example presets
   (`product_presets.py`), "Direction and roadmap" panel, moderate visual polish.
-## Unreleased — adaptive model routing + bounded repair escalation
+
+## 0.2.0 — 2026-10-04 — Product MVP V0.2 (adds adaptive model routing + bounded repair escalation)
 
 Details: `AAW_QUOTA_ROUTING_AND_REPAIR_ESCALATION_V0_1.md`. Lifecycle unchanged.
 - Quota/trust/capability routing around the policy's preferred profile (`model_router.py`), provider failover,

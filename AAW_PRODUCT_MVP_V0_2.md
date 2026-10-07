@@ -1,4 +1,4 @@
-# AAW Product MVP V0.2 — Release Candidate 1 (`0.2.0-rc1`)
+# AAW Product MVP V0.2 (`0.2.0`)
 
 Release hardening of the product layer for a first external user. The
 autonomy engine is the frozen `AAW_DEFAULT_AUTONOMOUS_POLICY_V0.3` (freeze

@@ -152,9 +152,9 @@ def test_no_cli_found_blocks_start_with_setup_help(env, monkeypatch):
 def test_only_claude(env):
     env.install("claude")
     detection = pp.detect_all()
-    claude, codex = detection["providers"]
+    claude, codex, gemini = detection["providers"]
     assert (claude["status"], claude["version"], claude["login"]) == (pp.FOUND, "9.9.9", pp.LOGGED_IN)
-    assert codex["status"] == pp.NOT_FOUND
+    assert codex["status"] == pp.NOT_FOUND and gemini["status"] == pp.NOT_FOUND
     assert set(claude["runnable_profiles"]) == {"SONNET_HIGH", "OPUS_HIGH"}
     preview = prun.preview_task(form(env), detection=detection)
     assert preview["can_start"], preview["blockers"]
@@ -168,7 +168,7 @@ def test_only_claude(env):
 def test_only_codex_keeps_v03_policy(env):
     env.install("codex")
     detection = pp.detect_all()
-    assert [p["status"] for p in detection["providers"]] == [pp.NOT_FOUND, pp.FOUND]
+    assert [p["status"] for p in detection["providers"]] == [pp.NOT_FOUND, pp.FOUND, pp.NOT_FOUND]
     preview = prun.preview_task(form(env), detection=detection)
     assert preview["can_start"], preview["blockers"]
     v03 = {"implementer_default": "GPT6_LUNA_HIGH", "implementer_harder": "GPT6_LUNA_VERY_HIGH",
@@ -184,7 +184,7 @@ def test_only_codex_keeps_v03_policy(env):
 def test_both_providers(env):
     env.install("claude", "codex")
     detection = pp.detect_all()
-    assert all(p["status"] == pp.FOUND for p in detection["providers"])
+    assert all(p["status"] == pp.FOUND for p in detection["providers"] if p["harness"] in ("claude", "codex"))
     preview = prun.preview_task(form(env), detection=detection)
     assert preview["planner"]["profile_id"] == "OPUS_HIGH"           # Opus 5.5 unmapped → visible alternative
     assert preview["implementer_policy"]["implementer_capability_escalation"]["profile_id"] == "OPUS_HIGH"

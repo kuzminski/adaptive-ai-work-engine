@@ -52,6 +52,7 @@ import model_router as mr
 import process_observation
 import repair_escalation as rx
 import run_cancellation
+import work_packet as wp
 from aaw_paths import AAW_ROOT, STATS_ROOT
 from execution_ledger import ExecutionLedger, LedgerError, LifecycleRecorder
 
@@ -633,7 +634,7 @@ class AutonomyController:
                 for r, b in self.roles.items() if r not in ac.NON_ROLE_KEYS}
 
     def _policy_ids(self) -> dict[str, str]:
-        return ap.profile_id_map(self.policy_bindings)
+        return ap.with_fallbacks(ap.profile_id_map(self.policy_bindings))
 
     def _configure_routing(self) -> None:
         """Quota routing and repair escalation come from the frozen role config.
@@ -645,7 +646,8 @@ class AutonomyController:
         """
         explicit = self.roles.get("repair_escalation")
         if explicit is None and self.policy_active:
-            explicit = ap.default_repair_escalation(self._policy_ids())
+            # Raw slots (no fallbacks): a run frozen before `implementer_strong` keeps its old ladder.
+            explicit = ap.default_repair_escalation(ap.profile_id_map(self.policy_bindings))
         self.escalation_cfg = rx.normalize_config(explicit)
         routing = self.roles.get("routing")
         self.routing_cfg = dict(routing) if isinstance(routing, Mapping) else None
@@ -682,8 +684,12 @@ class AutonomyController:
                     complexity = floor
                 complexity_evidence.extend(f"FROZEN_CHARTER_RISK:{row['item_id']}:{row['reason']}"
                                            for row in risk_rows)
+            difficulty = ((self._it().get("difficulty") if self.state.get("iterations") else None)
+                          or wp.assess_difficulty(plan, wp.lint_work_packet(plan, self._required_evidence())))
             selection = ap.select_implementation(ids, complexity, evidence=complexity_evidence,
-                                                 human_override=mandate_override)
+                                                 human_override=mandate_override, difficulty=difficulty)
+            # Opt-in exploration only ever touches the ordinary default implementer (tier NORMAL, reason
+            # DEFAULT_IMPLEMENTATION); a hard-looking iteration routed to the strong implementer is never explored.
             return self._maybe_explore(selection, plan, risk_flagged=bool(risk_rows))
         if name == "prepare_packet":
             return {"policy_version": ap.POLICY_VERSION, "profile_key": "review_pretreatment",
@@ -699,7 +705,10 @@ class AutonomyController:
             it = self._it()
             prior_attempt = self._luna_max_capability_attempt(it)
             return ap.select_repair(ids, attempt=int(ctx.get("attempt", 1)),
-                                    findings=ctx.get("findings", []), previous_attempt=prior_attempt)
+                                    findings=ctx.get("findings", []), previous_attempt=prior_attempt,
+                                    implementation_profile_id=next(
+                                        (e.get("profile") for e in reversed(self.state["executions"])
+                                         if e.get("executor") == "execute"), None))
         if name == "final_review":
             it = self._it()
             prior_findings = [f for review in it.get("reviews", []) for f in review.get("findings", [])]
@@ -1275,6 +1284,23 @@ class AutonomyController:
             self._it().setdefault("checks", []).append(row)
         return rows
 
+    def _required_evidence(self) -> list[str]:
+        return list(((self.state.get("mandate") or {}).get("iteration_contract") or {}).get("required_evidence", []))
+
+    def _record_self_audit(self, result: Mapping[str, Any], phase: str) -> None:
+        """The implementer's own final audit becomes ordinary check rows (FAIL → cheap REPAIR before review)."""
+        if not (self.policy_active or "self_audit" in result):
+            return
+        rows = self._record_checks(wp.audit_checks(result))
+        self._it().setdefault("self_audits", []).append({"phase": phase, "audit": result.get("self_audit"),
+                                                         "at": _now()})
+        self.journal.append("IMPLEMENTER_SELF_AUDIT", iteration_id=self._iteration_id(), phase=self.state["phase"],
+                            payload={"source": phase, "failing": [r["name"] for r in rows if r["status"] == "FAIL"],
+                                     "warnings": [r["name"] for r in rows if r["status"] == "WARN"],
+                                     "fixed_during_audit": list((result.get("self_audit") or {}).get(
+                                         "fixed_during_audit") or [])
+                                     if isinstance(result.get("self_audit"), Mapping) else []})
+
     # PLAN --------------------------------------------------------------------
 
     def _do_plan(self) -> None:
@@ -1386,6 +1412,12 @@ class AutonomyController:
             "repair_attempts": 0, "reviews": [], "final_reviews": [], "packet": None, "repair_origin": None,
             "started_at": _now(), "finished_at": None,
             "plan_execution_id": plan_execution.get("execution_id")})
+        lint = wp.lint_work_packet(plan, self._required_evidence())
+        difficulty = wp.assess_difficulty(plan, lint)
+        self._it().update(work_packet_lint=lint, difficulty=difficulty)
+        self.journal.append("WORK_PACKET_ASSESSED", iteration_id=iteration_id, phase=ac.PLAN, payload={
+            "version": wp.VERSION, "present": lint["present"], "issues": lint["issues"], "metrics": lint["metrics"],
+            "route": difficulty["route"], "reasons": difficulty["reasons"]})
         self.state["planning"] = None
         self._after_iteration_planned(source, plan, chain_info, chain_stubs)
         self._record_working_roadmap(plan, index, iteration_id)
@@ -1600,6 +1632,7 @@ class AutonomyController:
         execute_ref = self.state["executions"][-1] if self.state.get("executions") else {}
         self._it()["executed_by"] = self._execution_audit(execute_ref.get("execution_id"))
         self._record_checks(result.get("checks"))
+        self._record_self_audit(result, "EXECUTE")
         self._done(summary=result["summary"], deviations=result.get("deviations", []))
         self._goto(ac.SELF_VERIFY)
         self._save()
@@ -1671,7 +1704,8 @@ class AutonomyController:
             target = " ".join(str(evidence).casefold().split())
             matches = [row for row in checks if target in " ".join(
                 f"{row.get('name', '')} {row.get('summary', '')}".casefold().split()) or
-                " ".join(str(row.get("name", "")).casefold().split()) in target]
+                " ".join(str(row.get("name", "")).casefold().split()) in target or
+                wp.evidence_matches(str(evidence), str(row.get("name", "")))]
             classified = [row for row in matches if str(row.get("status", "")).upper() in ac.CLASSIFIED_STATUSES
                           and row.get("log_ref")]
             passed = any(str(row.get("status", "")).upper() == "PASS" for row in matches) or bool(classified)
@@ -1680,6 +1714,7 @@ class AutonomyController:
                                      + (f"; {len(classified)} classified with evidence (not a pass)" if classified else "")
                                      if passed else f"required evidence {evidence!r} has no passing recorded check"),
                          "source_refs": [row.get("log_ref") or row.get("name") for row in matches]})
+        rows.extend(self._static_sanity_rows())
         try:
             self.env.assert_safe()
             rows.append({"name": "controller.git_boundary", "status": "PASS",
@@ -1690,6 +1725,22 @@ class AutonomyController:
             rows.append({"name": "controller.evidence_integrity", "status": "PASS",
                          "summary": "all implementation and machine check records are retained for independent review"})
         return rows
+
+    def _static_sanity_rows(self) -> list[dict[str, Any]]:
+        """Deterministic detection of the simplest defects before any reviewer is paid for."""
+        it = self._it()
+        lint = it.get("work_packet_lint") or {}
+        claimed = list((it.get("execution") or {}).get("changed_files") or [])
+        for repair in it.get("repairs", []):
+            claimed.extend(repair.get("changed_files") or [])
+        try:
+            changed = self.env.changed_files()
+        except Exception:  # an environment that cannot list changes simply gets no static rows
+            return []
+        worktree = (self.env.describe() or {}).get("worktree")
+        return wp.static_sanity_checks(worktree, changed, claimed_files=claimed,
+                                       planned_files=lint.get("files_to_change") or [],
+                                       expect_changes=bool(lint.get("present") and lint.get("files_to_change")))
 
     # packet + REVIEW ---------------------------------------------------------
 
@@ -2166,6 +2217,7 @@ class AutonomyController:
             self._escalate(ac.E_EXECUTOR, "repair returned no structured result", it["iteration_id"])
             return
         self._record_checks(result.get("checks"))
+        self._record_self_audit(result, "REPAIR")
         accepted, rejected = self._apply_reclassifications(result)
         found = rx.repair_signals(result, evidence_before=before_evidence, seen_check_triples=seen_triples,
                                   seen_evidence_refs=seen_refs, seen_diagnosis_hashes=seen_dx)

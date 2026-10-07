@@ -80,13 +80,20 @@ def test_02_harder_implementation_selects_luna_very_high():
     assert ap.select_implementation(IDS, "HARDER")["profile_id"] == IDS["implementer_harder"]
 
 
-def test_03_significantly_difficult_implementation_selects_luna_max():
-    assert ap.select_implementation(IDS, "SIGNIFICANTLY_DIFFICULT")["profile_id"] == IDS["implementer_hard"]
+def test_03_significantly_difficult_implementation_selects_the_strong_implementer():
+    assert ap.select_implementation(IDS, "SIGNIFICANTLY_DIFFICULT")["profile_id"] == IDS["implementer_strong"]
+
+
+def test_03b_a_run_frozen_without_the_strong_slot_keeps_luna_max():
+    legacy = {k: v for k, v in IDS.items() if k not in ap.OPTIONAL_PROFILE_FALLBACKS}
+    assert ap.select_implementation(legacy, "SIGNIFICANTLY_DIFFICULT")["profile_id"] == IDS["implementer_hard"]
+    assert ap.select_continuation_planner(legacy, {"tier": "DEFAULT"})["profile_id"] == IDS["final_review_default"]
+    assert ap.validate_policy_ids(legacy)["implementer_strong"] == IDS["implementer_hard"]
 
 
 def test_04_a_hard_label_or_evidence_alone_never_selects_sonnet():
     result = ap.select_implementation(IDS, "SIGNIFICANTLY_DIFFICULT", evidence=["large change"])
-    assert result["profile_id"] == IDS["implementer_hard"]
+    assert result["profile_id"] == IDS["implementer_strong"] != IDS["implementer_capability_escalation"]
     assert result["selection_reason"] == "IMPLEMENTATION_COMPLEXITY_ESCALATION"
 
 
@@ -105,7 +112,7 @@ def test_06_sonnet_does_not_follow_a_different_profile_failure():
                 "finding_code": "IMPLEMENTATION_CAPABILITY_MISMATCH", "execution_id": "EXE_1",
                 "evidence_ref": "EXECUTION_RESULT:EXE_1"}
     assert ap.select_implementation(IDS, "SIGNIFICANTLY_DIFFICULT", previous_attempt=previous)["profile_id"] \
-        == IDS["implementer_hard"]
+        == IDS["implementer_strong"]
 
 
 def test_07_human_override_is_explicit_and_audited():
@@ -159,11 +166,13 @@ def test_14_critical_review_escalates_to_opus_medium():
 
 
 def test_15_continuation_planner_pairs_with_the_final_review_tier():
-    for tier, key in (("DEFAULT", "final_review_default"), ("HARD", "final_review_hard"),
-                      ("CRITICAL", "final_review_critical")):
+    # DEFAULT tier: the dedicated continuation planner (writes concrete work packets), not the light final reviewer.
+    for tier, key, planner in (("DEFAULT", "final_review_default", "continuation_planner"),
+                               ("HARD", "final_review_hard", "final_review_hard"),
+                               ("CRITICAL", "final_review_critical", "final_review_critical")):
         result = ap.select_continuation_planner(IDS, {"tier": tier, "profile_id": IDS[key],
                                                        "iteration_id": "ITER_1"})
-        assert result["profile_id"] == IDS[key]
+        assert result["profile_id"] == IDS[planner]
 
 
 def test_16_profile_catalog_maps_logical_tiers_without_controller_runtime_ids():
@@ -200,7 +209,7 @@ def test_18_next_iteration_uses_frozen_charter_and_does_not_repeat_initial_opus(
     state = h.controller(with_prep=True).run()
     plan_calls = [row for row in state["executions"] if row["executor"] == "plan"]
     assert [row["role"] for row in plan_calls] == ["initial_planner", "continuation_planner"]
-    assert [row["profile"] for row in plan_calls] == ["OPUS_5_5_HIGH", "SOL_5_6_LIGHT"]
+    assert [row["profile"] for row in plan_calls] == ["OPUS_5_5_HIGH", "SOL_6_1_MEDIUM"]
     assert len({it["lineage"]["directional_charter_hash"] for it in state["iterations"]}) == 1
     assert state["planner_invocation_count"] == 1
 

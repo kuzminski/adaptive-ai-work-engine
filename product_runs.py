@@ -572,8 +572,9 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
         "limits": mandate["roadmap_mandate"]["autonomy_bounds"],
         "planner": planner,
         "implementer_policy": {k: resolution["slots"][k] for k in (
-            "implementer_default", "implementer_harder", "implementer_hard",
-            "implementer_capability_escalation", "repair_default", "repair_hard", "review_pretreatment")},
+            "implementer_default", "implementer_harder", "implementer_hard", "implementer_strong",
+            "implementer_capability_escalation", "repair_default", "repair_hard", "review_pretreatment",
+            "continuation_planner")},
         "review_policy": {k: resolution["slots"][k] for k in (
             "primary_reviewer", "final_review_default", "final_review_hard", "final_review_critical")},
         "choices": resolution["choices"],

@@ -514,6 +514,57 @@
       "trust_level": "EXPERIMENTAL",
       "curated": false,
       "not_implementer": false
+    },
+    {
+      "profile_id": "SOL_6_1_MEDIUM",
+      "display_name": "GPT-6.1 Sol / medium",
+      "suitable_for": [
+        "PLAN",
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR",
+        "REVIEW"
+      ],
+      "description": "Strong implementer for visibly difficult iterations and for repairs a weaker implementer did not converge on; also continuation planning (writes concrete work packets).",
+      "harness": "codex",
+      "runtime_model_id": "gpt-6.1-sol",
+      "effort": "medium",
+      "availability": "VERIFIED",
+      "curated": true
+    },
+    {
+      "profile_id": "GEMINI_3_1_PRO",
+      "display_name": "Gemini 3.1 Pro (Gemini CLI)",
+      "suitable_for": [
+        "IMPLEMENT",
+        "SUBTASK",
+        "REPAIR",
+        "REVIEW",
+        "PLAN"
+      ],
+      "description": "Google Gemini 3.1 Pro through the locally installed Gemini CLI; requires its own Google login or API key. Usable after a local probe.",
+      "harness": "gemini",
+      "runtime_model_id": "gemini-3.1-pro-preview",
+      "effort": "default",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "curated": true
+    },
+    {
+      "profile_id": "GEMINI_3_FLASH",
+      "display_name": "Gemini 3 Flash (Gemini CLI)",
+      "suitable_for": [
+        "SUBTASK",
+        "REPAIR",
+        "IMPLEMENT"
+      ],
+      "description": "Google Gemini 3 Flash through the Gemini CLI; fast bounded implementation/repair. Usable after a local probe.",
+      "harness": "gemini",
+      "runtime_model_id": "gemini-3-flash-preview",
+      "effort": "default",
+      "availability": "VERIFIED",
+      "availability_policy": "LOCAL_RUNTIME_PROBE_REQUIRED",
+      "curated": true
     }
   ]
 }

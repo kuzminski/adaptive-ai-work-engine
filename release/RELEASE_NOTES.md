@@ -1,4 +1,4 @@
-**AAW @RELEASE@ — gotowa aplikacja dla Windows (wersja kandydująca)**
+**AAW @RELEASE@ — gotowa aplikacja dla Windows**
 
 ### Jak zacząć
 1. Pobierz **`AAW-Windows-x64.zip`** z sekcji *Assets* poniżej (nie „Source code”).
