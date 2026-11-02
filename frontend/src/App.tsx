@@ -5,7 +5,7 @@
  * CenterCanvas execution view, and RightDrawer telemetry console.
  */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Terminal,
   ShieldAlert,
@@ -16,11 +16,13 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { client } from "./api/client";
-import { DrawerTab, RoleFilter } from "./api/types";
+import { DecisionAction, DrawerTab, RoleFilter } from "./api/types";
 import { useEngineStore } from "./store/engineStore";
 import { StudioLayout } from "./components/layout/StudioLayout";
 import { LeftRail } from "./components/nav/LeftRail";
 import { PhaseGraph } from "./components/graph/PhaseGraph";
+import { HumanGateBanner } from "./components/gate/HumanGateBanner";
+import { GateDecisionModal } from "./components/gate/GateDecisionModal";
 
 export function App() {
   const {
@@ -40,6 +42,8 @@ export function App() {
     startPolling,
     stopPolling,
   } = useEngineStore();
+
+  const [gateModalMode, setGateModalMode] = useState<DecisionAction | null>(null);
 
   const token = client.getToken() || "none";
 
@@ -71,6 +75,13 @@ export function App() {
           </button>
         </div>
       )}
+
+      {/* Sticky Human Gate Decision Banner */}
+      <HumanGateBanner
+        run={run}
+        onSelectAction={(action) => setGateModalMode(action)}
+        isModalOpen={gateModalMode !== null}
+      />
 
       {/* Hero / Run Header Card */}
       <div className="bg-surface border border-subtle rounded-xl p-5 shadow-xl">
@@ -157,6 +168,14 @@ export function App() {
 
       {/* 7-Phase Execution Graph with Animated State Machine */}
       <PhaseGraph run={run} />
+
+      {/* Human Gate Decision Modal */}
+      <GateDecisionModal
+        isOpen={gateModalMode !== null}
+        mode={gateModalMode}
+        run={run}
+        onClose={() => setGateModalMode(null)}
+      />
     </div>
   );
 
