@@ -259,25 +259,16 @@ def test_build_portable_frontend_handling(tmp_path, monkeypatch, capsys):
     # 2. When frontend exists and npm is present
     frontend_dir.mkdir()
     monkeypatch.setattr(bp.shutil, "which", lambda cmd: "/usr/bin/npm" if cmd == "npm" else None)
-    npm_cmd = bp.shutil.which("npm")
-    if frontend_dir.exists():
-        if npm_cmd:
-            bp.subprocess.run([npm_cmd, "run", "build"], cwd=frontend_dir, check=True)
-
+    res = bp.build_frontend_if_present(tmp_path)
+    assert res is True
     assert len(called_cmds) == 1
     assert called_cmds[0] == (["/usr/bin/npm", "run", "build"], frontend_dir)
 
     # 3. When frontend exists and npm is NOT present
     called_cmds.clear()
     monkeypatch.setattr(bp.shutil, "which", lambda cmd: None)
-    npm_cmd = bp.shutil.which("npm")
-    if frontend_dir.exists():
-        if npm_cmd:
-            bp.subprocess.run([npm_cmd, "run", "build"], cwd=frontend_dir, check=True)
-        else:
-            print(f"notice: {frontend_dir} exists but npm was not found on PATH; skipping frontend build",
-                  file=sys.stderr, flush=True)
-
+    res = bp.build_frontend_if_present(tmp_path)
+    assert res is False
     assert len(called_cmds) == 0
     err = capsys.readouterr().err
     assert "skipping frontend build" in err
