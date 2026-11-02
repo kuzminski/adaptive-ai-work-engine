@@ -121,7 +121,7 @@ export const EvidenceLedger: React.FC<EvidenceLedgerProps> = ({
             data-testid="test-proof-badge"
             className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40"
           >
-            {pytestCheck?.status === "FAIL" ? "FAIL (Exit Code 1)" : "PASS (Exit Code 0)"}
+            {pytestCheck?.status === "FAIL" ? "FAIL (Exit Code 1)" : (run?.process?.phase === "SELF_VERIFY" || run?.process?.phase === "FINAL_REVIEW" || run?.process?.phase === "ROADMAP_CHECK" || (run as any)?.state === "AWAITING_HUMAN" || run?.status === "READY_FOR_DECISION" || run?.status === "ACCEPTED") ? "PASS (Exit Code 0)" : "PENDING (Oczekuje)"}
           </span>
         </div>
 

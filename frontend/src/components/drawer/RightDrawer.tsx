@@ -114,7 +114,7 @@ export const RightDrawer: React.FC<RightDrawerProps> = ({
   return (
     <div
       data-testid="right-drawer-root"
-      style={propWidth ? { width: `${activeWidth}px` } : undefined}
+      style={{ width: `${activeWidth}px` }}
       className="flex flex-col h-full w-full bg-surface overflow-hidden select-none"
     >
       {/* Drawer Top Header */}

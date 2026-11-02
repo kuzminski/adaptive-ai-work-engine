@@ -214,11 +214,14 @@ export const UnifiedDiffViewer: React.FC<UnifiedDiffViewerProps> = ({
     Boolean((evidence as any)?.diff_truncated) ||
     Boolean(evidence?.descriptor?.diff_truncated);
 
-  // Parse files
-  const parsedFiles = useMemo(
-    () => parseUnifiedDiff(rawDiff, changedFiles),
-    [rawDiff, changedFiles]
-  );
+  // Parse files with truncation slice defense
+  const parsedFiles = useMemo(() => {
+    const diffToParse =
+      isTruncated && rawDiff.length > MAX_DIFF_BYTES
+        ? rawDiff.slice(0, MAX_DIFF_BYTES)
+        : rawDiff;
+    return parseUnifiedDiff(diffToParse, changedFiles);
+  }, [rawDiff, isTruncated, changedFiles]);
 
   const [selectedFileId, setSelectedFileId] = useState<string>("all");
   const [copied, setCopied] = useState(false);
@@ -425,7 +428,7 @@ export const UnifiedDiffViewer: React.FC<UnifiedDiffViewerProps> = ({
 
                       {/* Code Content */}
                       <pre className={`flex-1 overflow-x-auto whitespace-pre-wrap break-all pr-2 ${textCol}`}>
-                        {line.content.replace(/^[+-]/, "")}
+                        {line.type === "add" || line.type === "delete" ? line.content.replace(/^[+-]/, "") : line.content}
                       </pre>
                     </div>
                   );
