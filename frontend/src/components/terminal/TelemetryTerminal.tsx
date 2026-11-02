@@ -48,11 +48,7 @@ const ROLE_OPTIONS: { id: RoleFilter; label: string }[] = [
 
 function formatTimestamp(isoOrText?: string | null, fallbackIndex: number = 0): string {
   if (!isoOrText) {
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const seconds = fallbackIndex + 1;
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `[00:${pad(mins)}:${pad(secs)}]`;
+    return fallbackIndex > 0 ? `+${fallbackIndex}s` : "[--:--:--]";
   }
   try {
     const d = new Date(isoOrText);
@@ -118,7 +114,7 @@ export function formatTelemetryLogs(
   // 1. Initial baseline system & security events
   entries.push({
     id: `boot-${++seq}`,
-    timestamp: "[00:00:01]",
+    timestamp: "[--:--:--]",
     role: "System",
     phase: "INIT",
     message: "Połączono z lokalnym silnikiem loopback (127.0.0.1)",
@@ -127,7 +123,7 @@ export function formatTelemetryLogs(
 
   entries.push({
     id: `boot-${++seq}`,
-    timestamp: "[00:00:02]",
+    timestamp: "[--:--:--]",
     role: "Planner",
     phase: "INIT",
     message: "Katalog modeli zweryfikowany: Claude, Codex, Antigravity",
@@ -136,7 +132,7 @@ export function formatTelemetryLogs(
 
   entries.push({
     id: `boot-${++seq}`,
-    timestamp: "[00:00:03]",
+    timestamp: "[--:--:--]",
     role: "System",
     phase: "INIT",
     message: "Zabezpieczenia invariantów aktywne: Human Gate & Local Loopback",

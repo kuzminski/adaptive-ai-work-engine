@@ -8,7 +8,7 @@
  * - Amber pulsating border and "BRAMKA CZŁOWIEKA (GATE)" badge
  * - Reason for hold (hold_reason, hold_detail, or default explanation)
  * - Concrete metrics: modified files count, exit code, test pass indicator
- * - 3 Action buttons: [A] Akceptuj & Scal, [R] Odrzuć, [C] Kontynuuj
+ * - 3 Action buttons: ✓ [A] Akceptuj, [R] Odrzuć, [C] Kontynuuj
  * - Global keyboard shortcuts: 'a'/'A' -> Accept, 'r'/'R' -> Reject, 'c'/'C' -> Continue
  */
 
@@ -18,7 +18,6 @@ import {
   FileCode,
   Activity,
   CheckCircle2,
-  GitMerge,
   XCircle,
   Play,
   AlertTriangle,
@@ -273,19 +272,15 @@ export const HumanGateBanner: React.FC<HumanGateBannerProps> = ({
 
           {/* Right Column: 3 Action Buttons */}
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 shrink-0 pt-2 lg:pt-0">
-            {/* [A] Akceptuj & Scal */}
+            {/* [A] Akceptuj */}
             <button
               type="button"
               onClick={() => handleAction("ACCEPT")}
               data-testid="gate-btn-accept"
               className="flex-1 sm:flex-initial px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-lg shadow-emerald-950/50 border border-emerald-400/50 flex items-center justify-center gap-2 transition active:scale-[0.98]"
-              title="Zatwierdź zmiany i scal do gałęzi docelowej (Skrót: A)"
+              title="Zatwierdź wynik zadania (Gotowe do integracji, Skrót: A)"
             >
-              <span className="px-1.5 py-0.5 bg-emerald-800/90 rounded text-[10px] font-mono border border-emerald-300/30">
-                A
-              </span>
-              <GitMerge className="w-3.5 h-3.5 text-emerald-200" />
-              <span>Akceptuj &amp; Scal</span>
+              <span>✓ [A] Akceptuj</span>
             </button>
 
             {/* [R] Odrzuć */}

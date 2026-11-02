@@ -335,10 +335,16 @@ export function createEngineStore(api: ApiClient = defaultClient) {
           api.getEvidence(targetId).catch(() => null),
         ]);
 
+        const bannerNotice =
+          action === "CONTINUE" && (result?.prefill || result?.ok)
+            ? "Przygotowano kontynuację zadania (draft). Możesz przejść do nowego zadania."
+            : null;
+
         setState({
           run: updatedRun,
           evidence: updatedEvidence || state.evidence,
           loading: false,
+          error: bannerNotice,
         });
 
         // If continuing or approved and active, restart polling

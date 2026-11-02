@@ -112,16 +112,34 @@ export const EvidenceLedger: React.FC<EvidenceLedgerProps> = ({
       >
         <div className="flex items-center justify-between border-b border-subtle/70 pb-2">
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <CheckCircle2
+              className={`w-4 h-4 shrink-0 ${
+                pytestCheck
+                  ? pytestCheck.status === "FAIL"
+                    ? "text-rose-400"
+                    : "text-emerald-400"
+                  : "text-slate-500"
+              }`}
+            />
             <span className="font-bold text-slate-200 text-xs">
               Dowód Testów (Pytest Proof)
             </span>
           </div>
           <span
             data-testid="test-proof-badge"
-            className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40"
+            className={`px-2 py-0.5 text-[10px] font-bold rounded border ${
+              pytestCheck
+                ? pytestCheck.status === "FAIL"
+                  ? "bg-rose-500/15 text-rose-300 border-rose-500/40"
+                  : "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                : "bg-slate-700/40 text-slate-400 border-slate-600/40"
+            }`}
           >
-            {pytestCheck?.status === "FAIL" ? "FAIL (Exit Code 1)" : (run?.process?.phase === "SELF_VERIFY" || run?.process?.phase === "FINAL_REVIEW" || run?.process?.phase === "ROADMAP_CHECK" || (run as any)?.state === "AWAITING_HUMAN" || run?.status === "READY_FOR_DECISION" || run?.status === "ACCEPTED") ? "PASS (Exit Code 0)" : "PENDING (Oczekuje)"}
+            {pytestCheck
+              ? pytestCheck.status === "FAIL"
+                ? "FAIL (Exit Code 1)"
+                : "PASS (Exit Code 0)"
+              : "BRAK DANYCH"}
           </span>
         </div>
 
@@ -129,22 +147,42 @@ export const EvidenceLedger: React.FC<EvidenceLedgerProps> = ({
           <div className="flex items-center justify-between bg-elevated/40 p-2 rounded border border-subtle/50">
             <span className="text-slate-400 text-[10px] uppercase">Polecenie:</span>
             <code className="text-sky-300 text-[10px]">
-              python -m pytest tests/test_product_server_static.py
+              {pytestCheck
+                ? pytestCheck.name?.includes("pytest")
+                  ? pytestCheck.name
+                  : `python -m pytest ${pytestCheck.name || ""}`.trim()
+                : "—"}
             </code>
           </div>
           <div className="flex items-center justify-between px-1">
             <span className="text-slate-400">Kod zakończenia:</span>
-            <span className="text-emerald-400 font-bold">0 (SUKCES)</span>
+            <span
+              className={
+                pytestCheck
+                  ? pytestCheck.status === "FAIL"
+                    ? "text-rose-400 font-bold"
+                    : "text-emerald-400 font-bold"
+                  : "text-slate-400 font-medium"
+              }
+            >
+              {pytestCheck
+                ? pytestCheck.status === "FAIL"
+                  ? "1 (BŁĄD)"
+                  : "0 (SUKCES)"
+                : "—"}
+            </span>
           </div>
           <div className="flex items-center justify-between px-1">
             <span className="text-slate-400">Wynik weryfikacji:</span>
             <span className="text-slate-200 font-semibold">
-              {pytestCheck?.summary || "5 passed, 0 failed, 100% poprawności"}
+              {pytestCheck?.summary || "Brak zarejestrowanych danych testowych dla tego przebiegu"}
             </span>
           </div>
           <div className="flex items-center justify-between px-1">
             <span className="text-slate-400">Środowisko:</span>
-            <span className="text-slate-400 text-[10px]">Python 3.14 (Clean Sandbox)</span>
+            <span className="text-slate-400 text-[10px]">
+              {pytestCheck ? ((run as any)?.environment || "Python (Clean Sandbox)") : "—"}
+            </span>
           </div>
         </div>
       </div>
@@ -156,32 +194,66 @@ export const EvidenceLedger: React.FC<EvidenceLedgerProps> = ({
       >
         <div className="flex items-center justify-between border-b border-subtle/70 pb-2">
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <CheckCircle2
+              className={`w-4 h-4 shrink-0 ${
+                ruffCheck
+                  ? ruffCheck.status === "FAIL"
+                    ? "text-rose-400"
+                    : "text-emerald-400"
+                  : "text-slate-500"
+              }`}
+            />
             <span className="font-bold text-slate-200 text-xs">
               Dowód Jakości Kodu (Ruff Linter Proof)
             </span>
           </div>
           <span
             data-testid="linter-proof-badge"
-            className="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40"
+            className={`px-2 py-0.5 text-[10px] font-bold rounded border ${
+              ruffCheck
+                ? ruffCheck.status === "FAIL"
+                  ? "bg-rose-500/15 text-rose-300 border-rose-500/40"
+                  : "bg-emerald-500/15 text-emerald-300 border-emerald-500/40"
+                : "bg-slate-700/40 text-slate-400 border-slate-600/40"
+            }`}
           >
-            {ruffCheck?.status === "FAIL" ? "FAIL (Naruszenia)" : "PASS (0 Naruszeń)"}
+            {ruffCheck
+              ? ruffCheck.status === "FAIL"
+                ? "FAIL (Naruszenia)"
+                : "PASS (0 Naruszeń)"
+              : "BRAK DANYCH"}
           </span>
         </div>
 
         <div className="space-y-1.5 text-[11px] text-slate-300">
           <div className="flex items-center justify-between bg-elevated/40 p-2 rounded border border-subtle/50">
             <span className="text-slate-400 text-[10px] uppercase">Linter:</span>
-            <code className="text-sky-300 text-[10px]">ruff check --no-cache .</code>
+            <code className="text-sky-300 text-[10px]">
+              {ruffCheck ? (ruffCheck.name || "ruff check") : "—"}
+            </code>
           </div>
           <div className="flex items-center justify-between px-1">
             <span className="text-slate-400">Status weryfikacji:</span>
-            <span className="text-emerald-400 font-bold">Czysty (Clean)</span>
+            <span
+              className={
+                ruffCheck
+                  ? ruffCheck.status === "FAIL"
+                    ? "text-rose-400 font-bold"
+                    : "text-emerald-400 font-bold"
+                  : "text-slate-400 font-medium"
+              }
+            >
+              {ruffCheck
+                ? ruffCheck.status === "FAIL"
+                  ? "Naruszenia lintera"
+                  : "Czysty (Clean)"
+                : "—"}
+            </span>
           </div>
           <div className="flex items-center justify-between px-1">
             <span className="text-slate-400">Zgodność reguł:</span>
             <span className="text-slate-200">
-              {ruffCheck?.summary || "0 błędów, 0 ostrzeżeń (E, F, W, I)"}
+              {ruffCheck?.summary || "Brak zarejestrowanych wyników lintera"}
             </span>
           </div>
         </div>

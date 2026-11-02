@@ -194,14 +194,15 @@ export class ApiClient {
   public async postDecision(
     id: string,
     action: DecisionAction,
-    feedback?: string
+    feedback?: string,
+    options?: { mode?: string }
   ): Promise<any> {
     const encoded = encodeURIComponent(id);
-    const body = {
+    const body: Record<string, any> = {
       action,
       feedback: feedback || "",
       reason: feedback || "",
-      mode: feedback || "",
+      mode: action === "CONTINUE" ? (options?.mode || "direction") : undefined,
     };
 
     try {

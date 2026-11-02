@@ -329,9 +329,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     if decision_act == "reject":
                         return prun.reject(run_id, reason=reason)
                     if decision_act == "continue":
-                        return prun.prepare_continuation(run_id, mode=reason or str(body.get("mode") or ""))
+                        mode = str(body.get("mode") or "").strip()
+                        if mode not in ("direction", "new_goal"):
+                            mode = "direction"
+                        return prun.prepare_continuation(run_id, mode=mode)
                     raise prun.ProductError(f"Nieobsługiwana decyzja: {decision_act}")
-                return prun.prepare_continuation(run_id, mode=str(body.get("mode") or ""))
+                mode = str(body.get("mode") or "").strip()
+                if mode not in ("direction", "new_goal"):
+                    mode = "direction"
+                return prun.prepare_continuation(run_id, mode=mode)
             self._api(act)
 
     return Handler

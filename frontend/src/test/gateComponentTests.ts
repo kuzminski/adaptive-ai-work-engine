@@ -7,7 +7,7 @@
  *    - Visibility conditioned on AWAITING_HUMAN, READY_FOR_DECISION, NEEDS_ATTENTION
  *    - Amber pulsating banner, badge, and reason statement
  *    - Concrete metrics: modified files count, exit code, test pass indicators
- *    - 3 action buttons: [A] Akceptuj & Scal, [R] Odrzuć, [C] Kontynuuj
+ *    - 3 action buttons: ✓ [A] Akceptuj, [R] Odrzuć, [C] Kontynuuj
  * 3. Keyboard shortcut event handling:
  *    - 'a' / 'A' triggers Accept flow
  *    - 'r' / 'R' triggers Reject modal
@@ -249,8 +249,8 @@ export async function runGateComponentTests() {
 
     // 4. Action Buttons
     assert(htmlGate.includes("data-testid=\"gate-btn-accept\""), "Must render Accept button");
-    assert(htmlGate.includes("Akceptuj &amp; Scal"), "Must contain text 'Akceptuj & Scal'");
-    assert(htmlGate.includes(">A<"), "Accept button must have keyboard shortcut hint A");
+    assert(htmlGate.includes("✓ [A] Akceptuj"), "Must contain text '✓ [A] Akceptuj'");
+    assert(htmlGate.includes("[A]"), "Accept button must have keyboard shortcut hint [A]");
 
     assert(htmlGate.includes("data-testid=\"gate-btn-reject\""), "Must render Reject button");
     assert(htmlGate.includes("Odrzuć"), "Must contain text 'Odrzuć'");
@@ -389,12 +389,12 @@ export async function runGateComponentTests() {
     assert(htmlAccept.includes("role=\"dialog\""), "Must have role='dialog'");
     assert(htmlAccept.includes("aria-modal=\"true\""), "Must have aria-modal='true'");
     assert(htmlAccept.includes("data-testid=\"gate-decision-modal\""), "Must have modal testid");
-    assert(htmlAccept.includes("Zatwierdź i scal zmiany"), "Must have ACCEPT title");
+    assert(htmlAccept.includes("Zatwierdź wynik (READY FOR INTEGRATION)"), "Must have ACCEPT title");
     assert(htmlAccept.includes("data-testid=\"accept-summary-box\""), "Must render ACCEPT summary box");
     assert(htmlAccept.includes("cand-12345"), "Must show candidate ID");
     assert(htmlAccept.includes("2 plików"), "Must show modified files count (2 plików)");
     assert(htmlAccept.includes("data-testid=\"gate-modal-submit-btn\""), "Must render submit button");
-    assert(htmlAccept.includes("Zatwierdź &amp; Scal (ACCEPT)"), "Must have ACCEPT submit button text");
+    assert(htmlAccept.includes("Zatwierdź wynik (ACCEPT)"), "Must have ACCEPT submit button text");
 
     // 3. REJECT Mode
     const htmlReject = renderToString(
@@ -468,6 +468,17 @@ export async function runGateComponentTests() {
     assert.strictEqual(submittedDecisions[2].id, "run-target-77");
     assert.strictEqual(submittedDecisions[2].action, "CONTINUE");
     assert.strictEqual(submittedDecisions[2].feedback, "Please refactor token middleware and add tests");
+
+    // Submit CONTINUE with prefill notification
+    mockClient.postDecision = async (id: string, action: any, feedback?: string): Promise<any> => {
+      submittedDecisions.push({ id, action, feedback });
+      return { ok: true, prefill: { goal: "Continuation goal" } };
+    };
+    await store.actions.submitDecision("CONTINUE", "Refactor next phase");
+    assert.strictEqual(
+      store.getState().error,
+      "Przygotowano kontynuację zadania (draft). Możesz przejść do nowego zadania."
+    );
 
     console.log("  ✓ submitDecision payload and action routing verified for ACCEPT, REJECT, and CONTINUE");
   }

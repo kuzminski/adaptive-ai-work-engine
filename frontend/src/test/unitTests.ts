@@ -76,7 +76,7 @@ async function runTests() {
         );
       }
       if (url.endsWith("/api/runs/test-run-1/decision")) {
-        return new Response(JSON.stringify({ status: "ACCEPTED", action: body?.action }), {
+        return new Response(JSON.stringify({ status: "ACCEPTED", action: body?.action, mode: body?.mode }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -140,6 +140,10 @@ async function runTests() {
 
       const decision = await client.postDecision("test-run-1", "ACCEPT", "Approved by human");
       assert.strictEqual(decision.action, "ACCEPT");
+      assert.strictEqual(decision.mode, undefined);
+
+      const contDecision = await client.postDecision("test-run-1", "CONTINUE", "Keep going");
+      assert.strictEqual(contDecision.mode, "direction");
 
       const stop = await client.postStop("test-run-1", false);
       assert.strictEqual(stop.status, "STOPPING");

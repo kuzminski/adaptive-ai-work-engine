@@ -14,7 +14,6 @@
 import React, { useEffect, useState } from "react";
 import {
   ShieldAlert,
-  GitMerge,
   XCircle,
   Play,
   X,
@@ -106,7 +105,7 @@ export const GateDecisionModal: React.FC<GateDecisionModalProps> = ({
 
   const acceptMeaning =
     run?.gate?.accept_meaning ||
-    "Scalenie wygenerowanego kodu do docelowej gałęzi i pomyślne sfinalizowanie zadania.";
+    "Zatwierdzenie kandydata do integracji zewnętrznej. Zgodnie z inwariantem bezpieczeństwa AAW, silnik nie wykonuje automatycznego scalania (merge) ani wypychania (push) — pozostawia kod w gałęzi zadania do Twojej samodzielnej integracji.";
 
   // ── Submission Handler ─────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
@@ -149,10 +148,10 @@ export const GateDecisionModal: React.FC<GateDecisionModalProps> = ({
   let feedbackRequired = false;
 
   if (mode === "ACCEPT") {
-    title = "Zatwierdź i scal zmiany";
+    title = "Zatwierdź wynik (READY FOR INTEGRATION)";
     modeBadge = "AKCEPTACJA";
-    submitLabel = "Zatwierdź & Scal (ACCEPT)";
-    submitIcon = <GitMerge className="w-4 h-4" />;
+    submitLabel = "Zatwierdź wynik (ACCEPT)";
+    submitIcon = <CheckCircle2 className="w-4 h-4" />;
     submitBtnClass =
       "bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-emerald-950/50 border-emerald-400/50";
     feedbackLabel = "Notatka audytowa / komentarz (opcjonalnie):";

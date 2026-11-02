@@ -227,8 +227,11 @@ index 3333333..4444444 100644
     const bootLogs = logs.filter((l) => l.id.startsWith("boot-"));
     assert.strictEqual(bootLogs.length, 3, "Must have 3 boot entries");
     assert.strictEqual(bootLogs[0].role, "System");
+    assert.strictEqual(bootLogs[0].timestamp, "[--:--:--]", "Boot log 0 must use synthetic [--:--:--]");
     assert.strictEqual(bootLogs[1].role, "Planner");
+    assert.strictEqual(bootLogs[1].timestamp, "[--:--:--]", "Boot log 1 must use synthetic [--:--:--]");
     assert.strictEqual(bootLogs[2].role, "System");
+    assert.strictEqual(bootLogs[2].timestamp, "[--:--:--]", "Boot log 2 must use synthetic [--:--:--]");
 
     // Check roles representation
     const rolesPresent = new Set(logs.map((l) => l.role));
@@ -378,6 +381,20 @@ index 3333333..4444444 100644
     assert(html.includes("data-testid=\"invariant-loopback\""), "Must render Loopback security invariant");
     assert(html.includes("data-testid=\"invariant-zero-deps\""), "Must render Zero Dependencies invariant");
     assert(html.includes("3/3 ENFORCED"), "Must show 3/3 active invariants badge");
+
+    // Test 19b: EvidenceLedger neutral state when no pytest/ruff checks are recorded
+    const emptyRunHtml = renderToString(
+      React.createElement(EvidenceLedger, {
+        run: { run_id: "empty-run", status: "PENDING" } as any,
+        evidence: null,
+      })
+    );
+    assert(emptyRunHtml.includes("BRAK DANYCH"), "Must render BRAK DANYCH badge for missing checks");
+    assert(emptyRunHtml.includes("Brak zarejestrowanych danych testowych dla tego przebiegu"), "Must display neutral test summary");
+    assert(emptyRunHtml.includes("Brak zarejestrowanych wyników lintera"), "Must display neutral linter summary");
+    assert(!emptyRunHtml.includes("python -m pytest tests/test_product_server_static.py"), "Must not contain fake pytest command");
+    assert(!emptyRunHtml.includes("Python 3.14 (Clean Sandbox)"), "Must not contain fake python environment");
+    assert(!emptyRunHtml.includes("ruff check --no-cache ."), "Must not contain fake ruff command");
 
     console.log("  ✓ EvidenceLedger 4 proof cards (pytest, ruff, changed files, invariants) verified");
   }

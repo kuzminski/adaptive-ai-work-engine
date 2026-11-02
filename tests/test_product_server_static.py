@@ -272,3 +272,47 @@ def test_build_portable_frontend_handling(tmp_path, monkeypatch, capsys):
     assert len(called_cmds) == 0
     err = capsys.readouterr().err
     assert "skipping frontend build" in err
+
+
+def test_decision_continue_endpoint_mode_validation(static_server, monkeypatch):
+    called = []
+
+    def fake_continue(run_id, *, mode):
+        called.append((run_id, mode))
+        return {'ok': True, 'prefill': {'goal': 'next-step'}}
+
+    monkeypatch.setattr(product_server.prun, 'prepare_continuation', fake_continue)
+    base = static_server['base_url']
+    token = static_server['token']
+
+    # 1. POST /api/runs/run-101/decision with action=CONTINUE, mode='' (missing/fallback to direction)
+    req = urllib.request.Request(
+        f'{base}/api/runs/run-101/decision',
+        data=json.dumps({'action': 'CONTINUE', 'feedback': 'Some feedback'}).encode('utf-8'),
+        headers={'X-AAW-Token': token, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode('utf-8'))
+        assert data['ok'] is True
+    assert called[-1] == ('run-101', 'direction')
+
+    # 2. POST /api/runs/run-101/decision with action=CONTINUE, mode='new_goal'
+    req = urllib.request.Request(
+        f'{base}/api/runs/run-101/decision',
+        data=json.dumps({'action': 'CONTINUE', 'mode': 'new_goal'}).encode('utf-8'),
+        headers={'X-AAW-Token': token, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+    assert called[-1] == ('run-101', 'new_goal')
+
+    # 3. POST /api/runs/run-101/continue with invalid mode -> defaults to direction
+    req = urllib.request.Request(
+        f'{base}/api/runs/run-101/continue',
+        data=json.dumps({'mode': 'invalid_mode_value'}).encode('utf-8'),
+        headers={'X-AAW-Token': token, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+    assert called[-1] == ('run-101', 'direction')
