@@ -11,6 +11,7 @@ import { createEngineStore, isTerminalOrHoldState } from "../store/engineStore";
 import { runLayoutComponentTests } from "./layoutComponentTests";
 import { runPhaseGraphTests } from "./phaseGraphTests";
 import { runGateComponentTests } from "./gateComponentTests";
+import { runRightDrawerComponentTests } from "./rightDrawerComponentTests";
 
 async function runTests() {
   console.log("=== Starting AAW Frontend Unit Tests ===");
@@ -307,6 +308,9 @@ async function runTests() {
 
   // ── Human Gate Decision Banner & Action Modal Tests ───────────────────────
   await runGateComponentTests();
+
+  // ── Right Drawer, Telemetry Terminal, Diff & Evidence Tests ───────────────
+  await runRightDrawerComponentTests();
 
   console.log("\n=== ALL FRONTEND UNIT TESTS PASSED ===");
 }
