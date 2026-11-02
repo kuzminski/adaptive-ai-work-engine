@@ -38,7 +38,7 @@ import copy
 import datetime as dt
 from typing import Any, Mapping, Sequence
 
-ROUTER_VERSION = "AAW_MODEL_ROUTER_V0.1"
+ROUTER_VERSION = "AAW_MODEL_ROUTER_V0.2"
 
 # ── vocabularies ─────────────────────────────────────────────────────────────
 
@@ -47,7 +47,80 @@ CERTAINTIES = (EXACT, ESTIMATED, UNKNOWN)
 PRODUCTION, SECONDARY, EXPERIMENTAL, DISABLED = "PRODUCTION", "SECONDARY", "EXPERIMENTAL", "DISABLED"
 TRUSTS = (PRODUCTION, SECONDARY, EXPERIMENTAL, DISABLED)
 SMALL, MEDIUM, LARGE, VERY_LARGE = "SMALL", "MEDIUM", "LARGE", "VERY_LARGE"
-TASK_CLASSES = (SMALL, MEDIUM, LARGE, VERY_LARGE)
+TRIVIAL, SIMPLE, MODERATE, COMPLEX, CRITICAL_TASK = "TRIVIAL", "SIMPLE", "MODERATE", "COMPLEX", "CRITICAL"
+TASK_CLASSES = (TRIVIAL, SIMPLE, MODERATE, COMPLEX, CRITICAL_TASK, SMALL, MEDIUM, LARGE, VERY_LARGE)
+
+CANONICAL_TASK_CLASS = {
+    TRIVIAL: TRIVIAL,
+    SIMPLE: SIMPLE,
+    MODERATE: MODERATE,
+    COMPLEX: COMPLEX,
+    CRITICAL_TASK: CRITICAL_TASK,
+    SMALL: SIMPLE,
+    MEDIUM: MODERATE,
+    LARGE: COMPLEX,
+    VERY_LARGE: CRITICAL_TASK,
+}
+
+TASK_RANK = {
+    TRIVIAL: 0,
+    SIMPLE: 1,
+    SMALL: 1,
+    MODERATE: 2,
+    MEDIUM: 2,
+    COMPLEX: 3,
+    LARGE: 3,
+    CRITICAL_TASK: 4,
+    VERY_LARGE: 4,
+}
+
+TASK_BUDGETS: dict[str, dict[str, Any]] = {
+    TRIVIAL: {
+        "max_turns": 1,
+        "max_repairs": 0,
+        "max_calls": 0,
+        "token_ceiling": 0,
+        "retry_limit": 1,
+        "requires_llm": False,
+        "cost_class": "FREE",
+    },
+    SIMPLE: {
+        "max_turns": 3,
+        "max_repairs": 1,
+        "max_calls": 4,
+        "token_ceiling": 16000,
+        "retry_limit": 2,
+        "requires_llm": True,
+        "cost_class": "ECONOMIC",
+    },
+    MODERATE: {
+        "max_turns": 8,
+        "max_repairs": 2,
+        "max_calls": 10,
+        "token_ceiling": 64000,
+        "retry_limit": 3,
+        "requires_llm": True,
+        "cost_class": "BALANCED",
+    },
+    COMPLEX: {
+        "max_turns": 15,
+        "max_repairs": 3,
+        "max_calls": 20,
+        "token_ceiling": 128000,
+        "retry_limit": 4,
+        "requires_llm": True,
+        "cost_class": "STRONG",
+    },
+    CRITICAL_TASK: {
+        "max_turns": 25,
+        "max_repairs": 4,
+        "max_calls": 35,
+        "token_ceiling": 256000,
+        "retry_limit": 5,
+        "requires_llm": True,
+        "cost_class": "STRONGEST",
+    },
+}
 NORMAL_CRITICALITY, CRITICAL = "NORMAL", "CRITICAL"
 
 Z_NORMAL, Z_LOW, Z_RESERVE, Z_EXHAUSTED, Z_UNKNOWN = "NORMAL", "LOW", "RESERVE", "EXHAUSTED", "UNKNOWN"
@@ -67,14 +140,26 @@ DEFAULT_POLICY: dict[str, Any] = {
     "reserve_allowed_phases": ["review", "repair", "final_review", "diagnose"],
     "reserve_last_resort": False,
     # Larger tasks need more headroom before the provider counts as "normal".
-    "size_headroom_percent": {SMALL: 0, MEDIUM: 0, LARGE: 5, VERY_LARGE: 15},
+    "size_headroom_percent": {
+        TRIVIAL: 0, SIMPLE: 0, MODERATE: 0, COMPLEX: 5, CRITICAL_TASK: 15,
+        SMALL: 0, MEDIUM: 0, LARGE: 5, VERY_LARGE: 15,
+    },
     # Minimum capability class a profile must declare to take a task of this size.
-    "task_class_floor": {SMALL: 1, MEDIUM: 2, LARGE: 3, VERY_LARGE: 4},
+    "task_class_floor": {
+        TRIVIAL: 0, SIMPLE: 1, MODERATE: 2, COMPLEX: 3, CRITICAL_TASK: 4,
+        SMALL: 1, MEDIUM: 2, LARGE: 3, VERY_LARGE: 4,
+    },
     "phase_class_floor": {},
     "switch_penalty": 10,
-    "switch_penalty_task_multiplier": {SMALL: 0.5, MEDIUM: 1.0, LARGE: 1.5, VERY_LARGE: 2.0},
-    "experimental": {"allowed_phases": ["execute", "repair", "self_verify", "diagnose"],
-                     "allowed_task_classes": [SMALL, MEDIUM], "allow_critical": False},
+    "switch_penalty_task_multiplier": {
+        TRIVIAL: 0.25, SIMPLE: 0.5, MODERATE: 1.0, COMPLEX: 1.5, CRITICAL_TASK: 2.0,
+        SMALL: 0.5, MEDIUM: 1.0, LARGE: 1.5, VERY_LARGE: 2.0,
+    },
+    "experimental": {
+        "allowed_phases": ["execute", "repair", "self_verify", "diagnose"],
+        "allowed_task_classes": [TRIVIAL, SIMPLE, MODERATE, SMALL, MEDIUM],
+        "allow_critical": False,
+    },
     "secondary": {"disallowed_phases_when_critical": ["final_review"]},
     "telemetry": {"stale_after_minutes": 30, "unknown_after_minutes": 180},
     "health": {"timeout_cooldown_minutes": 10, "rate_limit_cooldown_minutes": 15,
@@ -290,16 +375,17 @@ def _health_block(state: Mapping[str, Any], pool: str, now: dt.datetime) -> dict
 # ── request / candidates ─────────────────────────────────────────────────────
 
 def _task_rank(task_class: str) -> int:
-    return TASK_CLASSES.index(task_class)
+    return TASK_RANK.get(task_class, 2)
 
 
 def normalize_request(request: Mapping[str, Any]) -> dict[str, Any]:
     task_class = str(request.get("task_class") or MEDIUM).upper()
     _require(task_class in TASK_CLASSES, f"unknown task_class {task_class!r}")
-    criticality = str(request.get("criticality") or NORMAL_CRITICALITY).upper()
+    canonical = CANONICAL_TASK_CLASS.get(task_class, MODERATE)
+    criticality = str(request.get("criticality") or (CRITICAL if canonical == CRITICAL_TASK else NORMAL_CRITICALITY)).upper()
     _require(criticality in (NORMAL_CRITICALITY, CRITICAL), f"unknown criticality {criticality!r}")
     return {"phase": str(request.get("phase") or "execute"), "role": request.get("role"),
-            "task_class": task_class, "criticality": criticality,
+            "task_class": task_class, "canonical_task_class": canonical, "criticality": criticality,
             "required_capabilities": sorted(set(request.get("required_capabilities") or [])),
             "min_capability_class": request.get("min_capability_class"),
             "preferred_profile_id": request.get("preferred_profile_id"),
@@ -413,6 +499,34 @@ def route(request: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
     by_id = {c["profile_id"]: dict(c) for c in candidates}
     preferred_id = req["preferred_profile_id"]
     pools = (telemetry or {}).get("pools") or {}
+    canonical = req["canonical_task_class"]
+    budget = TASK_BUDGETS.get(canonical, TASK_BUDGETS[MODERATE])
+
+    if canonical == TRIVIAL and not req.get("manual_override"):
+        return {
+            "router_version": ROUTER_VERSION,
+            "selected_profile_id": None,
+            "selected_pool": None,
+            "preferred_profile_id": preferred_id,
+            "reason_code": "TRIVIAL_DETERMINISTIC_NO_LLM",
+            "detail": "Deterministic operation does not require LLM invocation",
+            "switched": False,
+            "ranked_profile_ids": [],
+            "task_class": req["task_class"],
+            "canonical_task_class": canonical,
+            "criticality": req["criticality"],
+            "phase": req["phase"],
+            "required_capabilities": req["required_capabilities"],
+            "capability_class_floor": 0,
+            "selected_quota": None,
+            "selected_trust": None,
+            "switch_penalty_applied": 0.0,
+            "budget": budget,
+            "deterministic": True,
+            "skip_llm": True,
+            "alternatives": [],
+            "state": state,
+        }
 
     floor = max(int(pol["task_class_floor"].get(req["task_class"], 0)),
                 int(pol["phase_class_floor"].get(req["phase"], 0)),
@@ -450,13 +564,15 @@ def route(request: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]],
                 "preferred_profile_id": preferred_id, "reason_code": reason, "detail": detail,
                 "switched": bool(selected and selected != preferred_id),
                 "ranked_profile_ids": list(ranked) if ranked else ([selected] if selected else []),
-                "task_class": req["task_class"], "criticality": req["criticality"], "phase": req["phase"],
+                "task_class": req["task_class"], "canonical_task_class": req.get("canonical_task_class", req["task_class"]),
+                "criticality": req["criticality"], "phase": req["phase"],
                 "required_capabilities": req["required_capabilities"], "capability_class_floor": floor,
                 "selected_quota": ({k: chosen["quota"][k] for k in ("percent", "certainty", "binding_limit",
                                                                     "resets_in_minutes")} if chosen else None),
                 "selected_trust": chosen["trust"] if chosen else None,
                 "switch_penalty_applied": (score_candidate(chosen, req, pol, floor, preferred_id, pref_class)
                                            ["components"]["switch_penalty"] if chosen else 0.0),
+                "budget": budget,
                 "alternatives": [r for r in rows if r["profile_id"] != selected],
                 "evaluated": rows,
                 "thresholds": {k: pol[k] for k in ("soft_threshold_percent", "reserve_percent",

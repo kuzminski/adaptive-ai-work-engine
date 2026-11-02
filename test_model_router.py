@@ -346,3 +346,62 @@ def test_decision_is_a_complete_audit_record():
     row = next(r for r in d["evaluated"] if r["profile_id"] == "B")
     assert row["score"]["components"].keys() >= {"trust", "zone", "quota_headroom", "switch_penalty", "capability_overshoot"}
     assert row["quota"]["certainty"] == "ESTIMATED" and row["limits"][0]["provenance"]
+
+
+def test_trivial_task_class_routes_deterministic_without_llm() -> None:
+    cands = [cand("P1", "P", cls=3, cost_weight=1.0), cand("P2", "P", cls=2, cost_weight=0.5)]
+    req = {"task_class": "TRIVIAL", "preferred_profile_id": "P1", "phase": "execute"}
+    dec = mr.route(req, cands)
+    assert dec["deterministic"] is True
+    assert dec["skip_llm"] is True
+    assert dec["selected_profile_id"] is None
+    assert dec["reason_code"] == "TRIVIAL_DETERMINISTIC_NO_LLM"
+    assert dec["budget"]["max_turns"] == 1
+    assert dec["budget"]["max_repairs"] == 0
+    assert dec["budget"]["token_ceiling"] == 0
+
+
+def test_task_class_budgets_and_canonical_mapping() -> None:
+    cands = [cand("P1", "P", cls=3)]
+    for raw, canonical, expected_floor in [
+        ("TRIVIAL", "TRIVIAL", 0),
+        ("SIMPLE", "SIMPLE", 1),
+        ("SMALL", "SIMPLE", 1),
+        ("MODERATE", "MODERATE", 2),
+        ("MEDIUM", "MODERATE", 2),
+        ("COMPLEX", "COMPLEX", 3),
+        ("LARGE", "COMPLEX", 3),
+        ("CRITICAL", "CRITICAL", 4),
+        ("VERY_LARGE", "CRITICAL", 4),
+    ]:
+        req = {"task_class": raw, "preferred_profile_id": "P1"}
+        dec = mr.route(req, cands)
+        assert dec["canonical_task_class"] == canonical
+        assert dec["capability_class_floor"] == expected_floor
+        assert "budget" in dec
+        assert dec["budget"]["max_turns"] >= 1
+        assert dec["budget"]["retry_limit"] >= 1
+
+
+def test_simple_task_class_prefers_economic_model() -> None:
+    # Two adequate models with equal quota, P_CHEAP has lower cost_weight
+    cands = [
+        cand("P_EXPENSIVE", "P", cls=2, cost_weight=2.5),
+        cand("P_CHEAP", "P", cls=2, cost_weight=0.3),
+    ]
+    # When preferred is absent or inadequate, router chooses highest score
+    req = {"task_class": "SIMPLE", "phase": "execute"}
+    dec = mr.route(req, cands)
+    assert dec["selected_profile_id"] == "P_CHEAP"
+
+
+def test_critical_task_class_requires_highest_floor() -> None:
+    cands = [
+        cand("P_WEAK", "P", cls=2),
+        cand("P_STRONG", "P", cls=4),
+    ]
+    req = {"task_class": "CRITICAL", "preferred_profile_id": "P_WEAK", "phase": "final_review"}
+    dec = mr.route(req, cands)
+    # Floor is 4, so P_WEAK is rejected by CLASS_BELOW_FLOOR
+    assert dec["selected_profile_id"] == "P_STRONG"
+    assert dec["switched"] is True
