@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -188,10 +189,17 @@ def run_benchmark_run(
 
 def test_level_c_sequential_vs_bounded_parallel_benchmark(tmp_path):
     """Level C: Execute real provider CLI benchmark comparing sequential vs parallel execution."""
-    # Ensure codex CLI is available
+    # Ensure codex CLI is available and authenticable
     codex_exe = runner.harness_executable("codex")
     if not codex_exe:
         pytest.skip("Codex CLI executable not found on PATH; Level C requires real provider CLI.")
+
+    try:
+        probe = subprocess.run([codex_exe, "--version"], capture_output=True, text=True, timeout=5)
+        if probe.returncode != 0:
+            pytest.skip(f"Codex CLI probe failed (rc={probe.returncode}); Level C requires real provider CLI.")
+    except Exception as exc:
+        pytest.skip(f"Codex CLI probe error ({exc}); Level C requires real provider CLI.")
 
     print("\n--- Running Level C Sequential Benchmark (workers=1) ---")
     seq_result = run_benchmark_run("BENCH_SEQUENTIAL", max_workers=1, base_dir=tmp_path)

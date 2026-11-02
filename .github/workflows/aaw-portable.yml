@@ -15,13 +15,22 @@ on:
         default: ""
   push:
     tags: ["v*"]          # path filters are not evaluated for tag pushes
-    branches: ["claude/**", "main"]
+    branches: ["claude/**", "main", "feat/**"]
     paths:
       - "AAW.py"
       - "product_*.py"
       - "autonomy_*.py"
       - "run_cancellation.py"
       - "workflow_runner.py"
+      - "workflow_schema.py"
+      - "routing_contract.py"
+      - "adaptive_orchestrator.py"
+      - "execution_contract.py"
+      - "execution_ledger.py"
+      - "run_recovery.py"
+      - "aaw_bridge.py"
+      - "aaw_bridge_server.py"
+      - "aaw_paths.py"
       - "model_catalog.py"
       - "model_router.py"
       - "repair_escalation.py"
@@ -164,12 +173,8 @@ jobs:
           npm ci
           npm test
           npm run build
-      - name: Full root regression (frozen-baseline setup - codex stub on PATH, Xvfb)
+      - name: Full root regression (deterministic suite, Level A/B, integration)
         run: |
-          mkdir -p "$RUNNER_TEMP/stub"
-          printf '#!/bin/sh\necho "codex-cli 0.0.0-stub"\n' > "$RUNNER_TEMP/stub/codex"
-          chmod +x "$RUNNER_TEMP/stub/codex"
-          export PATH="$RUNNER_TEMP/stub:$PATH"
           xvfb-run -a python -m pytest -q -p no:cacheprovider $(ls test_*.py | sort)
 
   publish:

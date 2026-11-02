@@ -368,6 +368,7 @@ def generate_adaptive_dag(
     strategy: Mapping[str, Any],
     goal: str,
     subtasks: Sequence[Mapping[str, Any]] | None = None,
+    verification_command: list[str] | None = None,
 ) -> dict[str, Any]:
     """Generate a validated AAW workflow JSON conforming to routing_contract and workflow_schema."""
     template = strategy.get("selected_template", TEMPLATE_SINGLE_EXECUTOR)
@@ -479,7 +480,7 @@ def generate_adaptive_dag(
                 "role": None, "model": None, "effort": None,
                 "instructions": "Validate workspace and fan-out independent subtasks.",
                 "acceptance": ["Machine gate passes."],
-                "command": ["python", "-c", "import sys; sys.exit(0)"],
+                "command": ["git", "status", "--porcelain"],
                 "timeout_seconds": 60,
                 "on_pass": None, "on_fail": None,
                 "routing": "ALL_MATCHES",
@@ -612,11 +613,15 @@ def generate_adaptive_dag(
                 "role": None, "model": None, "effort": None,
                 "instructions": "Run automated regression tests.",
                 "acceptance": ["Automated tests exit 0"],
-                "command": ["python", "-c", "import sys; sys.exit(0)"],
+                "command": list(verification_command) if verification_command else ["git", "status", "--porcelain"],
                 "timeout_seconds": 120,
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_CRIT_MACHINE_TO_REV", "to": "N03_STRONG_REVIEW", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_CRIT_MACHINE_TO_REV", "to": "N03_STRONG_REVIEW", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_CRIT_MACHINE_FAIL", "to": "STOP", "when": {"outcome": "FAIL"}, "kind": "CONTINUE", "label": "FAIL"},
+                    {"edge_id": "E_CRIT_MACHINE_BLOCKED", "to": "STOP", "when": {"outcome": "BLOCKED"}, "kind": "CONTINUE", "label": "BLOCKED"},
+                ],
             },
             {
                 "id": "N03_STRONG_REVIEW",
@@ -630,7 +635,11 @@ def generate_adaptive_dag(
                 "acceptance": ["Strong independent review passes."],
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_CRIT_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_CRIT_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_CRIT_REV_REPAIR", "to": "STOP", "when": {"verdict": "REPAIR"}, "kind": "CONTINUE", "label": "REPAIR"},
+                    {"edge_id": "E_CRIT_REV_BLOCKED", "to": "STOP", "when": {"verdict": "BLOCKED"}, "kind": "CONTINUE", "label": "BLOCKED"},
+                ],
             },
             {
                 "id": "N09_HUMAN_GATE",
