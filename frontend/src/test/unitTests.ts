@@ -9,6 +9,7 @@ import { ApiClient } from "../api/client";
 import { ApiError } from "../api/types";
 import { createEngineStore, isTerminalOrHoldState } from "../store/engineStore";
 import { runLayoutComponentTests } from "./layoutComponentTests";
+import { runPhaseGraphTests } from "./phaseGraphTests";
 
 async function runTests() {
   console.log("=== Starting AAW Frontend Unit Tests ===");
@@ -299,6 +300,9 @@ async function runTests() {
 
   // ── Layout & Left Rail Tests ──────────────────────────────────────────────
   await runLayoutComponentTests();
+
+  // ── 7-Phase Execution Graph & State Machine Tests ─────────────────────────
+  await runPhaseGraphTests();
 
   console.log("\n=== ALL FRONTEND UNIT TESTS PASSED ===");
 }

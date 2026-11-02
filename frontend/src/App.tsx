@@ -20,6 +20,7 @@ import { DrawerTab, RoleFilter } from "./api/types";
 import { useEngineStore } from "./store/engineStore";
 import { StudioLayout } from "./components/layout/StudioLayout";
 import { LeftRail } from "./components/nav/LeftRail";
+import { PhaseGraph } from "./components/graph/PhaseGraph";
 
 export function App() {
   const {
@@ -48,16 +49,6 @@ export function App() {
       loadBootstrap();
     }
   }, [token, loadBootstrap]);
-
-  const phases = [
-    { name: "PLAN", color: "bg-phase-plan text-indigo-950", border: "border-phase-plan" },
-    { name: "EXECUTE", color: "bg-phase-execute text-sky-950", border: "border-phase-execute" },
-    { name: "SELF_VERIFY", color: "bg-phase-self_verify text-purple-950", border: "border-phase-self_verify" },
-    { name: "REVIEW", color: "bg-phase-review text-purple-950", border: "border-phase-review" },
-    { name: "REPAIR", color: "bg-phase-repair text-rose-950", border: "border-phase-repair" },
-    { name: "FINAL_REVIEW", color: "bg-phase-final_review text-blue-950", border: "border-phase-final_review" },
-    { name: "ROADMAP_CHECK", color: "bg-phase-roadmap_check text-emerald-950", border: "border-phase-roadmap_check" },
-  ];
 
   const tabs: DrawerTab[] = ["terminal", "diff", "evidence"];
   const roles: RoleFilter[] = ["All", "Planner", "Implementer", "Verifier", "System"];
@@ -164,51 +155,8 @@ export function App() {
         </div>
       </div>
 
-      {/* 7-Phase Execution Machine Pipeline View */}
-      <div className="bg-surface border border-subtle rounded-xl p-5 shadow-xl">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
-              7-Fazowa Maszyna Stanów (AAW Engine Phase Graph)
-            </h3>
-            <p className="text-xs text-slate-400">
-              PLAN → EXECUTE → SELF_VERIFY → REVIEW ⮂ REPAIR → FINAL_REVIEW → ROADMAP_CHECK
-            </p>
-          </div>
-          <span className="text-xs font-mono px-2 py-0.5 rounded bg-phase-repair/10 border border-phase-repair/30 text-rose-300 font-semibold">
-            Pętla REPAIR aktywna
-          </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
-          {phases.map((p, idx) => {
-            const isCurrentPhase = run?.process?.phase === p.name;
-            return (
-              <div
-                key={p.name}
-                className={`p-3 rounded-lg border flex flex-col justify-between transition ${
-                  isCurrentPhase
-                    ? `${p.border} bg-elevated/90 shadow-md ring-1 ring-sky-400/50`
-                    : "border-subtle bg-elevated/30 hover:border-slate-700"
-                }`}
-              >
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
-                  <span>0{idx + 1}</span>
-                  {isCurrentPhase && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
-                  )}
-                </div>
-                <div className="text-xs font-mono font-bold text-slate-200 truncate">{p.name}</div>
-                <div className="mt-2 pt-1 border-t border-subtle/40 flex items-center justify-between">
-                  <span className={`px-1.5 py-0.5 text-[9px] font-mono font-bold rounded ${p.color}`}>
-                    {isCurrentPhase ? "ACTIVE" : "PHASE"}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {/* 7-Phase Execution Graph with Animated State Machine */}
+      <PhaseGraph run={run} />
     </div>
   );
 
