@@ -50,6 +50,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AAW_FAKE_CALLS", str(tmp_path / "calls.jsonl"))
     if os.name == "nt":
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home_user"))
+        monkeypatch.setenv("HOME", str(tmp_path / "home_user"))
+    else:
+        monkeypatch.setenv("HOME", str(tmp_path / "home_user"))
     import shutil
     # Only the fake CLIs, git and the OS: a real `claude`/`codex` on this machine must not leak in.
     if os.name != "nt":

@@ -367,7 +367,7 @@ def serve(*, port: int = 0, open_browser: bool = True, ready: Callable[[str], No
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     product_home.write_json(product_home.home() / "ui.json", {"port": server.server_address[1], "token": token,
                                                              "pid": os.getpid()})
-    print(f"AAW działa: {url}  (zamknij z poziomu aplikacji: Ustawienia → Zamknij AAW)", flush=True)
+    print(f"AAW działa: {url}  (zamknij z poziomu aplikacji: Ustawienia -> Zamknij AAW)", flush=True)
     if ready:
         ready(url)
     if open_browser:
