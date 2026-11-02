@@ -51,8 +51,8 @@ def test_scenario_1_small_task_single_executor() -> None:
     assert valid is True, f"DAG structural errors: {errors}"
 
     node_types = [n["type"] for n in dag["nodes"]]
-    assert node_types == ["PLAN", "IMPLEMENT", "REVIEW", "HUMAN_GATE"]
-    assert dag["nodes"][1]["model"] == "AGY_GEMINI_FLASH"
+    assert node_types == ["IMPLEMENT", "REVIEW", "HUMAN_GATE"]
+    assert dag["nodes"][0]["model"] == "gemini-3.7-flash-high"  # Resolved from AGY_GEMINI_FLASH
 
 
 # ─────────────────────────────────────────────────────────────────────────────

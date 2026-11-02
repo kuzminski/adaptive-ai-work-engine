@@ -11,6 +11,7 @@ import copy
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -18,6 +19,97 @@ import model_router as mr
 import routing_contract as rc
 
 ORCHESTRATOR_VERSION = "AAW_ADAPTIVE_ORCHESTRATOR_V1.0"
+
+# Feature flag & enablement
+def is_adaptive_orchestration_enabled(context: Mapping[str, Any] | None = None) -> bool:
+    """Check if adaptive orchestration is active via environment, mandate, form or settings."""
+    env_val = os.environ.get("AAW_ADAPTIVE_ORCHESTRATION_ENABLED", "").lower().strip()
+    if env_val in ("1", "true", "yes", "on"):
+        return True
+    if env_val in ("0", "false", "no", "off"):
+        return False
+    if context:
+        if context.get("adaptive_orchestration_enabled") is not None:
+            return bool(context.get("adaptive_orchestration_enabled"))
+        advanced = context.get("advanced") or {}
+        if advanced.get("adaptive_orchestration_enabled") is not None:
+            return bool(advanced.get("adaptive_orchestration_enabled"))
+        mandate = context.get("mandate") or context.get("mandate_input") or {}
+        if mandate.get("adaptive_orchestration_enabled") is not None:
+            return bool(mandate.get("adaptive_orchestration_enabled"))
+        form = context.get("form") or {}
+        if (form.get("advanced") or {}).get("adaptive_orchestration_enabled") is not None:
+            return bool(form["advanced"]["adaptive_orchestration_enabled"])
+    return False
+
+
+def prepare_task_definition(
+    mandate: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    difficulty: Mapping[str, Any] | None = None,
+    telemetry: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract standard task definition for adaptive orchestrator from plan, mandate, and difficulty."""
+    difficulty = difficulty or {}
+    task_class = (
+        plan.get("task_class")
+        or difficulty.get("route")
+        or mr.MODERATE
+    )
+
+    roadmap_mandate = mandate.get("roadmap_mandate") or {}
+    risks = roadmap_mandate.get("risk_register") or []
+    has_critical_risk = any(str(r.get("severity", "")).upper() == "CRITICAL" for r in risks)
+    criticality = mr.CRITICAL if (has_critical_risk or plan.get("criticality") == mr.CRITICAL) else mr.NORMAL_CRITICALITY
+
+    raw_subtasks = plan.get("subtasks") or plan.get("steps") or []
+    subtasks: list[dict[str, Any]] = []
+    if isinstance(raw_subtasks, list) and raw_subtasks:
+        for idx, sub in enumerate(raw_subtasks, 1):
+            if isinstance(sub, dict):
+                subtasks.append({
+                    "id": str(sub.get("id") or f"SUB_{idx:02d}"),
+                    "name": str(sub.get("name") or sub.get("title") or f"Subtask {idx}"),
+                    "files_to_change": list(sub.get("files_to_change") or sub.get("files") or []),
+                    "files_to_read": list(sub.get("files_to_read") or []),
+                })
+            elif isinstance(sub, str):
+                subtasks.append({
+                    "id": f"SUB_{idx:02d}",
+                    "name": sub,
+                    "files_to_change": list(plan.get("files_to_change") or []),
+                    "files_to_read": list(plan.get("files_to_read") or []),
+                })
+
+    if not subtasks:
+        files = list(plan.get("files_to_change") or plan.get("scope") or [])
+        if len(files) > 1:
+            for idx, f in enumerate(files, 1):
+                subtasks.append({
+                    "id": f"SUB_{idx:02d}",
+                    "name": f"Modify {f}",
+                    "files_to_change": [f],
+                    "files_to_read": [],
+                })
+        else:
+            subtasks = [{
+                "id": "SUB_01",
+                "name": str(plan.get("goal") or "Primary task"),
+                "files_to_change": files,
+                "files_to_read": list(plan.get("files_to_read") or []),
+            }]
+
+    return {
+        "id": str(plan.get("iteration_id") or (plan.get("goal") or "")[:30]),
+        "goal": str(plan.get("goal") or ""),
+        "task_class": str(task_class).upper(),
+        "criticality": criticality,
+        "subtasks": subtasks,
+        "files_to_change": list(plan.get("files_to_change") or []),
+        "files_to_read": list(plan.get("files_to_read") or []),
+        "acceptance_criteria": list(plan.get("acceptance_criteria") or []),
+        "budget": mandate.get("budget"),
+    }
 
 # Approved DAG Template Identifiers
 TEMPLATE_SINGLE_EXECUTOR = "SINGLE_EXECUTOR"
@@ -242,6 +334,36 @@ def recommend_strategy(
 # 3. Adaptive Workflow DAG Generation (P2.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _resolve_runtime_model(model_or_profile: str | None) -> str:
+    """Resolve a profile ID or model identifier to a valid runtime model ID."""
+    if not model_or_profile:
+        return "gpt-5.6-sol"
+    if model_or_profile.startswith(("gpt-", "gemini-", "claude-")):
+        return model_or_profile
+    known = {
+        "SOL_MEDIUM": "gpt-5.6-sol",
+        "SOL_6_1_MEDIUM": "gpt-6.1-sol",
+        "GPT6_LUNA_HIGH": "gpt-6-luna",
+        "AGY_GEMINI_FLASH": "gemini-3.7-flash-high",
+        "AGY_GEMINI_3_1_PRO": "gemini-3.1-pro-high",
+        "TERRA_HIGH": "gpt-5.6-terra",
+        "OPUS_5_5_HIGH": "claude-opus-5-5",
+        "SONNET_5_5_MEDIUM": "claude-sonnet-5-5",
+    }
+    if model_or_profile in known:
+        return known[model_or_profile]
+    try:
+        profiles_path = Path(__file__).parent / "implementer_profiles.json"
+        if profiles_path.is_file():
+            data = json.loads(profiles_path.read_text(encoding="utf-8"))
+            for p in data.get("profiles", []):
+                if p.get("profile_id") == model_or_profile and p.get("runtime_model_id"):
+                    return str(p["runtime_model_id"])
+    except Exception:
+        pass
+    return model_or_profile
+
+
 def generate_adaptive_dag(
     strategy: Mapping[str, Any],
     goal: str,
@@ -250,6 +372,8 @@ def generate_adaptive_dag(
     """Generate a validated AAW workflow JSON conforming to routing_contract and workflow_schema."""
     template = strategy.get("selected_template", TEMPLATE_SINGLE_EXECUTOR)
     subtasks = list(subtasks or [])
+    model_id = _resolve_runtime_model(strategy.get("model_profile"))
+    effort_lvl = strategy.get("effort_level") or "medium"
     workflow_id = f"ADAPTIVE_{template}_{int(dt.datetime.now(dt.timezone.utc).timestamp())}"
 
     base_limits = {
@@ -263,37 +387,23 @@ def generate_adaptive_dag(
     if template == TEMPLATE_SINGLE_EXECUTOR:
         nodes = [
             {
-                "id": "N01_PLAN",
-                "type": "PLAN",
+                "id": "N01_IMPL",
+                "type": "IMPLEMENT",
                 "depends_on": [],
                 "run_if": "ALWAYS",
-                "role": "SOFTWARE_ARCHITECT",
-                "model": "gpt-5.6-sol",
-                "effort": "medium",
-                "instructions": f"Plan the implementation of: {goal}",
-                "acceptance": ["Concrete plan with work packet produced"],
-                "on_pass": None, "on_fail": None,
-                "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_PLAN_TO_IMPL", "to": "N02_IMPL", "when": None, "kind": "CONTINUE", "label": "continue"}],
-            },
-            {
-                "id": "N02_IMPL",
-                "type": "IMPLEMENT",
-                "depends_on": ["N01_PLAN"],
-                "run_if": "ON_TRANSITION",
                 "role": "CODE_IMPLEMENTER",
-                "model": strategy.get("model_profile") or "gpt-5.6-sol",
-                "effort": strategy.get("effort_level") or "medium",
-                "instructions": "Implement the plan in the isolated worktree.",
-                "acceptance": ["Code and tests implemented"],
+                "model": model_id,
+                "effort": effort_lvl,
+                "instructions": f"Implement the task: {goal}",
+                "acceptance": ["Code and tests implemented cleanly"],
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_IMPL_TO_REVIEW", "to": "N03_REVIEW", "when": None, "kind": "CONTINUE", "label": "continue"}],
+                "edges": [{"edge_id": "E_IMPL_TO_REVIEW", "to": "N02_REVIEW", "when": None, "kind": "CONTINUE", "label": "continue"}],
             },
             {
-                "id": "N03_REVIEW",
+                "id": "N02_REVIEW",
                 "type": "REVIEW",
-                "depends_on": ["N02_IMPL"],
+                "depends_on": ["N01_IMPL"],
                 "run_if": "ON_TRANSITION",
                 "role": "INDEPENDENT_REVIEWER",
                 "model": "gpt-5.6-sol",
@@ -310,7 +420,7 @@ def generate_adaptive_dag(
             {
                 "id": "N09_HUMAN_GATE",
                 "type": "HUMAN_GATE",
-                "depends_on": ["N03_REVIEW"],
+                "depends_on": ["N02_REVIEW"],
                 "run_if": "ON_TRANSITION",
                 "role": None, "model": None, "effort": None,
                 "instructions": "Review candidate diff and record decision (ACCEPT / REJECT).",
@@ -350,8 +460,8 @@ def generate_adaptive_dag(
                 "depends_on": ["N01_FANOUT"],
                 "run_if": "ON_TRANSITION",
                 "role": "CODE_IMPLEMENTER",
-                "model": strategy.get("model_profile") or "gpt-5.6-sol",
-                "effort": strategy.get("effort_level") or "medium",
+                "model": model_id,
+                "effort": effort_lvl,
                 "branch_name": f"aaw/branch_{sub_id.lower()}",
                 "instructions": f"Implement independent subtask: {sub.get('name', sub_id)}. Restrict edits strictly to: {sub.get('files_to_change', [])}.",
                 "acceptance": ["Subtask requirements met in isolated branch."],
@@ -397,12 +507,15 @@ def generate_adaptive_dag(
                 "run_if": "ON_TRANSITION",
                 "role": "INDEPENDENT_REVIEWER",
                 "model": "gpt-5.6-sol",
-                "effort": "high",
+                "effort": strategy.get("effort_level") or "high",
                 "instructions": "Integrated verification of merged subtasks across codebase.",
                 "acceptance": ["Passes integration tests."],
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_REV_TO_GATE_PASS", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_REV_TO_GATE_FAIL", "to": "N09_HUMAN_GATE", "when": None, "kind": "CONTINUE", "label": "HUMAN_REVIEW"},
+                ],
             },
             {
                 "id": "N09_HUMAN_GATE",
@@ -434,8 +547,8 @@ def generate_adaptive_dag(
                 "depends_on": [prev_id] if prev_id else [],
                 "run_if": "ON_TRANSITION" if prev_id else "ALWAYS",
                 "role": "CODE_IMPLEMENTER",
-                "model": strategy.get("model_profile") or "gpt-5.6-sol",
-                "effort": strategy.get("effort_level") or "medium",
+                "model": model_id,
+                "effort": effort_lvl,
                 "instructions": f"Serially implement subtask {sub.get('name', s_id)}.",
                 "acceptance": ["Serial subtask completed."],
                 "on_pass": None, "on_fail": None,
@@ -453,12 +566,15 @@ def generate_adaptive_dag(
                 "run_if": "ON_TRANSITION",
                 "role": "INDEPENDENT_REVIEWER",
                 "model": "gpt-5.6-sol",
-                "effort": "high",
+                "effort": strategy.get("effort_level") or "high",
                 "instructions": "Review serial multi-stage changes.",
                 "acceptance": ["Integrated review passes."],
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_SERIAL_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_SERIAL_REV_TO_GATE_PASS", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_SERIAL_REV_TO_GATE_FAIL", "to": "N09_HUMAN_GATE", "when": None, "kind": "CONTINUE", "label": "HUMAN_REVIEW"},
+                ],
             },
             {
                 "id": "N09_HUMAN_GATE",
@@ -535,7 +651,8 @@ def generate_adaptive_dag(
         "orchestrator_version": ORCHESTRATOR_VERSION,
         "strategy": dict(strategy),
         "description": f"Adaptive workflow generated using {template} template.",
-        "goal": goal,
+        "goal": "",
+        "target_goal": goal,
         "start_node": start_node,
         "routing_contract": rc.CONTRACT_VERSION,
         "workspace_policy": {

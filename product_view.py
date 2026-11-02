@@ -214,6 +214,22 @@ def _iteration_nodes(state: Mapping[str, Any], events: list[dict[str, Any]], ite
     return nodes
 
 
+def _adaptive_orchestration_data(run_id: str) -> dict[str, Any]:
+    strat = product_home.read_json(prun.autonomy_dir(run_id) / "adaptive_strategy.json") or {}
+    wf_state = product_home.read_json(prun.run_dir(run_id) / "WORKFLOW" / "workflow_state.json") or {}
+    wf_ao = wf_state.get("adaptive_orchestration") or {}
+    return {
+        "enabled": bool(strat.get("adaptive_enabled")),
+        "strategy": strat,
+        "selected_template": strat.get("selected_template"),
+        "active_workers_count": wf_ao.get("active_workers_count", 0),
+        "running_nodes": wf_ao.get("running_nodes", {}),
+        "node_states": wf_ao.get("node_states", {}),
+        "max_parallel_workers": wf_ao.get("max_parallel_workers", strat.get("workers_count", 2)),
+        "serialization_reason": (strat.get("conflict_analysis") or {}).get("conflict_summary") or strat.get("reason_code"),
+    }
+
+
 def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any],
                  events: list[dict[str, Any]]) -> dict[str, Any]:
     phase = state.get("phase")
@@ -270,6 +286,7 @@ def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any
         "iterations_done": len(state.get("iterations") or []),
         "max_iterations": state["mandate"]["roadmap_mandate"]["autonomy_bounds"]["max_iterations"],
         "eta": None,  # deliberately not shown: no data to estimate it honestly
+        "adaptive_orchestration": _adaptive_orchestration_data(run_id),
     }
 
 
@@ -612,6 +629,7 @@ def run_view(run_id: str) -> dict[str, Any]:
             "process": process_view(run_id, state, status, events),
             "timeline": timeline(state, briefs, status), "gate": human_gate(run_id, state, task, ledger),
             "last_activity": events[-1].get("occurred_at") if events else state.get("updated_at"),
+            "adaptive_orchestration": _adaptive_orchestration_data(run_id),
             "engine": {"status": state.get("status"), "phase": state.get("phase"),
                        "policy_preset": state.get("policy_preset"), "contract": state.get("contract")}}
 

@@ -40,6 +40,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import adaptive_orchestrator as ao
 import autonomy_contract as ac
 import autonomy_policy as ap
 import autonomy_run_lock as rl
@@ -1304,6 +1305,53 @@ class AutonomyController:
         self.journal.append("WORK_PACKET_ASSESSED", iteration_id=iteration_id, phase=ac.PLAN, payload={
             "version": wp.VERSION, "present": lint["present"], "issues": lint["issues"], "metrics": lint["metrics"],
             "route": difficulty["route"], "reasons": difficulty["reasons"]})
+
+        # P2.1: Adaptive Orchestration Strategy Selection & DAG Generation
+        if ao.is_adaptive_orchestration_enabled(self.state.get("mandate")):
+            task_def = ao.prepare_task_definition(
+                mandate=self.state["mandate"],
+                plan=plan,
+                difficulty=difficulty,
+                telemetry=self._telemetry() if hasattr(self, "_telemetry") else None,
+            )
+            strategy = ao.recommend_strategy(
+                task_def,
+                telemetry=self._telemetry() if hasattr(self, "_telemetry") else None,
+                adaptive_enabled=True,
+            )
+            dag = ao.generate_adaptive_dag(strategy, goal=plan["goal"], subtasks=task_def.get("subtasks"))
+            valid, dag_errs = ao.validate_dag_structure(dag)
+            if not valid:
+                self._escalate(ac.E_PLAN_INVALID, f"Adaptive DAG invalid: {dag_errs}", iteration_id)
+                return
+
+            run_root = self.stats_root / self.run_id
+            autonomy_path = run_root / "AUTONOMY"
+            workflow_path = run_root / "WORKFLOW"
+            autonomy_path.mkdir(parents=True, exist_ok=True)
+            workflow_path.mkdir(parents=True, exist_ok=True)
+            strategy_file = autonomy_path / "adaptive_strategy.json"
+            dag_file = workflow_path / "adaptive_workflow.json"
+            _atomic_json(strategy_file, strategy)
+            _atomic_json(dag_file, dag)
+
+            self.journal.append("ADAPTIVE_STRATEGY_SELECTED", iteration_id=iteration_id, phase=ac.PLAN, payload={
+                "strategy": strategy,
+                "strategy_file": str(strategy_file),
+                "workflow_file": str(dag_file),
+                "template": strategy.get("selected_template"),
+                "workers_count": strategy.get("workers_count"),
+                "reason_code": strategy.get("reason_code"),
+            })
+            self.state["adaptive_orchestration"] = {
+                "enabled": True,
+                "strategy": strategy,
+                "workflow_path": str(dag_file),
+                "strategy_path": str(strategy_file),
+                "task_definition": task_def,
+            }
+            self._it()["adaptive_strategy"] = strategy
+
         self.state["planning"] = None
         self._record_working_roadmap(plan, index, iteration_id)
         self.journal.append("ITERATION_PLANNED", iteration_id=iteration_id, phase=ac.PLAN, payload={
@@ -1335,6 +1383,63 @@ class AutonomyController:
     # EXECUTE / SELF_VERIFY ---------------------------------------------------
 
     def _do_execute(self) -> None:
+        adaptive = self.state.get("adaptive_orchestration") or {}
+        if adaptive.get("enabled"):
+            import workflow_runner as wr
+            wf_path = Path(adaptive["workflow_path"])
+            cancel_token = run_cancellation.current_token()
+            try:
+                wf_state = wr.execute(
+                    workflow_path=wf_path,
+                    goal=self._it()["plan"]["goal"],
+                    repo=Path(self.env.repo),
+                    worktree=Path(self.env.worktree),
+                    preprocess_policy="AUTO_SAFE",
+                    identifier=self.run_id,
+                    cancel=cancel_token,
+                )
+            except wr.WorkflowStop as stop_exc:
+                self._escalate(ac.E_EXECUTOR, f"Adaptive DAG stopped: {stop_exc}", self._iteration_id())
+                return
+
+            self._it()["execution"] = {
+                "status": wf_state.get("status"),
+                "final_outcome": wf_state.get("final_outcome"),
+                "completed_nodes": [n["node_id"] for n in wf_state.get("completed_nodes", [])],
+                "summary": f"Adaptive workflow {wf_state.get('workflow_id')} finished with {wf_state.get('status')}",
+            }
+            execute_ref = self.state["executions"][-1] if self.state.get("executions") else {}
+            self._it()["executed_by"] = self._execution_audit(execute_ref.get("execution_id"))
+
+            if wf_state.get("status") == "WAITING_FOR_HUMAN":
+                candidate = wf_state.get("candidate") or {}
+                if candidate:
+                    self.state["candidate"] = candidate
+                    self.state["hold"] = {
+                        "reason": ac.HOLD_AWAITING_INITIAL_APPROVAL if len(self.state["iterations"]) <= 1 else ac.HOLD_CONTINUATION,
+                        "candidate_id": candidate.get("candidate_id"),
+                        "promotable": True,
+                        "at": _now(),
+                    }
+                self.journal.append("ADAPTIVE_DAG_COMPLETED", iteration_id=self._iteration_id(), phase=ac.EXECUTE, payload={
+                    "status": wf_state.get("status"),
+                    "candidate_id": candidate.get("candidate_id"),
+                    "completed_nodes": [n["node_id"] for n in wf_state.get("completed_nodes", [])],
+                })
+                self.state["status"] = ac.AWAITING_HUMAN
+                self.state["phase"] = ac.FINAL_REVIEW
+                self._save()
+                return
+            elif wf_state.get("status") == "COMPLETED":
+                self._done(summary=f"Adaptive DAG completed: {wf_state.get('final_outcome')}")
+                self._goto(ac.ROADMAP_CHECK)
+                self._save()
+                return
+            else:
+                self._escalate(ac.E_EXECUTOR, f"Adaptive DAG returned status: {wf_state.get('status')}", self._iteration_id())
+                return
+
+        # Original single-executor path
         result = self._call("execute", "implementer", {"iteration": self._it(), "plan": self._it()["plan"]})
         if self.state["status"] != ac.RUNNING:
             return

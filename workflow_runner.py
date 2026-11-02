@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as dt
 import json
 import os
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -42,6 +44,8 @@ EXECUTION_MODE = "DIRECT_CLI_CONTROL"
 RESULT_OUTCOMES = {"PASS", "FAIL", "BLOCKED", "INVALID"}
 STOP_STATUSES = {"BLOCKED", "INVALID", "WORKFLOW_LIMIT_REACHED", "WAITING_FOR_HUMAN", "READY_FOR_EXTERNAL_INTEGRATION", "REJECTED", "NO_ROUTE", "COMPLETED", "CANCELLED"}
 IMPLEMENTER_NODE_TYPES = {"IMPLEMENT", "REVIEW", "REPAIR"}
+MAX_PARALLEL_WORKERS_DEFAULT = 2
+MAX_PARALLEL_WORKERS_HARD_CEILING = 4
 
 
 class WorkflowStop(RuntimeError):
@@ -318,12 +322,12 @@ def result_schema() -> dict[str, Any]:
             "findings": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": {
-                    "finding_id": {"type": "string"},
+                    "finding_id": {"type": ["string", "null"]},
                     "severity": {"type": "string"}, "file": {"type": ["string", "null"]},
                     "location": {"type": ["string", "null"]}, "description": {"type": "string"},
                     "required_fix": {"type": "string"},
                 },
-                "required": ["severity", "file", "location", "description", "required_fix"],
+                "required": ["finding_id", "severity", "file", "location", "description", "required_fix"],
             }},
             "remaining_uncertainty": {"type": "array", "items": {"type": "string"}},
             "recommended_next_action": {"type": "string"},
@@ -332,10 +336,14 @@ def result_schema() -> dict[str, Any]:
             # the gate reads; `outcome` stays the execution-grade one.
             "verdict": {"type": ["string", "null"], "enum": ["PASS", "REPAIR", "BLOCKED", None]},
             "next_brief": {"type": ["string", "null"]},
-            "carry_forward": {"type": "array", "items": {"type": "string"}},
-            "artifacts": {"type": "array", "items": {"type": "string"}},
+            "carry_forward": {"type": ["array", "null"], "items": {"type": "string"}},
+            "artifacts": {"type": ["array", "null"], "items": {"type": "string"}},
         },
-        "required": ["node_id", "node_type", "outcome", "summary", "changed_files", "tests", "findings", "remaining_uncertainty", "recommended_next_action"],
+        "required": [
+            "node_id", "node_type", "outcome", "summary", "changed_files", "tests",
+            "findings", "remaining_uncertainty", "recommended_next_action",
+            "verdict", "next_brief", "carry_forward", "artifacts",
+        ],
     }
 
 
@@ -510,14 +518,23 @@ def execute_llm_node(workflow: Mapping[str, Any], state: Mapping[str, Any], node
         schema_path = temp / "result_schema.json"
         final_path = temp / "final.json"
         schema_path.write_text(json.dumps(result_schema()), encoding="utf-8")
-        sandbox = "read-only" if node["type"] == "REVIEW" else "workspace-write"
         if harness == "codex":
             argv = [
-                executable, "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", sandbox,
+                executable, "exec", "--ephemeral", "--skip-git-repo-check",
+            ]
+            if os.name == "nt":
+                # On Windows, codex elevated/read-only sandboxes use AppContainer which denies
+                # access to user temp directories and sets restricted ACLs on created files.
+                # Workspace containment and review read-only invariants are enforced by AAW runtime.
+                argv.append("--dangerously-bypass-approvals-and-sandbox")
+            else:
+                sandbox = "read-only" if node["type"] == "REVIEW" else "workspace-write"
+                argv.extend(["--sandbox", sandbox])
+            argv.extend([
                 "--model", model, "--config", f'model_reasoning_effort="{effort}"',
                 "--cd", str(worktree), "--output-schema", str(schema_path),
                 "--output-last-message", str(final_path), "--json", "-",
-            ]
+            ])
             rc, stdout, stderr = dispatch(argv, cwd=worktree, stdin=prompt)
             events, session_id, usage = parse_codex_events(stdout)
             raw = json.loads(final_path.read_text(encoding="utf-8")) if rc == 0 and final_path.is_file() else None
@@ -1312,10 +1329,500 @@ def _seed_from_resume(state: dict[str, Any], by_id: dict[str, Any],
     })
 
 
+def _nodes_conflict(node_a: Mapping[str, Any], node_b: Mapping[str, Any]) -> bool:
+    """Detect if two nodes have conflicting write scopes or require sequential execution."""
+    if node_a.get("type") in {"MERGE", "HUMAN_GATE", "FINAL_GATE"} or node_b.get("type") in {"MERGE", "HUMAN_GATE", "FINAL_GATE"}:
+        return True
+
+    files_a = {str(f).replace("\\", "/").strip() for f in (node_a.get("files_to_change") or node_a.get("scope") or []) if f}
+    files_b = {str(f).replace("\\", "/").strip() for f in (node_b.get("files_to_change") or node_b.get("scope") or []) if f}
+
+    if files_a and files_b and (files_a & files_b):
+        return True
+
+    read_a = {str(f).replace("\\", "/").strip() for f in (node_a.get("files_to_read") or []) if f}
+    read_b = {str(f).replace("\\", "/").strip() for f in (node_b.get("files_to_read") or []) if f}
+
+    if (files_a and read_b and (files_a & read_b)) or (files_b and read_a and (files_b & read_a)):
+        return True
+
+    if node_a.get("type") in IMPLEMENTER_NODE_TYPES and node_b.get("type") in IMPLEMENTER_NODE_TYPES:
+        if not node_a.get("branch_name") and not node_b.get("branch_name") and not files_a and not files_b:
+            return True
+
+    return False
+
+
+def _record_node_completion(
+    state: dict[str, Any],
+    by_id: dict[str, Any],
+    frozen: dict[str, Any],
+    journal: RoutingJournal,
+    node: Mapping[str, Any],
+    result: dict[str, Any],
+    telemetry: Mapping[str, Any] | None,
+    artifact_root: Path,
+    state_path: Path,
+    baseline: Mapping[str, Any],
+    ledger: ExecutionLedger,
+) -> None:
+    assert_main_unchanged(baseline)
+    artifact_path = artifact_root / artifact_name(node, state)
+    unique_json(artifact_path, result)
+    binding = frozen.get(str(node["id"]), {})
+
+    wall_time = result.get("duration_s")
+    if wall_time is None and telemetry:
+        wall_time = telemetry.get("wall_time_s")
+    if wall_time is None:
+        wall_time = next((t["wall_time_s"] for t in reversed(state.get("telemetry", [])) if t.get("node") == node["id"]), None)
+
+    record = {
+        "execution_id": result.get("execution_id"),
+        "node_id": node["id"],
+        "node_type": node["type"],
+        "outcome": result["outcome"],
+        "artifact": str(artifact_path),
+        "repair_cycle": state["repair_cycle"],
+        "implementer_profile": binding.get("profile"),
+        "harness": binding.get("harness"),
+        "model": binding.get("runtime_model_id") or node.get("model"),
+        "effort": binding.get("effort") or node.get("effort"),
+        "duration_s": wall_time,
+        "worker_pid": result.get("worker_pid"),
+    }
+    record["verdict"] = routing_contract.derive_verdict(result)
+    record["lineage"] = node.get("lineage")
+    state["completed_nodes"].append(record)
+    state["node_results"].append(result)
+
+    if result["outcome"] == "INVALID" or (result["outcome"] == "BLOCKED" and not routing_contract.declares_edges(node)):
+        journal.append(routing_contract.NODE_FAILED, node_id=str(node["id"]), payload={
+            "node_type": node["type"], "outcome": result["outcome"], "routable": False,
+            "summary": result.get("summary"), "artifact": str(artifact_path),
+        })
+        save_state(state_path, state)
+        raise WorkflowStop(result["outcome"], result["summary"])
+
+    journal.append(routing_contract.NODE_COMPLETED, node_id=str(node["id"]), payload={
+        "node_type": node["type"], "outcome": result["outcome"], "verdict": record["verdict"],
+        "execution_id": result.get("execution_id"), "artifact": str(artifact_path),
+        "summary": result.get("summary"), "next_brief": result.get("next_brief"),
+        "carry_forward": result.get("carry_forward") or [],
+        "artifacts": result.get("artifacts") or [], "lineage": node.get("lineage"),
+        "worker_pid": result.get("worker_pid"),
+        "duration_s": wall_time,
+    })
+
+    if node["type"] in {"HUMAN_GATE", "FINAL_GATE"}:
+        journal.append(routing_contract.HUMAN_DECISION_REQUIRED, node_id=str(node["id"]), payload={
+            "candidate_id": result.get("candidate_id"), "reason": "HUMAN_GATE_REACHED",
+            "held_frontier": list(state["frontier"]),
+        })
+        state["status"] = "WAITING_FOR_HUMAN"
+        state["final_outcome"] = "HUMAN_REQUIRED"
+        state["current_node"] = node["id"]
+        save_state(state_path, state)
+        return
+
+    decision = routing_contract.evaluate_gate(node, result)
+    decision_path = artifact_root / f"{node['id']}__GATE__decision.json"
+    unique_json(decision_path, decision)
+    routing_contract.record_decision(journal, decision)
+    state["routing"]["decisions"].append({
+        "node_id": str(node["id"]), "artifact": str(decision_path),
+        "routing_mode": decision["routing_mode"], "outcome": decision["outcome"],
+        "verdict": decision["verdict"], "no_route": decision["no_route"],
+        "selected": [row["edge_id"] for row in decision["selected"]],
+        "held": [{"edge_id": row["edge_id"], "to": row["to"], "hold_reason": row["hold_reason"]}
+                 for row in decision["held"]],
+        "decision_hash": decision["decision_hash"],
+        "routing_input_hash": decision["routing_input_hash"],
+    })
+    if decision["no_route"]:
+        save_state(state_path, state)
+        raise WorkflowStop("NO_ROUTE", (
+            f"no edge of {node['id']} matched outcome={decision['outcome']} "
+            f"verdict={decision['verdict']}; considered "
+            f"{[row['edge_id'] for row in decision['candidates']]}"))
+    apply_gate_decision(state, by_id, frozen, journal, node, result, decision)
+    save_state(state_path, state)
+
+
+def _dispatch_worker(
+    *,
+    node: Mapping[str, Any],
+    workflow: Mapping[str, Any],
+    state: dict[str, Any],
+    by_id: dict[str, Any],
+    frozen: dict[str, Any],
+    repo: Path,
+    worktree: Path,
+    identifier: str,
+    artifact_root: Path,
+    workflow_path: Path,
+    cancel: Any,
+    journal: RoutingJournal,
+    ledger: ExecutionLedger,
+    state_path: Path,
+    baseline: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    node_id = str(node["id"])
+    node_type = str(node["type"])
+
+    if node.get("branch_name"):
+        branch_name = str(node["branch_name"])
+        node_worktree = worktree.parent / f"{worktree.name}_{node_id}"
+        if not node_worktree.is_dir():
+            git(canonical(repo), "worktree", "add", "-q", "-b", branch_name, str(node_worktree), state["workspace_baseline"]["worktree_head"])
+    else:
+        node_worktree = worktree
+
+    execution_ref_obj = None
+    execution_path = None
+    execution = None
+    if node_type in LLM_NODE_TYPES:
+        state["llm_calls"] += 1
+        binding = frozen[node_id]
+        kind = {"REVIEW": "REVIEW", "REPAIR": "REPAIR"}.get(node_type, "LLM")
+        execution, execution_path = allocate_execution(
+            descriptor_root=STATS_ROOT / identifier / "EXECUTIONS",
+            run_id=identifier,
+            node_id=node_id,
+            invocation_kind=kind,
+            provider=binding.get("provider"),
+            harness=binding.get("harness"),
+            model=binding.get("runtime_model_id"),
+            effort=binding.get("effort"),
+            profile=binding.get("profile"),
+            input_contract_hash=canonical_hash(node_package(workflow, state, node, canonical(node_worktree))),
+            selection_reason=binding.get("binding_source"),
+            policy_version=str(workflow.get("version")),
+            relations={},
+        )
+        execution_ref_obj = execution_ref(execution, execution_path)
+        state["executions"].append(execution_ref_obj)
+        save_state(state_path, state)
+    elif node_type == "MACHINE_GATE":
+        execution, execution_path = allocate_execution(
+            descriptor_root=STATS_ROOT / identifier / "EXECUTIONS",
+            run_id=identifier,
+            node_id=node_id,
+            invocation_kind="MACHINE_GATE",
+            provider="LOCAL",
+            harness="subprocess",
+            input_contract_hash=canonical_hash({"command": node.get("command"), "cwd": str(canonical(node_worktree))}),
+            policy_version=str(workflow.get("version")),
+        )
+        execution_ref_obj = execution_ref(execution, execution_path)
+        state["executions"].append(execution_ref_obj)
+        save_state(state_path, state)
+
+    output_path = artifact_root / f"{node_id}__worker_result.json"
+    log_path = artifact_root / f"{node_id}__worker.log"
+
+    in_memory_adapter = _LLM_ADAPTER.get()
+    if node_type == "MACHINE_GATE":
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        recorder = _record_intent(ledger, state, state_path, execution, execution_path,
+                                  repository=str(canonical(repo)), worktree=str(canonical(node_worktree)))
+
+        def _gate_task():
+            start_m = time.monotonic()
+            st_iso = now()
+            res = execute_machine_gate(state, node, canonical(node_worktree), str(execution["execution_id"]), recorder)
+            _record_lifecycle_status(state, state_path, recorder)
+            update_execution(execution_path, str(execution["execution_id"]), status="COMPLETED" if res["outcome"] in {"PASS", "FAIL"} else "BLOCKED")
+            end_m = time.monotonic()
+            res["worker_pid"] = os.getpid()
+            res["started_at"] = st_iso
+            res["finished_at"] = now()
+            res["start_monotonic"] = start_m
+            res["end_monotonic"] = end_m
+            res["duration_s"] = round(end_m - start_m, 3)
+            return res, None
+
+        fut = pool.submit(_gate_task)
+        journal.append(routing_contract.NODE_STARTED, node_id=node_id, payload={
+            "node_type": node_type, "lineage": node.get("lineage"), "in_memory": True,
+        })
+        return {
+            "future": fut, "pool": pool, "node": node, "started_at": now(),
+            "start_monotonic": time.monotonic(), "output_path": output_path,
+            "worktree": node_worktree, "execution": execution_ref_obj,
+        }
+
+    if in_memory_adapter is not None and node_type in LLM_NODE_TYPES:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        recorder = _record_intent(ledger, state, state_path, execution, execution_path,
+                                  repository=str(canonical(repo)), worktree=str(canonical(node_worktree)),
+                                  binding=frozen.get(node_id, {})) if execution_path else None
+
+        def _thread_task():
+            start_m = time.monotonic()
+            st_iso = now()
+            res, tel = in_memory_adapter(workflow, state, node, canonical(node_worktree), execution, execution_path, recorder)
+            end_m = time.monotonic()
+            res["worker_pid"] = os.getpid()
+            res["started_at"] = st_iso
+            res["finished_at"] = now()
+            res["start_monotonic"] = start_m
+            res["end_monotonic"] = end_m
+            res["duration_s"] = round(end_m - start_m, 3)
+            return res, tel
+
+        fut = pool.submit(_thread_task)
+        journal.append(routing_contract.NODE_STARTED, node_id=node_id, payload={
+            "node_type": node_type, "lineage": node.get("lineage"), "in_memory": True,
+        })
+        return {
+            "future": fut, "pool": pool, "node": node, "started_at": now(),
+            "start_monotonic": time.monotonic(), "output_path": output_path,
+            "worktree": node_worktree, "execution": execution_ref_obj,
+        }
+
+    # Launch dedicated OS subprocess worker
+    argv = [
+        sys.executable, str(Path(__file__).resolve()),
+        "--worker-node", node_id,
+        "--worker-workflow", str(workflow_path),
+        "--worker-run-id", identifier,
+        "--worker-repo", str(repo),
+        "--worker-worktree", str(node_worktree),
+        "--worker-output", str(output_path),
+    ]
+    if execution:
+        argv.extend(["--worker-execution-id", str(execution["execution_id"])])
+
+    log_file = log_path.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(node_worktree),
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+    )
+    log_file.close()
+
+    if cancel is not None:
+        cancel.track(proc)
+
+    journal.append(routing_contract.NODE_STARTED, node_id=node_id, payload={
+        "node_type": node_type, "lineage": node.get("lineage"), "worker_pid": proc.pid,
+        "worktree": str(node_worktree),
+    })
+
+    return {
+        "process": proc,
+        "pid": proc.pid,
+        "node": node,
+        "worktree": node_worktree,
+        "started_at": now(),
+        "start_monotonic": time.monotonic(),
+        "output_path": output_path,
+        "execution": execution_ref_obj,
+    }
+
+
+def run_node_worker(args: argparse.Namespace) -> int:
+    """Entry point for executing a single workflow node inside a dedicated OS subprocess."""
+    node_id = str(args.worker_node)
+    workflow_path = Path(args.worker_workflow or args.workflow)
+    run_id_val = str(args.worker_run_id or args.run_id or "WORKER_RUN")
+    repo = Path(args.worker_repo or args.repo)
+    worktree = Path(args.worker_worktree or args.worktree)
+    output_path = Path(args.worker_output) if args.worker_output else None
+
+    start_m = time.monotonic()
+    st_iso = now()
+    worker_pid = os.getpid()
+
+    os.environ["AAW_CURRENT_NODE_ID"] = node_id
+    workflow = load_workflow(workflow_path)
+    nodes, frozen = resolve_execution_plan(workflow, allow_unavailable=True)
+    node = next((n for n in nodes if str(n["id"]) == node_id), None)
+    if not node:
+        err = {"node_id": node_id, "outcome": "INVALID", "summary": f"unknown worker node {node_id}"}
+        if output_path:
+            unique_json(output_path, err)
+        return 1
+
+    node_type = str(node["type"])
+    result = None
+    telemetry = None
+
+    state_path = STATS_ROOT / run_id_val / "WORKFLOW" / "workflow_state.json"
+    if state_path.is_file():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+    else:
+        state = {}
+
+    preprocess_dir = STATS_ROOT / run_id_val / "PREPROCESS"
+    preprocess_dir.mkdir(parents=True, exist_ok=True)
+    state.setdefault("AAW_RUN_ID", run_id_val)
+    state.setdefault("workflow_bindings", frozen)
+    state.setdefault("preprocess_policy", "AUTO_SAFE")
+    state.setdefault("preprocess_root", str(preprocess_dir))
+    state.setdefault("repair_cycle", 0)
+    state.setdefault("limits", workflow.get("limits") or {})
+    state.setdefault("goal", str(workflow.get("goal") or workflow.get("target_goal") or ""))
+    state.setdefault("routing", {"arrivals": {}, "decisions": []})
+    state.setdefault("node_results", [])
+    state.setdefault("llm_calls", 0)
+    state.setdefault("executions", [])
+
+    if node_type == "MACHINE_GATE":
+        execution_id = getattr(args, "worker_execution_id", None) or f"exec_{node_id}_{uuid.uuid4().hex[:6]}"
+        state_dummy = {"AAW_RUN_ID": run_id_val}
+        result = execute_machine_gate(state_dummy, node, canonical(worktree), execution_id)
+    elif node_type in LLM_NODE_TYPES:
+        binding = frozen.get(node_id, {})
+        execution_id = getattr(args, "worker_execution_id", None) or f"exec_{node_id}_{uuid.uuid4().hex[:6]}"
+        exec_dir = STATS_ROOT / run_id_val / "EXECUTIONS"
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        exec_path = exec_dir / f"{execution_id}.json"
+        if exec_path.is_file():
+            try:
+                execution = json.loads(exec_path.read_text(encoding="utf-8"))
+            except Exception:
+                execution = {
+                    "execution_id": execution_id,
+                    "provider": binding.get("provider"),
+                    "harness": binding.get("harness"),
+                    "model": binding.get("runtime_model_id"),
+                    "effort": binding.get("effort"),
+                }
+        else:
+            execution = {
+                "execution_id": execution_id,
+                "provider": binding.get("provider"),
+                "harness": binding.get("harness"),
+                "model": binding.get("runtime_model_id"),
+                "effort": binding.get("effort"),
+            }
+            unique_json(exec_path, execution)
+
+        result, telemetry = execute_llm_node(workflow, state, node, canonical(worktree), execution, exec_path)
+    else:
+        err = {"node_id": node_id, "outcome": "INVALID", "summary": f"unsupported worker node type {node_type}"}
+        if output_path:
+            unique_json(output_path, err)
+        return 1
+
+    end_m = time.monotonic()
+    fin_iso = now()
+
+    result["worker_pid"] = worker_pid
+    result["started_at"] = st_iso
+    result["finished_at"] = fin_iso
+    result["start_monotonic"] = start_m
+    result["end_monotonic"] = end_m
+    result["duration_s"] = round(end_m - start_m, 3)
+    if telemetry:
+        result["telemetry"] = telemetry
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        unique_json(output_path, result)
+
+    print(json.dumps({"status": result.get("outcome", "PASS"), "worker_pid": worker_pid, "node_id": node_id}))
+    return 0 if result.get("outcome") in ("PASS", "VALID PASS") else 2
+
+
+def _merge_branch_worktree(
+    repo: Path,
+    main_worktree: Path,
+    branch_worktree: Path,
+    node: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+) -> list[str]:
+    """Copy non-overlapping files modified in the isolated branch worktree to the main run worktree."""
+    if canonical(branch_worktree) == canonical(main_worktree):
+        return []
+    branch_canon = canonical(branch_worktree)
+    main_canon = canonical(main_worktree)
+
+    files_to_sync: set[str] = set(changed_files(branch_canon))
+
+    base_head = baseline.get("worktree_head")
+    if base_head:
+        try:
+            committed = git(branch_canon, "diff", "--name-only", base_head, "HEAD").strip().splitlines()
+            for f in committed:
+                if f.strip():
+                    files_to_sync.add(f.strip().replace("\\", "/"))
+        except Exception:
+            pass
+
+    for f in (node.get("files_to_change") or []):
+        if f:
+            files_to_sync.add(str(f).strip().replace("\\", "/"))
+
+    copied = []
+    for rel_path_str in files_to_sync:
+        src = branch_canon / rel_path_str
+        dst = main_canon / rel_path_str
+        if src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            # On Windows, briefly retry in case a terminating child process has not released file handle
+            for attempt in range(10):
+                try:
+                    content = src.read_bytes()
+                    dst.write_bytes(content)
+                    copied.append(rel_path_str)
+                    break
+                except PermissionError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(0.15)
+    return copied
+
+
+def _worker_is_done(worker: Mapping[str, Any]) -> bool:
+    if "future" in worker:
+        return worker["future"].done()
+    if "process" in worker:
+        return worker["process"].poll() is not None
+    return True
+
+
+def _collect_worker_result(worker: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if "future" in worker:
+        res, tel = worker["future"].result()
+        if "pool" in worker:
+            worker["pool"].shutdown(wait=False)
+        return res, tel
+    if "process" in worker:
+        proc = worker["process"]
+        poll_res = proc.poll()
+        output_path = worker.get("output_path")
+        res = None
+        if output_path and Path(output_path).is_file():
+            try:
+                res = json.loads(Path(output_path).read_text(encoding="utf-8"))
+            except Exception as e:
+                res = {"outcome": "FAIL", "node_id": str(worker["node"]["id"]), "summary": f"Failed to parse worker output: {e}"}
+        if not res:
+            res = {
+                "outcome": "FAIL",
+                "node_id": str(worker["node"]["id"]),
+                "summary": f"Worker process {worker.get('pid')} exited with code {poll_res} without output",
+                "worker_pid": worker.get("pid"),
+            }
+        tel = res.get("telemetry")
+        return res, tel
+    return {"outcome": "FAIL", "node_id": str(worker.get("node", {}).get("id")), "summary": "Unknown worker type"}, None
+
+
 def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, overrides: Mapping[str, str] | None = None,
             preprocess_policy: str = "AUTO_SAFE", *, identifier: str | None = None,
             cancel: "run_cancellation.CancellationToken | None" = None,
-            resume: Mapping[str, Any] | None = None) -> dict[str, Any]:
+            resume: Mapping[str, Any] | None = None,
+            max_parallel_workers: int = MAX_PARALLEL_WORKERS_DEFAULT) -> dict[str, Any]:
     """Execute one workflow. `identifier` and `cancel` are additive V0.1.1.
 
     A caller that needs to address a run *before* it has produced state — a
@@ -1397,171 +1904,138 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
             "arrivals": {}, "arrival_sequence": 0, "merges": merge_states,
         },
     }
+    limit_workers = workflow.get("limits", {}).get("max_parallel_workers")
+    effective_max_workers = limit_workers if limit_workers is not None else max_parallel_workers
+    workers_limit = min(max(1, int(effective_max_workers)), MAX_PARALLEL_WORKERS_HARD_CEILING)
+    state["adaptive_orchestration"] = {
+        "max_parallel_workers": workers_limit,
+        "active_workers_count": 0,
+        "running_nodes": {},
+        "node_states": {str(n["id"]): "PENDING" for n in nodes},
+    }
     if resume is not None:
         _seed_from_resume(state, by_id, journal, resume)
     save_state(state_path, state)
+    active_workers: dict[str, dict[str, Any]] = {}
     try:
       with run_cancellation.cancellation_scope(cancel):
-        while state["frontier"]:
+        while state["frontier"] or active_workers:
             assert_main_unchanged(baseline)
-            # Cancellation boundary. Checked before a node is entered, so a
-            # Stop never starts new work; a node already in flight is
-            # interrupted by terminating the child it is waiting on.
             run_cancellation.check("frontier_head")
-            state["current_node"] = str(state["frontier"].pop(0))
-            node = by_id[state["current_node"]]
-            enforce_limits(state, str(node["type"]))
-            journal.append(routing_contract.NODE_STARTED, node_id=str(node["id"]), payload={
-                "node_type": node["type"], "lineage": node.get("lineage"),
-                "pending_frontier": list(state["frontier"]),
-            })
-            completed_ids = {item["node_id"] for item in state["completed_nodes"]}
-            if not set(node["depends_on"]).issubset(completed_ids):
-                raise WorkflowStop("INVALID", f"unmet depends_on for {node['id']}: {sorted(set(node['depends_on']) - completed_ids)}")
-            before_files = changed_files(canonical(worktree))
-            if node["type"] == "REPAIR":
-                state["repair_cycle"] += 1
-            if node["type"] in LLM_NODE_TYPES:
-                state["llm_calls"] += 1
-                binding = frozen[node["id"]]
-                relations: dict[str, Any] = {}
-                if node["type"] == "REVIEW":
-                    relations["reviewed_execution_ids"] = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") in {"IMPLEMENT", "REPAIR"} and item.get("execution_id")]
-                    relations["reviewed_artifact_refs"] = [str(item["artifact"]) for item in state["completed_nodes"] if item.get("node_type") in {"IMPLEMENT", "REPAIR", "MACHINE_GATE"}]
-                    relations["reviewed_base"] = baseline["worktree_head"]
-                    relations["reviewed_head"] = git(canonical(worktree), "rev-parse", "HEAD")
-                elif node["type"] == "REPAIR":
-                    latest_review = next((item for item in reversed(state["node_results"]) if item.get("node_type") == "REVIEW"), {})
-                    relations["originating_review_execution_id"] = latest_review.get("execution_id")
-                    relations["selected_finding_keys"] = [item.get("finding_key") for item in latest_review.get("findings", []) if item.get("finding_key")]
-                kind = {"REVIEW": "REVIEW", "REPAIR": "REPAIR"}.get(str(node["type"]), "LLM")
-                execution, execution_path = allocate_execution(
-                    descriptor_root=STATS_ROOT / identifier / "EXECUTIONS", run_id=identifier,
-                    node_id=str(node["id"]), invocation_kind=kind, provider=binding.get("provider"),
-                    harness=binding.get("harness"), model=binding.get("runtime_model_id"), effort=binding.get("effort"),
-                    profile=binding.get("profile"), input_contract_hash=canonical_hash(node_package(workflow, state, node, canonical(worktree))),
-                    selection_reason=binding.get("binding_source"), policy_version=str(workflow.get("version")), relations=relations,
-                )
-                state["executions"].append(execution_ref(execution, execution_path))
+
+            # 1. Harvest finished workers
+            finished_ids = [nid for nid, w in active_workers.items() if _worker_is_done(w)]
+            for finished_id in finished_ids:
+                worker = active_workers.pop(finished_id)
+                res, tel = _collect_worker_result(worker)
+                node_fin = worker["node"]
+
+                if node_fin.get("branch_name") and res.get("outcome") in ("PASS", "VALID PASS"):
+                    _merge_branch_worktree(repo, worktree, worker["worktree"], node_fin, baseline)
+
+                state["adaptive_orchestration"]["node_states"][finished_id] = "COMPLETED" if res.get("outcome") in ("PASS", "VALID PASS") else "FAILED"
+                state["adaptive_orchestration"]["running_nodes"].pop(finished_id, None)
+                state["adaptive_orchestration"]["active_workers_count"] = len(active_workers)
+
+                _record_node_completion(state, by_id, frozen, journal, node_fin, res, tel, artifact_root, state_path, baseline, ledger)
                 save_state(state_path, state)
-                recorder = _record_intent(ledger, state, state_path, execution, execution_path,
-                                          repository=str(canonical(repo)), worktree=str(canonical(worktree)),
-                                          binding=binding)
-                result, telemetry = current_llm_adapter()(workflow, state, node, canonical(worktree), execution, execution_path, recorder)
-                _record_lifecycle_status(state, state_path, recorder)
-                after_files = changed_files(canonical(worktree))
-                if node["type"] == "REVIEW" and after_files != before_files:
-                    result["outcome"] = "INVALID"
-                    result["summary"] = "read-only REVIEW mutated the worktree"
-                result["reported_changed_files"] = result["changed_files"]
-                result["changed_files"] = after_files
-                telemetry["outcome"] = {
-                    "PASS": "VALID PASS", "FAIL": "VALID FAIL",
-                    "BLOCKED": "BLOCKED", "INVALID": "INVALID",
-                }[result["outcome"]]
-                state["telemetry"].append(telemetry)
-                stamp = dt.datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
-                telemetry_path = STATS_ROOT / identifier / f"{node['id']}__{node['type']}__{telemetry['harness']}__{stamp}.json"
-                unique_json(telemetry_path, telemetry)
-                result["telemetry_path"] = str(telemetry_path)
-            elif node["type"] == "MACHINE_GATE":
-                execution, execution_path = allocate_execution(
-                    descriptor_root=STATS_ROOT / identifier / "EXECUTIONS", run_id=identifier,
-                    node_id=str(node["id"]), invocation_kind="MACHINE_GATE", provider="LOCAL", harness="subprocess",
-                    input_contract_hash=canonical_hash({"command": node["command"], "cwd": str(canonical(worktree))}),
-                    policy_version=str(workflow.get("version")),
-                )
-                state["executions"].append(execution_ref(execution, execution_path)); save_state(state_path, state)
-                recorder = _record_intent(ledger, state, state_path, execution, execution_path,
-                                          repository=str(canonical(repo)), worktree=str(canonical(worktree)))
-                result = execute_machine_gate(state, node, canonical(worktree), str(execution["execution_id"]), recorder)
-                _record_lifecycle_status(state, state_path, recorder)
-                update_execution(execution_path, str(execution["execution_id"]), status="COMPLETED" if result["outcome"] in {"PASS", "FAIL"} else "BLOCKED")
-            elif node["type"] == "MERGE":
-                # A deterministic runtime primitive, not an invocation: no
-                # execution descriptor, no adapter — the same non-invocation
-                # shape as HUMAN_GATE/FINAL_GATE below.
-                result = execute_merge(state, node, journal)
-            elif node["type"] in {"HUMAN_GATE", "FINAL_GATE"}:
-                review_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "REVIEW" and item.get("execution_id")]
-                check_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "MACHINE_GATE" and item.get("execution_id")]
-                candidate_path = artifact_root / "candidate.json"
-                candidate = create_candidate(path=candidate_path, run_id=identifier, repository=str(canonical(repo)), worktree=str(canonical(worktree)),
-                                             candidate_head=git(canonical(worktree), "rev-parse", "HEAD"), artifact_manifest=None,
-                                             review_execution_ids=review_ids, check_execution_ids=check_ids)
-                state["candidate"] = {**candidate, "artifact_path": str(candidate_path)}
-                result = {
-                    "candidate_id": candidate["candidate_id"],
-                    "node_id": node["id"], "node_type": node["type"], "outcome": "PASS",
-                    "summary": "candidate awaits explicit human verdict", "changed_files": changed_files(canonical(worktree)),
-                    "tests": [], "findings": [], "remaining_uncertainty": [],
-                    "recommended_next_action": "ACCEPT CANDIDATE, REJECT, or LEAVE FOR LATER",
-                }
-            else:
-                raise WorkflowStop("INVALID", f"unknown node type at runtime: {node['type']}")
 
-            assert_main_unchanged(baseline)
-            artifact_path = artifact_root / artifact_name(node, state)
-            unique_json(artifact_path, result)
-            binding = frozen.get(node["id"], {})
-            record = {"execution_id": result.get("execution_id"), "node_id": node["id"], "node_type": node["type"], "outcome": result["outcome"], "artifact": str(artifact_path), "repair_cycle": state["repair_cycle"], "implementer_profile": binding.get("profile"), "harness": binding.get("harness"), "model": binding.get("runtime_model_id") or node.get("model"), "effort": binding.get("effort") or node.get("effort"), "duration_s": result.get("duration_s") or next((t["wall_time_s"] for t in reversed(state["telemetry"]) if t["node"] == node["id"]), None)}
-            record["verdict"] = routing_contract.derive_verdict(result)
-            record["lineage"] = node.get("lineage")
-            state["completed_nodes"].append(record)
-            state["node_results"].append(result)
-
-            # Fail-closed before routing. INVALID never routes. BLOCKED routes
-            # only when the node opted into the contract, where it can select a
-            # FALLBACK edge; a legacy node keeps the original hard stop.
-            if result["outcome"] == "INVALID" or (result["outcome"] == "BLOCKED" and not routing_contract.declares_edges(node)):
-                journal.append(routing_contract.NODE_FAILED, node_id=str(node["id"]), payload={
-                    "node_type": node["type"], "outcome": result["outcome"], "routable": False,
-                    "summary": result.get("summary"), "artifact": str(artifact_path),
-                })
-                save_state(state_path, state)
-                raise WorkflowStop(result["outcome"], result["summary"])
-
-            journal.append(routing_contract.NODE_COMPLETED, node_id=str(node["id"]), payload={
-                "node_type": node["type"], "outcome": result["outcome"], "verdict": record["verdict"],
-                "execution_id": result.get("execution_id"), "artifact": str(artifact_path),
-                "summary": result.get("summary"), "next_brief": result.get("next_brief"),
-                "carry_forward": result.get("carry_forward") or [],
-                "artifacts": result.get("artifacts") or [], "lineage": node.get("lineage"),
-            })
-
-            if node["type"] in {"HUMAN_GATE", "FINAL_GATE"}:
-                journal.append(routing_contract.HUMAN_DECISION_REQUIRED, node_id=str(node["id"]), payload={
-                    "candidate_id": result.get("candidate_id"), "reason": "HUMAN_GATE_REACHED",
-                    "held_frontier": list(state["frontier"]),
-                })
-                state["status"] = "WAITING_FOR_HUMAN"
-                state["final_outcome"] = "HUMAN_REQUIRED"
-                state["current_node"] = node["id"]
-                save_state(state_path, state)
+            if state.get("status") == "WAITING_FOR_HUMAN":
                 return state
 
-            decision = routing_contract.evaluate_gate(node, result)
-            decision_path = artifact_root / f"{node['id']}__GATE__decision.json"
-            unique_json(decision_path, decision)
-            routing_contract.record_decision(journal, decision)
-            state["routing"]["decisions"].append({
-                "node_id": str(node["id"]), "artifact": str(decision_path),
-                "routing_mode": decision["routing_mode"], "outcome": decision["outcome"],
-                "verdict": decision["verdict"], "no_route": decision["no_route"],
-                "selected": [row["edge_id"] for row in decision["selected"]],
-                "held": [{"edge_id": row["edge_id"], "to": row["to"], "hold_reason": row["hold_reason"]}
-                         for row in decision["held"]],
-                "decision_hash": decision["decision_hash"],
-                "routing_input_hash": decision["routing_input_hash"],
-            })
-            if decision["no_route"]:
+            # 2. Dispatch ready nodes
+            dispatched_any = False
+            i = 0
+            while i < len(state["frontier"]) and len(active_workers) < workers_limit:
+                candidate_id = str(state["frontier"][i])
+                candidate_node = by_id[candidate_id]
+                completed_ids = {item["node_id"] for item in state["completed_nodes"]}
+
+                unmet = set(candidate_node["depends_on"]) - completed_ids
+                if unmet:
+                    running_ids = set(active_workers.keys())
+                    if not unmet.issubset(running_ids) and not active_workers:
+                        raise WorkflowStop("INVALID", f"unmet depends_on for {candidate_id}: {sorted(unmet)}")
+                    i += 1
+                    continue
+
+                if candidate_node["type"] in {"MERGE", "HUMAN_GATE", "FINAL_GATE"}:
+                    if active_workers:
+                        break
+                    state["frontier"].pop(i)
+                    state["current_node"] = candidate_id
+                    state["adaptive_orchestration"]["node_states"][candidate_id] = "RUNNING"
+                    state["adaptive_orchestration"]["running_nodes"][candidate_id] = {"pid": os.getpid(), "started_at": now()}
+                    save_state(state_path, state)
+
+                    if candidate_node["type"] == "MERGE":
+                        res = execute_merge(state, candidate_node, journal)
+                        state["adaptive_orchestration"]["node_states"][candidate_id] = "COMPLETED"
+                        state["adaptive_orchestration"]["running_nodes"].pop(candidate_id, None)
+                        _record_node_completion(state, by_id, frozen, journal, candidate_node, res, None, artifact_root, state_path, baseline, ledger)
+                        save_state(state_path, state)
+                        dispatched_any = True
+                        break
+                    else:
+                        review_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "REVIEW" and item.get("execution_id")]
+                        check_ids = [str(item["execution_id"]) for item in state["completed_nodes"] if item.get("node_type") == "MACHINE_GATE" and item.get("execution_id")]
+                        candidate_path = artifact_root / "candidate.json"
+                        candidate = create_candidate(path=candidate_path, run_id=identifier, repository=str(canonical(repo)), worktree=str(canonical(worktree)),
+                                                     candidate_head=git(canonical(worktree), "rev-parse", "HEAD"), artifact_manifest=None,
+                                                     review_execution_ids=review_ids, check_execution_ids=check_ids)
+                        state["candidate"] = {**candidate, "artifact_path": str(candidate_path)}
+                        res = {
+                            "candidate_id": candidate["candidate_id"],
+                            "node_id": candidate_node["id"], "node_type": candidate_node["type"], "outcome": "PASS",
+                            "summary": "candidate awaits explicit human verdict", "changed_files": changed_files(canonical(worktree)),
+                            "tests": [], "findings": [], "remaining_uncertainty": [],
+                            "recommended_next_action": "ACCEPT CANDIDATE, REJECT, or LEAVE FOR LATER",
+                        }
+                        state["adaptive_orchestration"]["node_states"][candidate_id] = "COMPLETED"
+                        state["adaptive_orchestration"]["running_nodes"].pop(candidate_id, None)
+                        _record_node_completion(state, by_id, frozen, journal, candidate_node, res, None, artifact_root, state_path, baseline, ledger)
+                        return state
+
+                conflict = any(_nodes_conflict(candidate_node, w["node"]) for w in active_workers.values())
+                if conflict:
+                    i += 1
+                    continue
+
+                state["frontier"].pop(i)
+                state["current_node"] = candidate_id
+                enforce_limits(state, str(candidate_node["type"]))
+                if candidate_node["type"] == "REPAIR":
+                    state["repair_cycle"] += 1
+
+                worker = _dispatch_worker(
+                    node=candidate_node,
+                    workflow=workflow,
+                    state=state,
+                    by_id=by_id,
+                    frozen=frozen,
+                    repo=repo,
+                    worktree=worktree,
+                    identifier=identifier,
+                    artifact_root=artifact_root,
+                    workflow_path=workflow_path,
+                    cancel=cancel,
+                    journal=journal,
+                    ledger=ledger,
+                    state_path=state_path,
+                    baseline=baseline,
+                )
+                active_workers[candidate_id] = worker
+                state["adaptive_orchestration"]["node_states"][candidate_id] = "RUNNING"
+                state["adaptive_orchestration"]["running_nodes"][candidate_id] = {
+                    "pid": worker.get("pid"),
+                    "started_at": worker.get("started_at"),
+                }
+                state["adaptive_orchestration"]["active_workers_count"] = len(active_workers)
                 save_state(state_path, state)
-                raise WorkflowStop("NO_ROUTE", (
-                    f"no edge of {node['id']} matched outcome={decision['outcome']} "
-                    f"verdict={decision['verdict']}; considered "
-                    f"{[row['edge_id'] for row in decision['candidates']]}"))
-            apply_gate_decision(state, by_id, frozen, journal, node, result, decision)
-            save_state(state_path, state)
+                dispatched_any = True
+
+            if active_workers and not dispatched_any and not finished_ids:
+                time.sleep(0.05)
         if state["status"] == "RUNNING":
             # AAW PATH-SCOPED BRANCH CONTEXT + MERGE/REJOIN V0.1 drain-time
             # fail path. Catches what the fast path (in `apply_gate_decision`)
@@ -1578,11 +2052,19 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
             state["final_outcome"] = "COMPLETED"
             save_state(state_path, state)
     except RunCancelled as exc:
-        # A real stop, recorded as one. The abandoned frontier is named so the
-        # canvas can grey out exactly the work that never started, and the
-        # partially executed node is named so nobody reads its absence as a
-        # pass. Nothing is rolled back: the worktree keeps whatever the killed
-        # child had already written, for a human to inspect.
+        for nid, w in active_workers.items():
+            if "process" in w and w["process"].poll() is None:
+                try:
+                    w["process"].terminate()
+                    w["process"].wait(timeout=2)
+                except Exception:
+                    try:
+                        w["process"].kill()
+                    except Exception:
+                        pass
+            elif "pool" in w:
+                w["pool"].shutdown(wait=False, cancel_futures=True)
+        active_workers.clear()
         abandoned = list(state["frontier"])
         state["frontier"] = []
         state["status"] = "CANCELLED"
@@ -1611,6 +2093,14 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
         save_state(state_path, state)
         return state
     finally:
+        for nid, w in active_workers.items():
+            if "process" in w and w["process"].poll() is None:
+                try:
+                    w["process"].terminate()
+                except Exception:
+                    pass
+            elif "pool" in w:
+                w["pool"].shutdown(wait=False, cancel_futures=True)
         assert_main_unchanged(baseline)
     return state
 
@@ -1692,6 +2182,14 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--run-id")
     value.add_argument("--validate", type=Path)
     value.add_argument("--self-test", action="store_true")
+    value.add_argument("--worker-node")
+    value.add_argument("--worker-workflow", type=Path)
+    value.add_argument("--worker-run-id")
+    value.add_argument("--worker-repo", type=Path)
+    value.add_argument("--worker-worktree", type=Path)
+    value.add_argument("--worker-output", type=Path)
+    value.add_argument("--worker-execution-id")
+    value.add_argument("--max-parallel-workers", type=int, default=MAX_PARALLEL_WORKERS_DEFAULT)
     return value
 
 
@@ -1779,6 +2277,8 @@ def self_test() -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
+        if getattr(args, "worker_node", None):
+            return run_node_worker(args)
         if args.self_test:
             return self_test()
         overrides = parse_cli_bindings(args.bind)
@@ -1793,7 +2293,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             if not all((args.workflow, args.goal, args.repo, args.worktree)):
                 raise WorkflowValidationError("--workflow, --goal, --repo, and --worktree are required")
-            result = dry_run(args.workflow, args.goal, args.repo, args.worktree, overrides, args.preprocess_policy) if args.dry_run else execute(args.workflow, args.goal, args.repo, args.worktree, overrides, args.preprocess_policy)
+            result = (
+                dry_run(args.workflow, args.goal, args.repo, args.worktree, overrides, args.preprocess_policy)
+                if args.dry_run
+                else execute(
+                    args.workflow,
+                    args.goal,
+                    args.repo,
+                    args.worktree,
+                    overrides,
+                    args.preprocess_policy,
+                    max_parallel_workers=getattr(args, "max_parallel_workers", MAX_PARALLEL_WORKERS_DEFAULT),
+                )
+            )
         # ASCII escaping keeps Windows consoles/pipes reliable even when captured tool
         # output contains replacement characters from a legacy code page.
         print(json.dumps(result, indent=2, ensure_ascii=True))
