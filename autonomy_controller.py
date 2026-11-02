@@ -1319,7 +1319,14 @@ class AutonomyController:
                 telemetry=self._telemetry() if hasattr(self, "_telemetry") else None,
                 adaptive_enabled=True,
             )
-            dag = ao.generate_adaptive_dag(strategy, goal=plan["goal"], subtasks=task_def.get("subtasks"))
+            effective_strategy = strategy
+            if strategy.get("mode") == "SHADOW":
+                effective_strategy = dict(strategy)
+                effective_strategy["selected_template"] = ao.TEMPLATE_SINGLE_EXECUTOR
+                effective_strategy["workers_count"] = 1
+                effective_strategy["model_profile"] = "GPT6_LUNA_HIGH"
+
+            dag = ao.generate_adaptive_dag(effective_strategy, goal=plan["goal"], subtasks=task_def.get("subtasks"))
             valid, dag_errs = ao.validate_dag_structure(dag)
             if not valid:
                 self._escalate(ac.E_PLAN_INVALID, f"Adaptive DAG invalid: {dag_errs}", iteration_id)

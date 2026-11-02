@@ -2342,6 +2342,17 @@ def recover_run_in_place(identifier: str, *, cancel_abandoned: bool = True) -> d
     ao_state["running_nodes"] = {}
     ao_state["active_workers_count"] = 0
     state["adaptive_orchestration"] = ao_state
+    state["attempt"] = int(state.get("attempt", 1)) + 1
+
+    # Clean up abandoned lock if present
+    run_dir = STATS_ROOT / identifier
+    for lock_path in (run_dir / "run.lock", artifact_root / "run.lock"):
+        if lock_path.is_file():
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
+
     save_state(state_path, state)
     return state
 

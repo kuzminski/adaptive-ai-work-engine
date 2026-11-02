@@ -69,10 +69,14 @@ export const NewTaskWizardView: React.FC = () => {
   useEffect(() => {
     if (bootstrap?.choices) {
       if (bootstrap.choices.planning && !planningModel) {
-        setPlanningModel(bootstrap.choices.planning);
+        const pVal = bootstrap.choices.planning;
+        const resolvedP = typeof pVal === "string" ? pVal : (pVal.default || pVal.value || "STRONGEST");
+        setPlanningModel(resolvedP);
       }
       if (bootstrap.choices.implementation && !implementerModel) {
-        setImplementerModel(bootstrap.choices.implementation);
+        const iVal = bootstrap.choices.implementation;
+        const resolvedI = typeof iVal === "string" ? iVal : (iVal.default || iVal.value || "RECOMMENDED");
+        setImplementerModel(resolvedI);
       }
     }
   }, [bootstrap]);

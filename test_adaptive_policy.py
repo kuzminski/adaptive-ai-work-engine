@@ -197,13 +197,12 @@ def test_shadow_mode_records_diff_without_mutating_plan() -> None:
     }
     decision = ap.evaluate_policy(task, mode=ap.MODE_SHADOW)
     assert decision.mode == ap.MODE_SHADOW
-    # Executed plan is baseline S1
-    assert decision.selected_strategy == "S1"
-    assert decision.selected_template == ao.TEMPLATE_SINGLE_EXECUTOR
-    assert decision.workers_count == 1
-    assert decision.model_profile == "GPT6_LUNA_HIGH"
+    # Policy recommendation is preserved
+    assert decision.selected_strategy == "S2"
+    assert decision.selected_template == ao.TEMPLATE_PARALLEL_INDEPENDENT
+    assert decision.workers_count == 2
 
-    # Counterfactual shadow diff is recorded
+    # Counterfactual shadow diff documents guarded baseline execution
     assert decision.shadow_diff is not None
     diff = decision.shadow_diff
     assert diff["divergence"] is True
@@ -211,6 +210,7 @@ def test_shadow_mode_records_diff_without_mutating_plan() -> None:
     assert diff["recommended_workers"] == 2
     assert diff["executed_strategy"] == "S1"
     assert diff["executed_workers"] == 1
+    assert diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
 
 
 def test_disabled_mode_returns_baseline_s1() -> None:
@@ -229,3 +229,58 @@ def test_disabled_mode_returns_baseline_s1() -> None:
     assert decision.rule_id == ap.RULE_DISABLED_BASELINE
     assert decision.workers_count == 1
     assert decision.selected_template == ao.TEMPLATE_SINGLE_EXECUTOR
+
+
+def test_default_mode_is_strictly_shadow() -> None:
+    # When no explicit AAW_ADAPTIVE_MODE is specified, defaults strictly to SHADOW mode
+    old_env = os.environ.pop("AAW_ADAPTIVE_MODE", None)
+    old_flag = os.environ.pop("AAW_ADAPTIVE_ORCHESTRATION_ENABLED", None)
+    try:
+        assert ap.resolve_effective_mode() == ap.MODE_SHADOW
+        assert ap.resolve_effective_mode({}) == ap.MODE_SHADOW
+        assert ap.resolve_effective_mode({"adaptive_orchestration_enabled": True}) == ap.MODE_SHADOW
+    finally:
+        if old_env:
+            os.environ["AAW_ADAPTIVE_MODE"] = old_env
+        if old_flag:
+            os.environ["AAW_ADAPTIVE_ORCHESTRATION_ENABLED"] = old_flag
+
+
+def test_shadow_mode_computes_predicted_benefits() -> None:
+    task = {
+        "id": "T_SHADOW_PRED_01",
+        "task_class": mr.MODERATE,
+        "criticality": mr.NORMAL_CRITICALITY,
+        "subtasks": [
+            {"id": "S1", "files_to_change": ["service_a.py"]},
+            {"id": "S2", "files_to_change": ["service_b.py"]},
+        ],
+    }
+    decision = ap.evaluate_policy(task, mode=ap.MODE_SHADOW)
+    assert decision.mode == ap.MODE_SHADOW
+    assert decision.shadow_diff is not None
+    benefits = decision.shadow_diff["predicted_benefits"]
+    assert benefits["predicted_speedup"] >= 1.3
+    assert "risk_mitigation" in benefits
+    assert "predicted_quality_delta" in benefits
+    assert decision.shadow_diff["executed_strategy"] == "S1"
+    assert decision.shadow_diff["executed_workers"] == 1
+
+
+def test_controlled_adaptive_requires_explicit_opt_in() -> None:
+    task = {
+        "id": "T_CONTROLLED_01",
+        "task_class": mr.MODERATE,
+        "criticality": mr.NORMAL_CRITICALITY,
+        "subtasks": [
+            {"id": "S1", "files_to_change": ["module_a.py"]},
+            {"id": "S2", "files_to_change": ["module_b.py"]},
+        ],
+    }
+    # Explicit context opt-in
+    decision = ap.evaluate_policy(task, mode=ap.MODE_CONTROLLED_ADAPTIVE)
+    assert decision.mode == ap.MODE_CONTROLLED_ADAPTIVE
+    assert decision.workers_count == 2
+    assert decision.selected_strategy == "S2"
+    assert decision.shadow_diff is None
+
