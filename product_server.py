@@ -198,6 +198,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     get_routes: dict[str, Callable[..., Any]] = {
         "/api/bootstrap": app.bootstrap,
         "/api/home": lambda q: pv.home_view(),
+        "/api/runs": lambda q: pv.home_view(),
         "/api/settings": lambda q: product_home.load_settings(),
         "/api/recommendations": app.recommendations,
         "/api/ping": lambda q: {"ok": True, "version": APP_VERSION},
@@ -215,6 +216,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/pick-folder": app.pick_folder,
         "/api/tasks/preview": lambda b: prun.public_preview(prun.preview_task(b.get("form") or {})),
         "/api/tasks/start": lambda b: prun.start_task(b.get("form") or {}),
+        "/api/start": lambda b: prun.start_task(b.get("form") if "form" in b else b),
         "/api/settings": app.settings_post,
         "/api/recommendations/update": app.update_recommendations,
         "/api/quit": app.quit,
@@ -222,7 +224,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/mcp/configure": _mcp_configure,
     }
     run_get = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)(/evidence)?$")
-    run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue)$")
+    run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue|decision)$")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "AAW/0.2"
@@ -319,6 +321,16 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return prun.accept(run_id, early_end=bool(body.get("early_end")))
                 if action == "reject":
                     return prun.reject(run_id, reason=str(body.get("reason") or ""))
+                if action == "decision":
+                    decision_act = str(body.get("action") or "").lower().strip()
+                    reason = str(body.get("feedback") or body.get("reason") or "")
+                    if decision_act == "accept":
+                        return prun.accept(run_id, early_end=bool(body.get("early_end")))
+                    if decision_act == "reject":
+                        return prun.reject(run_id, reason=reason)
+                    if decision_act == "continue":
+                        return prun.prepare_continuation(run_id, mode=reason or str(body.get("mode") or ""))
+                    raise prun.ProductError(f"Nieobsługiwana decyzja: {decision_act}")
                 return prun.prepare_continuation(run_id, mode=str(body.get("mode") or ""))
             self._api(act)
 
