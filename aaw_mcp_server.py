@@ -21,12 +21,14 @@ import argparse
 import io
 import json
 import re
+import secrets
 import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence, TextIO
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -392,7 +394,12 @@ class AawMcpServer:
                         "content": [{"type": "text", "text": "Missing required argument 'run_id'"}],
                         "isError": True,
                     }
-                output = product_view.run_view(run_id)
+                if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", run_id.strip()):
+                    return {
+                        "content": [{"type": "text", "text": f"Invalid run_id format: '{run_id}'"}],
+                        "isError": True,
+                    }
+                output = product_view.run_view(run_id.strip())
             elif name == "aaw_run_evidence":
                 run_id = arguments.get("run_id")
                 if not isinstance(run_id, str) or not run_id.strip():
@@ -400,8 +407,13 @@ class AawMcpServer:
                         "content": [{"type": "text", "text": "Missing required argument 'run_id'"}],
                         "isError": True,
                     }
+                if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", run_id.strip()):
+                    return {
+                        "content": [{"type": "text", "text": f"Invalid run_id format: '{run_id}'"}],
+                        "isError": True,
+                    }
                 execution_id = arguments.get("execution_id")
-                output = product_view.evidence_view(run_id, execution_id=execution_id)
+                output = product_view.evidence_view(run_id.strip(), execution_id=execution_id)
             elif name == "aaw_run_stop":
                 run_id = arguments.get("run_id")
                 if not isinstance(run_id, str) or not run_id.strip():
@@ -409,8 +421,13 @@ class AawMcpServer:
                         "content": [{"type": "text", "text": "Missing required argument 'run_id'"}],
                         "isError": True,
                     }
+                if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", run_id.strip()):
+                    return {
+                        "content": [{"type": "text", "text": f"Invalid run_id format: '{run_id}'"}],
+                        "isError": True,
+                    }
                 force = bool(arguments.get("force", False))
-                output = product_runs.request_stop(run_id, force=force)
+                output = product_runs.request_stop(run_id.strip(), force=force)
             elif name == "aaw_run_resume":
                 run_id = arguments.get("run_id")
                 if not isinstance(run_id, str) or not run_id.strip():
@@ -418,7 +435,12 @@ class AawMcpServer:
                         "content": [{"type": "text", "text": "Missing required argument 'run_id'"}],
                         "isError": True,
                     }
-                output = product_runs.resume_task(run_id)
+                if not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", run_id.strip()):
+                    return {
+                        "content": [{"type": "text", "text": f"Invalid run_id format: '{run_id}'"}],
+                        "isError": True,
+                    }
+                output = product_runs.resume_task(run_id.strip())
             else:
                 return {
                     "content": [{"type": "text", "text": f"Unhandled tool '{name}'"}],
@@ -450,20 +472,45 @@ class AawMcpServer:
 
         run_match = re.match(r"^aaw://runs/([^/]+)/state$", uri)
         if run_match:
-            run_id = run_match.group(1)
-            # Handle placeholder {run_id} if requested directly
-            if run_id == "{run_id}":
+            raw_id = run_match.group(1)
+            run_id = raw_id
+            if raw_id == "{run_id}":
                 run_ids = product_runs.list_run_ids()
                 if run_ids:
                     run_id = run_ids[0]
+                else:
+                    task = {"schema_version": product_runs.TASK_SCHEMA, "run_id": "{run_id}"}
+                    state = {"status": "INITIAL", "iterations": []}
+                    payload = {
+                        "run_id": "{run_id}",
+                        "task": task,
+                        "state": state,
+                        "iterations": [],
+                    }
+                    text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+                    return {
+                        "contents": [
+                            {
+                                "uri": uri,
+                                "mimeType": "application/json",
+                                "text": text,
+                            }
+                        ]
+                    }
+            elif not re.fullmatch(r"[A-Za-z0-9_\-]{3,80}", run_id):
+                raise JsonRpcError(-32602, f"Invalid run_id format: {run_id!r}")
+
             try:
                 task = product_runs.load_task(run_id)
             except Exception:
                 task = None
-            state_path = product_runs.autonomy_dir(run_id) / "autonomy_state.json"
-            state = product_home.read_json(state_path)
+            try:
+                state_path = product_runs.autonomy_dir(run_id) / "autonomy_state.json"
+                state = product_home.read_json(state_path)
+            except Exception:
+                state = None
             if task is None and state is None:
-                if run_match.group(1) == "{run_id}":
+                if raw_id == "{run_id}":
                     # Fallback template preview if no runs exist yet
                     task = {"schema_version": product_runs.TASK_SCHEMA, "run_id": "{run_id}"}
                     state = {"status": "INITIAL", "iterations": []}
@@ -519,6 +566,32 @@ def serve_stdio(stdin: TextIO | None = None, stdout: TextIO | None = None) -> in
 
 # ── loopback HTTP transport ──────────────────────────────────────────────────
 
+MAX_HTTP_PAYLOAD_BYTES = 2 * 1024 * 1024  # 2 MiB request body limit
+
+
+def resolve_mcp_auth_token(token: str | None = None) -> str:
+    """Resolve or generate the secure token required for MCP HTTP transport."""
+    if token and token.strip():
+        return token.strip()
+    token_file = product_home.home() / "mcp_token.txt"
+    if token_file.is_file():
+        saved = token_file.read_text(encoding="utf-8").strip()
+        if saved:
+            return saved
+    # Check ui.json as fallback
+    ui_json = product_home.home() / "ui.json"
+    if ui_json.is_file():
+        ui_data = product_home.read_json(ui_json)
+        if isinstance(ui_data, dict) and ui_data.get("token"):
+            return str(ui_data["token"]).strip()
+    # Generate fresh token and persist
+    new_token = secrets.token_urlsafe(24)
+    try:
+        token_file.write_text(new_token, encoding="utf-8")
+    except Exception:
+        pass
+    return new_token
+
 
 class McpHttpHandler(BaseHTTPRequestHandler):
     server_version = f"{SERVER_NAME}/{SERVER_VERSION}"
@@ -528,13 +601,75 @@ class McpHttpHandler(BaseHTTPRequestHandler):
         """Suppress standard access logs to keep terminal quiet."""
         pass
 
+    def _host_ok(self) -> bool:
+        host = (self.headers.get("Host") or "").split(":")[0].strip()
+        return host in ("127.0.0.1", "localhost", "[::1]")
+
+    def _origin_ok(self) -> bool:
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        return (parsed.hostname or "") in ("127.0.0.1", "localhost", "::1")
+
+    def _authorized(self) -> bool:
+        if not self.server.auth_token:
+            return True
+        token = self.headers.get("X-AAW-Token") or ""
+        if not token:
+            auth = self.headers.get("Authorization") or ""
+            if auth.startswith("Bearer "):
+                token = auth[7:].strip()
+        return bool(token) and secrets.compare_digest(token, self.server.auth_token)
+
+    def _send_json_error(self, status: int, message: str) -> None:
+        payload = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._send_json_error(HTTPStatus.FORBIDDEN, "Forbidden: Host must be loopback")
+            return
+        if not self._origin_ok():
+            self._send_json_error(HTTPStatus.FORBIDDEN, "Forbidden: Cross-origin access rejected")
+            return
+        if not self._authorized():
+            self._send_json_error(HTTPStatus.UNAUTHORIZED, "Unauthorized: valid X-AAW-Token or Authorization Bearer token required")
+            return
+
         if self.path != "/mcp":
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
             return
-        content_length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(content_length).decode("utf-8")
-        response = self.server.mcp_server.handle_message(body)
+
+        content_length_str = self.headers.get("Content-Length")
+        try:
+            content_length = int(content_length_str or 0)
+        except ValueError:
+            self._send_json_error(HTTPStatus.BAD_REQUEST, "Invalid Content-Length")
+            return
+
+        if content_length > MAX_HTTP_PAYLOAD_BYTES:
+            self._send_json_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Payload Too Large (max 2 MiB)")
+            return
+
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+        except Exception as exc:
+            self._send_json_error(HTTPStatus.BAD_REQUEST, f"Failed to read request body: {exc}")
+            return
+
+        try:
+            response = self.server.mcp_server.handle_message(body)
+        except Exception as exc:
+            self._send_json_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Internal JSON-RPC dispatch error: {exc}")
+            return
+
         if response is None:
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
@@ -544,10 +679,19 @@ class McpHttpHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(payload)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._host_ok():
+            self._send_json_error(HTTPStatus.FORBIDDEN, "Forbidden: Host must be loopback")
+            return
+        if not self._origin_ok():
+            self._send_json_error(HTTPStatus.FORBIDDEN, "Forbidden: Cross-origin access rejected")
+            return
+
         if self.path in ("/ping", "/health"):
             payload = json.dumps(
                 {"status": "ok", "server": SERVER_NAME, "version": SERVER_VERSION}
@@ -570,23 +714,30 @@ class McpHttpServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         RequestHandlerClass: type[BaseHTTPRequestHandler],
         mcp_server: AawMcpServer | None = None,
+        auth_token: str | None = None,
     ) -> None:
+        host = server_address[0]
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            raise ValueError(f"Universal MCP HTTP server must bind to loopback (127.0.0.1), got {host!r}")
         super().__init__(server_address, RequestHandlerClass)
         self.mcp_server = mcp_server or AawMcpServer()
+        self.auth_token = resolve_mcp_auth_token(auth_token)
 
 
 def create_http_server(
-    host: str = "127.0.0.1", port: int = 8788, mcp_server: AawMcpServer | None = None
+    host: str = "127.0.0.1", port: int = 8788, mcp_server: AawMcpServer | None = None,
+    auth_token: str | None = None,
 ) -> McpHttpServer:
-    """Instantiate a loopback ThreadingHTTPServer with /mcp endpoint."""
-    return McpHttpServer((host, port), McpHttpHandler, mcp_server=mcp_server)
+    """Instantiate a loopback ThreadingHTTPServer with /mcp endpoint and token auth."""
+    return McpHttpServer((host, port), McpHttpHandler, mcp_server=mcp_server, auth_token=auth_token)
 
 
 def serve_http(
-    host: str = "127.0.0.1", port: int = 8788, *, server: McpHttpServer | None = None
+    host: str = "127.0.0.1", port: int = 8788, *, auth_token: str | None = None,
+    server: McpHttpServer | None = None
 ) -> int:
     """Run loopback ThreadingHTTPServer serving POST /mcp endpoint."""
-    httpd = server or create_http_server(host, port)
+    httpd = server or create_http_server(host, port, auth_token=auth_token)
     try:
         httpd.serve_forever()
     except (KeyboardInterrupt, SystemExit):
@@ -607,10 +758,11 @@ def main() -> int:
     parser.add_argument("--http", action="store_true", help="Serve via loopback HTTP")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8788, help="HTTP port (default: 8788)")
+    parser.add_argument("--token", default=None, help="Auth token for HTTP mode")
     args = parser.parse_args()
 
     if args.http:
-        return serve_http(host=args.host, port=args.port)
+        return serve_http(host=args.host, port=args.port, auth_token=args.token)
     return serve_stdio()
 
 

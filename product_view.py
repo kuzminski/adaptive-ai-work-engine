@@ -158,14 +158,24 @@ def classify(run_id: str, state: Mapping[str, Any] | None = None) -> dict[str, A
     if status == ac.RUNNING:
         if alive:
             return {**info, "status": S_STOPPING if stop else S_RUNNING}
-        events = _journal(run_id)
-        last = next((e for e in reversed(events) if e.get("event_type") in
-                     ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT", "RUN_RESUMED", "PHASE_STARTED", "PHASE_COMPLETED")), {})
-        if last.get("event_type") in ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT") and not lock["held"]:
-            return {**info, "status": S_PAUSED, "pause_event": last}
-        return {**info, "status": S_INTERRUPTED,
-                "detail": exit_record.get("error") or "Proces roboczy AAW zakończył się bez zapisanego zatrzymania "
-                          "(np. zamknięcie komputera lub awaria). Możesz bezpiecznie wznowić."}
+        # If worker is not alive, state might have been written right as the worker exited.
+        # Re-check fresh state from disk and exit_record to eliminate race condition.
+        fresh_state = _state(run_id)
+        if fresh_state and fresh_state.get("status") != ac.RUNNING:
+            state = fresh_state
+            status = state.get("status")
+        elif exit_record.get("status") in (ac.AWAITING_HUMAN, ac.HUMAN_APPROVED, ac.PROMOTED, ac.REJECTED):
+            status = exit_record.get("status")
+            state = {**(fresh_state or {}), "status": status}
+        else:
+            events = _journal(run_id)
+            last = next((e for e in reversed(events) if e.get("event_type") in
+                         ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT", "RUN_RESUMED", "PHASE_STARTED", "PHASE_COMPLETED")), {})
+            if last.get("event_type") in ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT") and not lock["held"]:
+                return {**info, "status": S_PAUSED, "pause_event": last}
+            return {**info, "status": S_INTERRUPTED,
+                    "detail": exit_record.get("error") or "Proces roboczy AAW zakończył się bez zapisanego zatrzymania "
+                              "(np. zamknięcie komputera lub awaria). Możesz bezpiecznie wznowić."}
     if status == ac.AWAITING_HUMAN:
         hold = state.get("hold") or {}
         return {**info, "status": S_GATE if hold.get("promotable") else S_ATTENTION}
@@ -202,6 +212,22 @@ def _iteration_nodes(state: Mapping[str, Any], events: list[dict[str, Any]], ite
             mark = "pending"
         nodes.append({"key": key, "label": label, "state": mark, "count": count})
     return nodes
+
+
+def _adaptive_orchestration_data(run_id: str) -> dict[str, Any]:
+    strat = product_home.read_json(prun.autonomy_dir(run_id) / "adaptive_strategy.json") or {}
+    wf_state = product_home.read_json(prun.run_dir(run_id) / "WORKFLOW" / "workflow_state.json") or {}
+    wf_ao = wf_state.get("adaptive_orchestration") or {}
+    return {
+        "enabled": bool(strat.get("adaptive_enabled")),
+        "strategy": strat,
+        "selected_template": strat.get("selected_template"),
+        "active_workers_count": wf_ao.get("active_workers_count", 0),
+        "running_nodes": wf_ao.get("running_nodes", {}),
+        "node_states": wf_ao.get("node_states", {}),
+        "max_parallel_workers": wf_ao.get("max_parallel_workers", strat.get("workers_count", 2)),
+        "serialization_reason": (strat.get("conflict_analysis") or {}).get("conflict_summary") or strat.get("reason_code"),
+    }
 
 
 def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any],
@@ -260,6 +286,7 @@ def process_view(run_id: str, state: Mapping[str, Any], status: Mapping[str, Any
         "iterations_done": len(state.get("iterations") or []),
         "max_iterations": state["mandate"]["roadmap_mandate"]["autonomy_bounds"]["max_iterations"],
         "eta": None,  # deliberately not shown: no data to estimate it honestly
+        "adaptive_orchestration": _adaptive_orchestration_data(run_id),
     }
 
 
@@ -602,6 +629,7 @@ def run_view(run_id: str) -> dict[str, Any]:
             "process": process_view(run_id, state, status, events),
             "timeline": timeline(state, briefs, status), "gate": human_gate(run_id, state, task, ledger),
             "last_activity": events[-1].get("occurred_at") if events else state.get("updated_at"),
+            "adaptive_orchestration": _adaptive_orchestration_data(run_id),
             "engine": {"status": state.get("status"), "phase": state.get("phase"),
                        "policy_preset": state.get("policy_preset"), "contract": state.get("contract")}}
 

@@ -453,6 +453,7 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
             # AAW keeps going while the roadmap offers justified work; False restores "stop when the
             # listed points are done". Missing key = the autonomous default.
             "continue_autonomously": advanced.get("continue_autonomously") is not False,
+            "adaptive_orchestration_enabled": bool(advanced.get("adaptive_orchestration_enabled", False)),
             "profile_overrides": {k: str(v) for k, v in (advanced.get("profile_overrides") or {}).items() if v},
             "risks": normalize_risks(risks_raw, len(directions)),
         },
@@ -521,6 +522,7 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
             },
             # Only present with risks, so a mandate without them keeps its previous shape and hash.
             **({"risk_register": [dict(r) for r in advanced["risks"]]} if advanced.get("risks") else {}),
+            **({"adaptive_orchestration_enabled": True} if (advanced.get("adaptive_orchestration_enabled") or settings.get("adaptive_orchestration_enabled")) else {}),
         },
     }
 

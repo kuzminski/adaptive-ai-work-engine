@@ -12,6 +12,7 @@ import { runLayoutComponentTests } from "./layoutComponentTests";
 import { runPhaseGraphTests } from "./phaseGraphTests";
 import { runGateComponentTests } from "./gateComponentTests";
 import { runRightDrawerComponentTests } from "./rightDrawerComponentTests";
+import { runViewComponentTests } from "./viewComponentTests";
 
 async function runTests() {
   console.log("=== Starting AAW Frontend Unit Tests ===");
@@ -315,6 +316,9 @@ async function runTests() {
 
   // ── Right Drawer, Telemetry Terminal, Diff & Evidence Tests ───────────────
   await runRightDrawerComponentTests();
+
+  // ── Views & Dynamic Navigation Routing Tests ──────────────────────────────
+  await runViewComponentTests();
 
   console.log("\n=== ALL FRONTEND UNIT TESTS PASSED ===");
 }
