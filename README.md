@@ -56,11 +56,11 @@ operator-led workflows, not yet for unattended production automation.
 | Descriptive analytics | PARTIAL |
 | ORCA supervision | EXPERIMENTAL |
 | Local Qwen preprocessing | EXPERIMENTAL |
-| Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
-| Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASED (0.2.0) — see `AAW_PRODUCT_MVP_V0_2.md` |
+| Autonomous iterations (controller, scope guard, real role adapters, run lock) | EXPERIMENTAL — see `docs/specs/AAW_AUTONOMOUS_ITERATIONS_V0_3.md` |
+| Product app (portable, provider detection, process view, STOP/RESUME, Human Gate) | RELEASED (0.2.0) — see `docs/specs/AAW_PRODUCT_MVP_V0_2.md` |
 | Dynamic planner | PLANNED |
 | Path-scoped branch context + merge/rejoin | IMPLEMENTED |
-| Implementer effectiveness (work packets, final self-audit, simple-error checks, difficulty routing, Antigravity CLI) | IMPLEMENTED (phase 1) — see `AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md` |
+| Implementer effectiveness (work packets, final self-audit, simple-error checks, difficulty routing, Antigravity CLI) | IMPLEMENTED (phase 1) — see `docs/specs/AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md` |
 
 ## Product app (MVP V0.2 — release `0.4.0`)
 
@@ -74,9 +74,19 @@ a 7-step wizard leads from the project folder through AI-tool detection
 and model confirmation to the goal and START. You see the active phase, can
 STOP SAFELY / STOP NOW / RESUME, and get a Human Gate at the end. No automatic
 merge or push. From a source checkout: `python AAW.py`. Details:
-`AAW_PRODUCT_MVP_V0_2.md`, changes: `CHANGELOG.md`.
+`docs/specs/AAW_PRODUCT_MVP_V0_2.md`, changes: `CHANGELOG.md`.
 
-## Architecture
+## Architecture & Specifications
+
+The complete design specifications, execution contracts, and architectural decisions are organized in [`docs/specs/`](docs/specs/):
+- **Specifications Index**: [`docs/README.md`](docs/README.md) provides a structured index categorized by domain.
+- **Specifications Directory**: [`docs/specs/`](docs/specs/) contains all architecture documents (`AAW_*.md`), covering:
+  - *Architektura produktu i MVP* (`AAW_PRODUCT_MVP_V0_1.md`, `AAW_PRODUCT_MVP_V0_2.md`, `AAW_V0_4*.md`)
+  - *Autonomia i iteracje* (`AAW_AUTONOMOUS_ITERATIONS_V0_1..V0_3`, `AAW_LONG_AUTONOMY_V0_1.md`, `AAW_IMPLEMENTER_*.md`)
+  - *Planowanie i walidacja* (`AAW_PLANNER_*.md`)
+  - *Routing i modele* (`AAW_MULTIROUTING_*.md`, `AAW_QUOTA_*.md`, `AAW_PATH_SCOPED_*.md`)
+  - *Bezpieczeństwo i bramka człowieka* (`AAW_PRODUCTION_USE_GATE_*.md`, `AAW_RISK_REGISTER_*.md`, `AAW_OPERATOR_*.md`)
+  - *UI i Canvas* (`AAW_CANVAS_*.md`, `AAW_UX_RUNTIME_BRIDGE_*.md`)
 
 `aaw_run_v0_1.py` is the single-task entry router. It uses deterministic
 classification first and invokes a cheaper classifier only for ambiguity.
@@ -91,10 +101,10 @@ an acceptance candidate but cannot merge, push, or open a pull request.
 
 ## Starting AAW
 
-Double-click `START_AAW.cmd`. It starts the bridge server if it is not
-already running, waits for it to become healthy, and opens the current live
-canvas in your default browser. If AAW is already running, it reuses that
-instance instead of starting a duplicate.
+Double-click `START_AAW.cmd`. It starts the AAW product application (`AAW.py`
+or `AAW.exe` in the portable release), waits for it to become healthy, and opens
+the 7-step wizard in your default browser. If AAW is already running, it reuses
+that instance instead of starting a duplicate.
 
 - Log: `.runtime\launcher\launcher.log` (bridge output: `.runtime\launcher\bridge.log`)
 - If startup fails, the console window explains why and stays open so you can
@@ -180,7 +190,7 @@ reporting guidance and operating boundaries.
 Near-term work focuses on completing portable configuration, stabilizing the
 Control Center and execution-identity surfaces, and improving descriptive
 analytics. Path-scoped branch context and a declared `MERGE`/rejoin primitive
-are implemented (see `AAW_PATH_SCOPED_BRANCH_CONTEXT_MERGE_V0_1.md`). Dynamic
+are implemented (see `docs/specs/AAW_PATH_SCOPED_BRANCH_CONTEXT_MERGE_V0_1.md`). Dynamic
 planner-driven graph mutation remains planned and requires separate design and
 safety gates.
 

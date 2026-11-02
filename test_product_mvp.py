@@ -48,10 +48,14 @@ def env(tmp_path, monkeypatch):
     bindir.mkdir()
     monkeypatch.setenv("AAW_PRODUCT_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AAW_FAKE_CALLS", str(tmp_path / "calls.jsonl"))
+    if os.name == "nt":
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     import shutil
     # Only the fake CLIs, git and the OS: a real `claude`/`codex` on this machine must not leak in.
-    system = [str(Path(shutil.which("git")).parent), "/usr/bin", "/bin"] if os.name != "nt" else \
-        os.environ["PATH"].split(os.pathsep)
+    if os.name != "nt":
+        system = [str(Path(shutil.which("git")).parent), "/usr/bin", "/bin"]
+    else:
+        system = [p for p in os.environ["PATH"].split(os.pathsep) if p and not any((Path(p) / f"{h}{ext}").is_file() for h in ("claude", "codex", "agy") for ext in ("", ".exe", ".cmd", ".bat"))]
     monkeypatch.setenv("PATH", os.pathsep.join([str(bindir), *dict.fromkeys(system)]))
     for name in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID"):
         monkeypatch.delenv(name, raising=False)

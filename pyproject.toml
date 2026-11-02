@@ -1,0 +1,21 @@
+[project]
+name = "adaptive-ai-work-engine"
+version = "0.4.0"
+description = "Adaptive AI Work Engine"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+pythonpath = ["."]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: marks end-to-end multi-pass simulation tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

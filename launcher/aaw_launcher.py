@@ -31,6 +31,8 @@ LAUNCHER_VERSION = "0.1"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BRIDGE_SERVER = REPO_ROOT / "aaw_bridge_server.py"
+AAW_PY = REPO_ROOT / "AAW.py"
+AAW_EXE = REPO_ROOT / "AAW.exe"
 RUNTIME_DIR = REPO_ROOT / ".runtime" / "launcher"
 STATE_FILE = RUNTIME_DIR / "state.json"
 LOG_FILE = RUNTIME_DIR / "launcher.log"
@@ -244,11 +246,96 @@ def _open_ui(host: str, port: int, open_browser: bool) -> str:
     return url
 
 
+# ── product server inspection & delegation ───────────────────────────────
+
+def find_product_server() -> dict | None:
+    """Check if the modern AAW product server (AAW.py) is currently active."""
+    try:
+        sys_path_added = False
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+            sys_path_added = True
+        try:
+            import product_home
+            ui_file = product_home.home() / "ui.json"
+            if ui_file.exists():
+                info = json.loads(ui_file.read_text(encoding="utf-8"))
+                port = info.get("port")
+                token = info.get("token")
+                pid = info.get("pid")
+                if port and token:
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/api/ping",
+                        headers={"X-AAW-Token": token},
+                    )
+                    with urllib.request.urlopen(req, timeout=1.0) as resp:
+                        res = json.loads(resp.read().decode("utf-8"))
+                        if res.get("ok"):
+                            return {"port": port, "token": token, "pid": pid, "url": f"http://127.0.0.1:{port}/"}
+        finally:
+            if sys_path_added and str(REPO_ROOT) in sys.path:
+                sys.path.remove(str(REPO_ROOT))
+    except Exception:
+        pass
+    return None
+
+
+def delegate_to_product(args: argparse.Namespace) -> int:
+    """Delegate launch to the canonical AAW product application (AAW.py / AAW.exe)."""
+    log("delegating start to product application")
+
+    cmd: list[str] = []
+    if AAW_EXE.is_file():
+        cmd = [str(AAW_EXE)]
+    elif AAW_PY.is_file():
+        cmd = [sys.executable, str(AAW_PY)]
+    else:
+        _fail_readable(
+            "AAW could not start.",
+            f"Neither AAW.exe nor {AAW_PY} was found.",
+            "This repository checkout looks incomplete.",
+        )
+        return 1
+
+    if not getattr(args, "open_browser", True):
+        cmd.append("--no-browser")
+    if getattr(args, "port", None) is not None and args.port != DEFAULT_PORT:
+        cmd.extend(["--port", str(args.port)])
+
+    try:
+        proc = subprocess.run(cmd, cwd=str(REPO_ROOT))
+        return proc.returncode
+    except Exception as exc:
+        _fail_readable(
+            "AAW delegation failed.",
+            f"Failed to execute product application: {exc}",
+            f"Command: {' '.join(cmd)}",
+        )
+        return 1
+
+
 # ── commands ─────────────────────────────────────────────────────────────
 
 def cmd_start(args: argparse.Namespace) -> int:
+    if not getattr(args, "legacy_canvas", False):
+        print("Delegating to AAW product application (AAW.py)...")
+        print("Notice: Use --legacy-canvas to run the legacy V0.1 canvas bridge.")
+        return delegate_to_product(args)
+
+    print("Starting legacy V0.1 canvas bridge (--legacy-canvas requested)...")
     host, port = args.host, args.port
-    log(f"launcher v{LAUNCHER_VERSION} start requested; python={sys.executable} host={host} port={port}")
+    log(f"launcher v{LAUNCHER_VERSION} start requested (legacy canvas); python={sys.executable} host={host} port={port}")
+
+    prod = find_product_server()
+    if prod and prod.get("port") == port:
+        _fail_readable(
+            "AAW legacy bridge could not start.",
+            f"Port {port} is occupied by the running AAW product server (PID {prod.get('pid')}, {prod.get('url')}).",
+            "Stop the AAW product server first, or start the legacy bridge on a different port with --port <port>.",
+        )
+        return 1
+    if prod:
+        log(f"note: AAW product server is concurrently active at {prod.get('url')} (PID {prod.get('pid')})")
 
     status, contract = check_health(host, port)
     if status == Outcome.AAW_HEALTHY:
@@ -260,10 +347,16 @@ def cmd_start(args: argparse.Namespace) -> int:
     if status == Outcome.PORT_OCCUPIED_BY_OTHER_PROCESS:
         owner = find_port_owner(port)
         owned_by = f" (PID {owner['pid']}, {owner['name']})" if owner and owner.get("pid") else ""
+        if prod and prod.get("port") == port:
+            detail = f"Port {port} is occupied by the AAW product server (PID {prod.get('pid')}, {prod.get('url')})."
+        else:
+            detail = (
+                f"Port {port} is already occupied by another process{owned_by}, "
+                "and it did not answer as an AAW bridge."
+            )
         _fail_readable(
             "AAW could not start.",
-            f"Port {port} is already occupied by another process{owned_by}, "
-            "and it did not answer as an AAW bridge.",
+            detail,
             "Stop that process yourself if it is safe to do so, or start AAW on a different "
             f"port with --port <port>. The other process was left running.",
         )
@@ -384,6 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="seconds to wait for the bridge to become healthy")
     p_start.add_argument("--no-browser", dest="open_browser", action="store_false",
                           help="do not open a browser tab")
+    p_start.add_argument("--legacy-canvas", action="store_true", default=False,
+                          help="start the legacy V0.1 canvas bridge instead of delegating to AAW.py")
     p_start.set_defaults(open_browser=True, func=cmd_start)
 
     p_stop = sub.add_parser("stop", help="stop a launcher-started AAW instance")

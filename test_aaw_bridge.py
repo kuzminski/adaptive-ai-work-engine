@@ -605,7 +605,7 @@ def test_stop_terminates_the_child_the_run_is_waiting_on(tmp_path, monkeypatch):
     killed = report["effect"]["terminated_now"]
     assert len(killed) == 1
     assert isinstance(killed[0]["process_id"], int)
-    assert killed[0]["signal"] == "TERMINATE"
+    assert killed[0]["signal"] in ("TERMINATE", "TASKKILL_TREE")
     assert elapsed < 20, f"stop took {elapsed:.1f}s; the child was waited out, not killed"
 
     state = bridge.run_state(handle["run_id"])
