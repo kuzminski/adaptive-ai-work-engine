@@ -8,6 +8,7 @@ import assert from "node:assert";
 import { ApiClient } from "../api/client";
 import { ApiError } from "../api/types";
 import { createEngineStore, isTerminalOrHoldState } from "../store/engineStore";
+import { runLayoutComponentTests } from "./layoutComponentTests";
 
 async function runTests() {
   console.log("=== Starting AAW Frontend Unit Tests ===");
@@ -295,6 +296,9 @@ async function runTests() {
     store.stopPolling();
     console.log("  ✓ EngineStore reactive polling and hold pause verified successfully");
   }
+
+  // ── Layout & Left Rail Tests ──────────────────────────────────────────────
+  await runLayoutComponentTests();
 
   console.log("\n=== ALL FRONTEND UNIT TESTS PASSED ===");
 }

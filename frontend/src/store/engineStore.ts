@@ -22,6 +22,9 @@ import {
   TaskStartResult,
 } from "../api/types";
 
+export type NavItem = "command-center" | "new-task" | "runs" | "settings";
+export type AutonomyPreset = "conservative" | "balanced" | "autonomous";
+
 export interface EngineStoreState {
   bootstrap: BootstrapData | null;
   activeRunId: string | null;
@@ -34,6 +37,10 @@ export interface EngineStoreState {
   selectedTab: DrawerTab;
   roleFilter: RoleFilter;
   pollingActive: boolean;
+  activeNav: NavItem;
+  activePolicyPreset: AutonomyPreset;
+  mcpModalOpen: boolean;
+  rightDrawerOpen: boolean;
 }
 
 const initialState: EngineStoreState = {
@@ -48,6 +55,10 @@ const initialState: EngineStoreState = {
   selectedTab: "terminal",
   roleFilter: "All",
   pollingActive: false,
+  activeNav: "command-center",
+  activePolicyPreset: "balanced",
+  mcpModalOpen: false,
+  rightDrawerOpen: true,
 };
 
 /**
@@ -422,6 +433,26 @@ export function createEngineStore(api: ApiClient = defaultClient) {
       setState({ roleFilter: filter });
     },
 
+    setActiveNav: (nav: NavItem): void => {
+      setState({ activeNav: nav });
+    },
+
+    setActivePolicyPreset: (preset: AutonomyPreset): void => {
+      setState({ activePolicyPreset: preset });
+    },
+
+    setMCPModalOpen: (open: boolean): void => {
+      setState({ mcpModalOpen: open });
+    },
+
+    setRightDrawerOpen: (open: boolean): void => {
+      setState({ rightDrawerOpen: open });
+    },
+
+    toggleRightDrawer: (): void => {
+      setState((prev) => ({ rightDrawerOpen: !prev.rightDrawerOpen }));
+    },
+
     clearError: (): void => {
       setState({ error: null });
     },
@@ -434,9 +465,21 @@ export function createEngineStore(api: ApiClient = defaultClient) {
       }
     },
 
+    startPolling: (): void => {
+      startPolling();
+    },
+
+    stopPolling: (): void => {
+      stopPolling();
+    },
+
     reset: (): void => {
       stopPolling();
       setState({ ...initialState });
+    },
+
+    _setState: (partial: Partial<EngineStoreState>): void => {
+      setState(partial);
     },
   };
 
