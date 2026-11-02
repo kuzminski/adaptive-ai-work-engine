@@ -36,7 +36,13 @@ def _version_resource() -> str | None:
 datas = [(str(ROOT / name), ".") for name in (
     "IMPLEMENTER_PROFILES.json", "MODEL_CATALOG.json", "MODEL_REGISTRY.json", "AUTONOMY_ROLES.json",
     "MODEL_RECOMMENDATIONS.json", "LICENSE")]
-datas += [(str(path), "PRODUCT_UI") for path in (ROOT / "PRODUCT_UI").iterdir() if path.is_file()]
+ui_root = ROOT / "PRODUCT_UI"
+if ui_root.is_dir():
+    datas += [
+        (str(path), (Path("PRODUCT_UI") / path.relative_to(ui_root).parent).as_posix())
+        for path in ui_root.rglob("*")
+        if path.is_file()
+    ]
 
 # Engine and product modules are plain top-level modules; several are imported
 # lazily inside functions, so they are listed explicitly.

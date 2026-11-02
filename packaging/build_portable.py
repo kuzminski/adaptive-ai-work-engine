@@ -26,6 +26,16 @@ REQUIRED_FILES = ("QUICK_START.md", "README.md", "CHANGELOG.md", "LICENSE", "VER
 
 
 def main() -> int:
+    frontend_dir = ROOT / "frontend"
+    if frontend_dir.exists():
+        npm_cmd = shutil.which("npm")
+        if npm_cmd:
+            print(f"building frontend in {frontend_dir} via npm run build...", flush=True)
+            subprocess.run([npm_cmd, "run", "build"], cwd=frontend_dir, check=True)
+        else:
+            print(f"notice: {frontend_dir} exists but npm was not found on PATH; skipping frontend build",
+                  file=sys.stderr, flush=True)
+
     build = ROOT / "build" / "pyinstaller"
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", str(DIST),
                     "--workpath", str(build), str(ROOT / "packaging" / "AAW.spec")], check=True, cwd=ROOT)

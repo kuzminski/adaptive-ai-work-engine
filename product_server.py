@@ -44,7 +44,8 @@ UI_ROOT = Path(__file__).resolve().with_name("PRODUCT_UI")
 APP_VERSION = f"AAW {product_version.RELEASE}"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
-                ".ico": "image/x-icon"}
+                ".ico": "image/x-icon", ".woff2": "font/woff2",
+                ".json": "application/json; charset=utf-8"}
 
 
 class App:
@@ -272,8 +273,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 return
             if url.path.startswith("/static/"):
                 name = url.path[len("/static/"):]
-                target = (UI_ROOT / name).resolve()
-                if UI_ROOT.resolve() not in target.parents or not target.is_file():
+                resolved_ui = UI_ROOT.resolve()
+                try:
+                    target = (UI_ROOT / name.lstrip("/\\")).resolve()
+                    if not target.is_relative_to(resolved_ui) or not target.is_file():
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+                        return
+                except (ValueError, OSError):
                     self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
                     return
                 self._send(HTTPStatus.OK, target.read_bytes(),
