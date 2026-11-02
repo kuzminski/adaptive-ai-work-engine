@@ -158,14 +158,24 @@ def classify(run_id: str, state: Mapping[str, Any] | None = None) -> dict[str, A
     if status == ac.RUNNING:
         if alive:
             return {**info, "status": S_STOPPING if stop else S_RUNNING}
-        events = _journal(run_id)
-        last = next((e for e in reversed(events) if e.get("event_type") in
-                     ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT", "RUN_RESUMED", "PHASE_STARTED", "PHASE_COMPLETED")), {})
-        if last.get("event_type") in ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT") and not lock["held"]:
-            return {**info, "status": S_PAUSED, "pause_event": last}
-        return {**info, "status": S_INTERRUPTED,
-                "detail": exit_record.get("error") or "Proces roboczy AAW zakończył się bez zapisanego zatrzymania "
-                          "(np. zamknięcie komputera lub awaria). Możesz bezpiecznie wznowić."}
+        # If worker is not alive, state might have been written right as the worker exited.
+        # Re-check fresh state from disk and exit_record to eliminate race condition.
+        fresh_state = _state(run_id)
+        if fresh_state and fresh_state.get("status") != ac.RUNNING:
+            state = fresh_state
+            status = state.get("status")
+        elif exit_record.get("status") in (ac.AWAITING_HUMAN, ac.HUMAN_APPROVED, ac.PROMOTED, ac.REJECTED):
+            status = exit_record.get("status")
+            state = {**(fresh_state or {}), "status": status}
+        else:
+            events = _journal(run_id)
+            last = next((e for e in reversed(events) if e.get("event_type") in
+                         ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT", "RUN_RESUMED", "PHASE_STARTED", "PHASE_COMPLETED")), {})
+            if last.get("event_type") in ("RUN_PAUSED", "RUN_CANCELLED_IN_FLIGHT") and not lock["held"]:
+                return {**info, "status": S_PAUSED, "pause_event": last}
+            return {**info, "status": S_INTERRUPTED,
+                    "detail": exit_record.get("error") or "Proces roboczy AAW zakończył się bez zapisanego zatrzymania "
+                              "(np. zamknięcie komputera lub awaria). Możesz bezpiecznie wznowić."}
     if status == ac.AWAITING_HUMAN:
         hold = state.get("hold") or {}
         return {**info, "status": S_GATE if hold.get("promotable") else S_ATTENTION}

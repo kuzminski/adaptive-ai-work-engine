@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 import autonomy_contract as ac  # noqa: E402
+import product_home  # noqa: E402
 import product_presets  # noqa: E402
 import product_runs as prun  # noqa: E402
 import product_view as pv  # noqa: E402
@@ -28,7 +29,7 @@ LONG = ("# Specyfikacja\n" + "Zażółć gęślą jaźń — żółć, ąę, 日
 
 
 def state_of(run_id):
-    return json.loads((prun.autonomy_dir(run_id) / "autonomy_state.json").read_text(encoding="utf-8"))
+    return product_home.read_json(prun.autonomy_dir(run_id) / "autonomy_state.json", default={})
 
 
 # ── field limits ─────────────────────────────────────────────────────────────

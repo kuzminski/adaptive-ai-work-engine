@@ -444,6 +444,17 @@ def test_resources_read_run_state(server: mcp.AawMcpServer, monkeypatch: pytest.
     assert "task" in data_tpl
     assert "state" in data_tpl
 
+    # 1b. Template direct read when no runs exist on the machine (reproduces CI clean runner)
+    monkeypatch.setattr(product_runs, "list_run_ids", lambda: [])
+    resp_empty = server.handle_message(req_tpl)
+    assert resp_empty is not None
+    assert "result" in resp_empty
+    contents_empty = resp_empty["result"]["contents"]
+    assert len(contents_empty) == 1
+    data_empty = json.loads(contents_empty[0]["text"])
+    assert data_empty["run_id"] == "{run_id}"
+    assert data_empty["state"]["status"] == "INITIAL"
+
     # 2. Specific mocked run
     test_run_id = "AAW_TASK_MOCK_123"
     monkeypatch.setattr(
@@ -520,53 +531,114 @@ def test_serve_stdio_simulation() -> None:
 
 
 def test_serve_http_transport() -> None:
+    test_token = "mcp_test_secret_token_12345"
     # Bind to port 0 for dynamic ephemeral port allocation (avoids port collisions)
-    http_server = mcp.create_http_server(host="127.0.0.1", port=0)
+    http_server = mcp.create_http_server(host="127.0.0.1", port=0, auth_token=test_token)
     assigned_port = http_server.server_address[1]
 
     thread = threading.Thread(target=http_server.serve_forever, daemon=True)
     thread.start()
 
     base_url = f"http://127.0.0.1:{assigned_port}"
+    auth_headers = {
+        "Content-Type": "application/json",
+        "X-AAW-Token": test_token,
+        "Host": f"127.0.0.1:{assigned_port}",
+    }
 
     try:
-        # GET /ping
+        # GET /ping (public healthcheck)
         with urllib.request.urlopen(f"{base_url}/ping", timeout=5) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
             assert data["status"] == "ok"
             assert data["server"] == "aaw-mcp"
 
-        # POST /mcp with ping request
-        ping_payload = json.dumps({"jsonrpc": "2.0", "id": "http-ping", "method": "ping"}).encode("utf-8")
+        # 1. Negative Test: POST /mcp without token -> 401 Unauthorized
+        ping_payload = json.dumps({"jsonrpc": "2.0", "id": "http-ping-noauth", "method": "ping"}).encode("utf-8")
+        req_unauth = urllib.request.Request(
+            f"{base_url}/mcp", data=ping_payload, headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{assigned_port}"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_unauth:
+            urllib.request.urlopen(req_unauth, timeout=5)
+        assert exc_unauth.value.code == 401
+
+        # 2. Negative Test: POST /mcp with wrong Host header -> 403 Forbidden
+        req_bad_host = urllib.request.Request(
+            f"{base_url}/mcp",
+            data=ping_payload,
+            headers={"Content-Type": "application/json", "X-AAW-Token": test_token, "Host": "evil.attacker.com"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_host:
+            urllib.request.urlopen(req_bad_host, timeout=5)
+        assert exc_host.value.code == 403
+
+        # 3. Negative Test: POST /mcp with untrusted Origin header -> 403 Forbidden
+        req_bad_origin = urllib.request.Request(
+            f"{base_url}/mcp",
+            data=ping_payload,
+            headers={**auth_headers, "Origin": "https://attacker.example.com"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_origin:
+            urllib.request.urlopen(req_bad_origin, timeout=5)
+        assert exc_origin.value.code == 403
+
+        # 4. POST /mcp with ping request and X-AAW-Token -> 200 OK
         req = urllib.request.Request(
-            f"{base_url}/mcp", data=ping_payload, headers={"Content-Type": "application/json"}
+            f"{base_url}/mcp", data=ping_payload, headers=auth_headers
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
-            assert data["id"] == "http-ping"
+            assert data["id"] == "http-ping-noauth"
             assert data["result"] == {}
 
-        # POST /mcp with notification (should return 204 No Content)
+        # 5. POST /mcp with Authorization Bearer header -> 200 OK
+        bearer_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {test_token}",
+            "Host": f"127.0.0.1:{assigned_port}",
+        }
+        req_bearer = urllib.request.Request(
+            f"{base_url}/mcp", data=ping_payload, headers=bearer_headers
+        )
+        with urllib.request.urlopen(req_bearer, timeout=5) as resp:
+            assert resp.status == 200
+
+        # 6. POST /mcp with notification -> 204 No Content
         notif_payload = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode("utf-8")
         req_notif = urllib.request.Request(
-            f"{base_url}/mcp", data=notif_payload, headers={"Content-Type": "application/json"}
+            f"{base_url}/mcp", data=notif_payload, headers=auth_headers
         )
         with urllib.request.urlopen(req_notif, timeout=5) as resp:
             assert resp.status == 204
 
-        # POST /mcp with tools/list
+        # 7. POST /mcp with tools/list
         tools_payload = json.dumps({"jsonrpc": "2.0", "id": "http-tools", "method": "tools/list"}).encode("utf-8")
         req_tools = urllib.request.Request(
-            f"{base_url}/mcp", data=tools_payload, headers={"Content-Type": "application/json"}
+            f"{base_url}/mcp", data=tools_payload, headers=auth_headers
         )
         with urllib.request.urlopen(req_tools, timeout=5) as resp:
             assert resp.status == 200
             data = json.loads(resp.read().decode("utf-8"))
             assert "tools" in data["result"]
 
-        # 404 for unknown endpoints
+        # 8. Negative Test: Malformed run_id in tool call
+        bad_run_call = json.dumps({
+            "jsonrpc": "2.0",
+            "id": "http-bad-run",
+            "method": "tools/call",
+            "params": {"name": "aaw_run_status", "arguments": {"run_id": "../../../etc/passwd"}}
+        }).encode("utf-8")
+        req_bad_run = urllib.request.Request(
+            f"{base_url}/mcp", data=bad_run_call, headers=auth_headers
+        )
+        with urllib.request.urlopen(req_bad_run, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data["result"]["isError"] is True
+            assert "Invalid run_id format" in data["result"]["content"][0]["text"]
+
+        # 9. 404 for unknown endpoints
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(f"{base_url}/unknown_endpoint", timeout=5)
         assert exc_info.value.code == 404
