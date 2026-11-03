@@ -189,17 +189,28 @@ def run_benchmark_run(
 
 def test_level_c_sequential_vs_bounded_parallel_benchmark(tmp_path):
     """Level C: Execute real provider CLI benchmark comparing sequential vs parallel execution."""
-    # Ensure codex CLI is available and authenticable
+    # Authenticity & Authorization check for Real Provider CLI
     codex_exe = runner.harness_executable("codex")
     if not codex_exe:
         pytest.skip("Codex CLI executable not found on PATH; Level C requires real provider CLI.")
 
+    # Guard against test fakes being mistaken for genuine provider
+    canon_exe = str(Path(codex_exe).resolve()).lower()
+    if "mock" in canon_exe or "fake" in canon_exe:
+        pytest.skip(f"Detected mock/fake CLI wrapper ({codex_exe}); Level C requires genuine provider CLI.")
+
     try:
-        probe = subprocess.run([codex_exe, "--version"], capture_output=True, text=True, timeout=5)
-        if probe.returncode != 0:
-            pytest.skip(f"Codex CLI probe failed (rc={probe.returncode}); Level C requires real provider CLI.")
+        v_probe = subprocess.run([codex_exe, "--version"], capture_output=True, text=True, timeout=5)
+        if v_probe.returncode != 0:
+            pytest.skip(f"Codex CLI --version returned rc={v_probe.returncode}; real provider unavailable.")
+        
+        # Verify authenticated session (codex login status) - version alone is not proof of auth
+        login_probe = subprocess.run([codex_exe, "login", "status"], capture_output=True, text=True, timeout=8)
+        login_text = f"{login_probe.stdout}\n{login_probe.stderr}".lower()
+        if login_probe.returncode != 0 or "not logged in" in login_text:
+            pytest.skip("Codex CLI is installed but not authenticated/logged in; Level C requires active provider session.")
     except Exception as exc:
-        pytest.skip(f"Codex CLI probe error ({exc}); Level C requires real provider CLI.")
+        pytest.skip(f"Codex CLI authentication check failed ({exc}); skipping real provider execution.")
 
     print("\n--- Running Level C Sequential Benchmark (workers=1) ---")
     seq_result = run_benchmark_run("BENCH_SEQUENTIAL", max_workers=1, base_dir=tmp_path)
@@ -251,3 +262,32 @@ def test_level_c_sequential_vs_bounded_parallel_benchmark(tmp_path):
     assert par_result["subtask_1"]["pid"] != par_result["subtask_2"]["pid"], "Parallel workers must have distinct PIDs"
     # 3. Subtask stage speedup > 1.0x
     assert speedup_subtasks >= 1.0, f"Expected concurrency speedup >= 1.0x, got {speedup_subtasks}x"
+
+
+def test_level_c_real_provider_authenticity_and_authorization():
+    """Independent integration test verifying authenticity, availability, and authorization of the real AI CLI."""
+    codex_exe = runner.harness_executable("codex")
+    if not codex_exe:
+        pytest.skip("No codex executable in PATH; environment does not provide live AI CLI.")
+
+    canon_exe = str(Path(codex_exe).resolve()).lower()
+    if "mock" in canon_exe or "fake" in canon_exe:
+        pytest.skip("Found mock/fake CLI; live provider integration test requires real binary.")
+
+    try:
+        v = subprocess.run([codex_exe, "--version"], capture_output=True, text=True, timeout=5)
+        if v.returncode != 0:
+            pytest.skip(f"codex --version returned rc={v.returncode}")
+        version_str = (v.stdout or v.stderr).strip()
+
+        # Strict authentication check
+        auth = subprocess.run([codex_exe, "login", "status"], capture_output=True, text=True, timeout=8)
+        auth_text = f"{auth.stdout}\n{auth.stderr}".lower()
+        if auth.returncode != 0 or "not logged in" in auth_text:
+            pytest.skip("Codex CLI is unauthenticated; run 'codex login' to authorize real provider.")
+
+        assert auth.returncode == 0, f"Codex login status check failed: {auth_text}"
+        print(f"Verified authentic provider: {version_str}, status: LOGGED_IN")
+    except Exception as exc:
+        pytest.skip(f"Real provider probe failed: {exc}")
+

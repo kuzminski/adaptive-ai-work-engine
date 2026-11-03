@@ -2,6 +2,7 @@
 """Tests for AAW Adaptive Policy Engine (Phase P3 Mandate)."""
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -260,7 +261,8 @@ def test_shadow_mode_computes_predicted_benefits() -> None:
     assert decision.mode == ap.MODE_SHADOW
     assert decision.shadow_diff is not None
     benefits = decision.shadow_diff["predicted_benefits"]
-    assert benefits["predicted_speedup"] >= 1.3
+    speedup = benefits["predicted_speedup"]["value"] if isinstance(benefits["predicted_speedup"], dict) else benefits["predicted_speedup"]
+    assert speedup >= 1.3
     assert "risk_mitigation" in benefits
     assert "predicted_quality_delta" in benefits
     assert decision.shadow_diff["executed_strategy"] == "S1"
@@ -283,4 +285,135 @@ def test_controlled_adaptive_requires_explicit_opt_in() -> None:
     assert decision.workers_count == 2
     assert decision.selected_strategy == "S2"
     assert decision.shadow_diff is None
+
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gate 3: Hard Gating for CONTROLLED_ADAPTIVE & Passive SHADOW Invariants
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_verified_runs(count: int, corrupted: bool = False) -> list[dict]:
+    runs = []
+    for i in range(1, count + 1):
+        runs.append({
+            "run_id": f"RUN_PROD_{i:04d}",
+            "status": "COMPLETED",
+            "provenance": "REAL_MEASURED",
+            "telemetry": {
+                "wall_time_s": 12.5 if not (corrupted and i == count) else 0.0,
+                "tokens_total": 450 if not (corrupted and i == count) else 0,
+            },
+        })
+    return runs
+
+
+def test_gate3_controlled_mode_refused_at_0_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW when no authorization/telemetry exists"
+    audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
+    assert audit_file.is_file()
+    assert "REFUSAL_OPERATOR_AUTHORIZATION_MISSING" in audit_file.read_text(encoding="utf-8")
+
+
+def test_gate3_controlled_mode_refused_at_99_runs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    auth_file = tmp_path / ap.CONTROLLED_AUTHORIZATION_FILE
+    auth_file.write_text(json.dumps({
+        "policy_version": ap.POLICY_VERSION,
+        "authorized_mode": ap.MODE_CONTROLLED_ADAPTIVE,
+        "authorized_by": "lead-engineer@organization.invalid",
+        "authorization_token": "AUTH_TOKEN_TEST_99",
+        "revoked": False,
+        "runs_summary": _make_verified_runs(99),
+    }), encoding="utf-8")
+
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW with 99 verified runs (< 100)"
+    audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
+    assert "99/100 verified runs required" in audit_file.read_text(encoding="utf-8")
+
+
+def test_gate3_controlled_mode_refused_at_100_runs_without_operator_auth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    runs_file = tmp_path / "VERIFIED_PRODUCTION_RUNS.jsonl"
+    with runs_file.open("w", encoding="utf-8") as f:
+        for r in _make_verified_runs(100):
+            f.write(json.dumps(r) + "\n")
+
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW if authorization record is missing"
+
+
+def test_gate3_controlled_mode_refused_at_100_runs_with_corrupted_telemetry(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    auth_file = tmp_path / ap.CONTROLLED_AUTHORIZATION_FILE
+    auth_file.write_text(json.dumps({
+        "policy_version": ap.POLICY_VERSION,
+        "authorized_mode": ap.MODE_CONTROLLED_ADAPTIVE,
+        "authorized_by": "lead-engineer@organization.invalid",
+        "authorization_token": "AUTH_TOKEN_TEST_CORRUPT",
+        "revoked": False,
+        "runs_summary": _make_verified_runs(100, corrupted=True),
+    }), encoding="utf-8")
+
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW if telemetry is corrupted/incomplete"
+
+
+def test_gate3_controlled_mode_accepted_with_100_runs_and_operator_auth(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    auth_file = tmp_path / ap.CONTROLLED_AUTHORIZATION_FILE
+    auth_file.write_text(json.dumps({
+        "policy_version": ap.POLICY_VERSION,
+        "authorized_mode": ap.MODE_CONTROLLED_ADAPTIVE,
+        "authorized_by": "lead-engineer@organization.invalid",
+        "authorization_token": "AUTH_TOKEN_VALID_100",
+        "revoked": False,
+        "scope": ["PARALLEL_EXECUTION", "BUDGET_CLAMP"],
+        "runs_summary": _make_verified_runs(100),
+    }), encoding="utf-8")
+
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_CONTROLLED_ADAPTIVE, "Must accept CONTROLLED_ADAPTIVE when 100 runs and operator auth pass"
+
+
+def test_gate3_controlled_mode_refused_when_auth_revoked(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
+    auth_file = tmp_path / ap.CONTROLLED_AUTHORIZATION_FILE
+    auth_file.write_text(json.dumps({
+        "policy_version": ap.POLICY_VERSION,
+        "authorized_mode": ap.MODE_CONTROLLED_ADAPTIVE,
+        "authorized_by": "lead-engineer@organization.invalid",
+        "authorization_token": "AUTH_TOKEN_REVOKED",
+        "revoked": True,
+        "revoked_at": "2026-11-03T02:00:00Z",
+        "runs_summary": _make_verified_runs(100),
+    }), encoding="utf-8")
+
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW when authorization is revoked"
+
+
+def test_gate3_active_mode_is_permanently_locked(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AAW_ADAPTIVE_MODE", "ACTIVE")
+    mode = ap.resolve_effective_mode(stats_root=tmp_path)
+    assert mode == ap.MODE_SHADOW, "ACTIVE mode must never activate without independent deployment approval"
+    audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
+    assert "REFUSAL_ACTIVE_MODE_LOCKED" in audit_file.read_text(encoding="utf-8")
+
+
+def test_gate3_policy_health_persistence_across_restarts(tmp_path: Path) -> None:
+    h1 = ap.PolicyHealthState()
+    h1.record_run_result(success=False, had_merge_failure=True, repair_cycles=2, cost_usd=0.015)
+    h1.record_run_result(success=False, had_merge_failure=False, repair_cycles=1, cost_usd=0.010)
+    ap.save_policy_health(h1, stats_root=tmp_path)
+
+    # Reload simulated restart
+    h2 = ap.load_policy_health(stats_root=tmp_path)
+    assert h2.consecutive_errors == 2
+    assert h2.merge_failures == 1
+    assert h2.repair_cycles_history == [2, 1]
+    assert round(h2.cumulative_spend_usd, 4) == 0.025
 

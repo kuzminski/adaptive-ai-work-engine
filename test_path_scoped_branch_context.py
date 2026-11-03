@@ -352,6 +352,7 @@ def test_graph_projection_reports_zero_of_n_before_any_arrival(tmp_path, monkeyp
         return real_execute_merge(state, node, journal)
 
     monkeypatch.setattr(runner, "execute_merge", spying_execute_merge)
+    _install_fake_llm(monkeypatch, scripts)
     # Inspect the merge bookkeeping as seeded, before the run does anything:
     # this mirrors what `execute()` writes before the frontier loop starts.
     workflow = load_workflow(MERGE_SLICE)

@@ -24,9 +24,131 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import model_router as mr
+from aaw_paths import STATS_ROOT
 import adaptive_orchestrator as ao
 
 POLICY_VERSION = "AAW_ADAPTIVE_POLICY_V1.0"
+
+MIN_VERIFIED_RUNS_FOR_CONTROLLED = 100
+CONTROLLED_AUTHORIZATION_FILE = "CONTROLLED_ADAPTIVE_AUTHORIZATION.json"
+MODE_AUDIT_LOG_FILE = "ADAPTIVE_MODE_AUDIT.jsonl"
+
+
+def _append_mode_audit(stats_root: Path | None, event_type: str, details: dict[str, Any]) -> None:
+    try:
+        root = stats_root or STATS_ROOT
+        root.mkdir(parents=True, exist_ok=True)
+        log_file = root / MODE_AUDIT_LOG_FILE
+        record = {
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "event": event_type,
+            "policy_version": POLICY_VERSION,
+            **details,
+        }
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def verify_controlled_mode_authorization(
+    stats_root: Path | None = None,
+    auth_file: Path | None = None,
+) -> tuple[bool, str, dict[str, Any] | None]:
+    """Verify operator authorization and telemetry criteria for CONTROLLED_ADAPTIVE mode."""
+    root = stats_root or STATS_ROOT
+    target_auth = auth_file or (root / CONTROLLED_AUTHORIZATION_FILE)
+
+    if not target_auth.is_file():
+        return False, "REFUSAL_OPERATOR_AUTHORIZATION_MISSING: authorization file not found", None
+
+    try:
+        auth_data = json.loads(target_auth.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"REFUSAL_CORRUPTED_AUTHORIZATION: {exc}", None
+
+    if auth_data.get("policy_version") != POLICY_VERSION:
+        return False, f"REFUSAL_POLICY_VERSION_MISMATCH: expected {POLICY_VERSION}, got {auth_data.get('policy_version')}", auth_data
+
+    if auth_data.get("revoked") is True:
+        return False, f"REFUSAL_AUTHORIZATION_REVOKED: revoked at {auth_data.get('revoked_at')}", auth_data
+
+    if auth_data.get("authorized_mode") != MODE_CONTROLLED_ADAPTIVE:
+        return False, f"REFUSAL_INVALID_AUTHORIZED_MODE: {auth_data.get('authorized_mode')}", auth_data
+
+    authorized_by = auth_data.get("authorized_by")
+    agent_roles = {"CODE_IMPLEMENTER", "INDEPENDENT_REVIEWER", "PLANNER", "AUTONOMY_CONTROLLER", "REPAIRER", "MODEL"}
+    if not isinstance(authorized_by, str) or not authorized_by.strip() or authorized_by.upper() in agent_roles:
+        return False, f"REFUSAL_UNAUTHORIZED_OPERATOR: verified human operator identity required, got {authorized_by}", auth_data
+
+    token = auth_data.get("authorization_token")
+    if not isinstance(token, str) or not token.strip():
+        return False, "REFUSAL_MISSING_AUTHORIZATION_TOKEN", auth_data
+
+    # Check verified telemetry history
+    runs_file = root / "VERIFIED_PRODUCTION_RUNS.jsonl"
+    runs_data = []
+    if runs_file.is_file():
+        try:
+            for line in runs_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    runs_data.append(json.loads(line))
+        except Exception as exc:
+            return False, f"REFUSAL_CORRUPTED_TELEMETRY: {exc}", auth_data
+    elif "runs_summary" in auth_data and isinstance(auth_data["runs_summary"], list):
+        runs_data = auth_data["runs_summary"]
+
+    valid_runs = 0
+    seen_ids = set()
+    for row in runs_data:
+        rid = row.get("run_id")
+        if not rid or rid in seen_ids:
+            continue
+        seen_ids.add(rid)
+        if row.get("status") not in ("COMPLETED", "WAITING_FOR_HUMAN"):
+            continue
+        if row.get("provenance") not in ("REAL_MEASURED", "REAL_PRODUCTION"):
+            continue
+        tel = row.get("telemetry") or {}
+        if not tel or (tel.get("wall_time_s", 0) <= 0 and tel.get("tokens_total", 0) <= 0):
+            continue
+        valid_runs += 1
+
+    if valid_runs < MIN_VERIFIED_RUNS_FOR_CONTROLLED:
+        return False, f"REFUSAL_INSUFFICIENT_TELEMETRY: {valid_runs}/{MIN_VERIFIED_RUNS_FOR_CONTROLLED} verified runs required", auth_data
+
+    return True, "AUTHORIZED_CONTROLLED_ADAPTIVE", auth_data
+
+
+def load_policy_health(stats_root: Path | None = None) -> PolicyHealthState:
+    root = stats_root or STATS_ROOT
+    health_file = root / "POLICY_HEALTH.json"
+    if health_file.is_file():
+        try:
+            data = json.loads(health_file.read_text(encoding="utf-8"))
+            return PolicyHealthState(
+                consecutive_errors=int(data.get("consecutive_errors", 0)),
+                merge_failures=int(data.get("merge_failures", 0)),
+                repair_cycles_history=list(data.get("repair_cycles_history", [])),
+                cumulative_spend_usd=float(data.get("cumulative_spend_usd", 0.0)),
+                budget_limit_usd=float(data["budget_limit_usd"]) if data.get("budget_limit_usd") is not None else None,
+                force_rollback=bool(data.get("force_rollback", False)),
+                force_rollback_reason=data.get("force_rollback_reason"),
+            )
+        except Exception:
+            pass
+    return PolicyHealthState()
+
+
+def save_policy_health(health: PolicyHealthState, stats_root: Path | None = None) -> None:
+    root = stats_root or STATS_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    health_file = root / "POLICY_HEALTH.json"
+    data = dataclasses.asdict(health)
+    tmp = health_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(health_file)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Constraint Hierarchy & Operation Modes
@@ -137,33 +259,52 @@ class PolicyDecision:
 
 def resolve_effective_mode(
     context: Mapping[str, Any] | None = None,
+    stats_root: Path | None = None,
 ) -> str:
-    """Determine operating mode from env vars, context, or defaults.
+    """Determine operating mode with hard gating for CONTROLLED_ADAPTIVE.
     
     P3 Gating Rule: Default mode is strictly MODE_SHADOW unless explicitly
-    overridden. CONTROLLED_ADAPTIVE mode is only unlocked via explicit opt-in.
+    overridden. CONTROLLED_ADAPTIVE requires verified operator authorization and
+    at least 100 verified production runs. ACTIVE mode is permanently locked.
     """
+    root = stats_root or STATS_ROOT
+    requested_mode = None
+
     env_mode = os.environ.get("AAW_ADAPTIVE_MODE", "").upper().strip()
     if env_mode in OPERATING_MODES:
-        return env_mode
+        requested_mode = env_mode
+    elif context and context.get("adaptive_mode") in OPERATING_MODES:
+        requested_mode = str(context["adaptive_mode"])
 
-    # Check boolean flags for backwards compatibility
+    # Boolean flags for backwards compatibility
     env_enabled = os.environ.get("AAW_ADAPTIVE_ORCHESTRATION_ENABLED", "").lower().strip()
-    if env_enabled in ("0", "false", "no", "off"):
+    if env_enabled in ("0", "false", "no", "off") or (context and context.get("adaptive_orchestration_enabled") is False):
+        requested_mode = MODE_DISABLED
+    elif requested_mode is None and (env_enabled in ("1", "true", "yes", "on") or (context and context.get("adaptive_orchestration_enabled") is True)):
+        requested_mode = MODE_SHADOW
+
+    if requested_mode is None:
+        requested_mode = MODE_SHADOW
+
+    if requested_mode == MODE_DISABLED:
         return MODE_DISABLED
-    if env_enabled in ("1", "true", "yes", "on"):
-        # Explicitly enabling adaptation in Phase P3 defaults to SHADOW mode
+
+    if requested_mode == MODE_ACTIVE:
+        _append_mode_audit(root, "REFUSAL_ACTIVE_MODE_LOCKED", {"requested": requested_mode, "fallback": MODE_SHADOW})
         return MODE_SHADOW
 
-    if context:
-        if context.get("adaptive_mode") in OPERATING_MODES:
-            return str(context["adaptive_mode"])
-        if context.get("adaptive_orchestration_enabled") is False:
-            return MODE_DISABLED
-        if context.get("adaptive_orchestration_enabled") is True:
+    if requested_mode == MODE_CONTROLLED_ADAPTIVE:
+        ok, reason, auth_data = verify_controlled_mode_authorization(root)
+        if ok:
+            _append_mode_audit(root, "MODE_AUTHORIZED_CONTROLLED", {
+                "authorized_by": auth_data.get("authorized_by") if auth_data else "UNKNOWN",
+                "scope": auth_data.get("scope") if auth_data else [],
+            })
+            return MODE_CONTROLLED_ADAPTIVE
+        else:
+            _append_mode_audit(root, "REFUSAL_CONTROLLED_ADAPTIVE_UNMET", {"requested": requested_mode, "reason": reason, "fallback": MODE_SHADOW})
             return MODE_SHADOW
 
-    # Safe fail-closed default: P3 is gated to SHADOW mode only
     return MODE_SHADOW
 
 
@@ -451,23 +592,39 @@ def _apply_shadow_mode_guard(
     cost_ratio = round(rec_cost / base_cost, 2) if base_cost > 0 else 1.0
 
     if adaptive_decision.deterministic_short_circuit:
-        predicted_quality_delta = "Identical (deterministic algorithm, 0% hallucination risk)"
-        risk_mitigation = "Bypasses LLM entirely; zero token spend and immediate completion."
+        predicted_quality_delta = {
+            "provenance": "ARCHITECTURAL_INVARIANT",
+            "assessment": "Identical result guaranteed; zero LLM generation variance",
+        }
+        risk_mitigation = "Bypasses external LLM entirely; zero token spend and immediate completion."
     elif adaptive_decision.selected_strategy == "CRITICAL_INDEPENDENT_REVIEW":
-        predicted_quality_delta = "+35% defect catch rate via Opus independent reviewer"
+        predicted_quality_delta = {
+            "provenance": "PREDICTED",
+            "assessment": "Enhanced defect detection via independent Opus reviewer (estimated heuristic range [15%, 40%], uncalibrated production baseline)",
+        }
         risk_mitigation = "Mandatory independent reviewer gate blocks silent defect propagation."
     elif adaptive_decision.selected_template == ao.TEMPLATE_SERIAL_FALLBACK:
-        predicted_quality_delta = "+100% merge integrity (zero race condition risk)"
+        predicted_quality_delta = {
+            "provenance": "ARCHITECTURAL_INVARIANT",
+            "assessment": "Serialized execution eliminates write-write merge collision risks",
+        }
         risk_mitigation = "Detects file overlap upfront, preventing worktree merge collision."
     elif adaptive_decision.workers_count > 1:
-        predicted_quality_delta = "Equivalent (isolated worktrees verified before merge)"
+        predicted_quality_delta = {
+            "provenance": "CALIBRATED_SIMULATION",
+            "assessment": "Equal quality floor maintained across isolated worktree tasks",
+        }
         risk_mitigation = f"Bounded to {adaptive_decision.workers_count} concurrent workers with clean scope separation."
     else:
-        predicted_quality_delta = "Baseline"
+        predicted_quality_delta = {
+            "provenance": "REAL_MEASURED",
+            "assessment": "Baseline single executor reference quality",
+        }
         risk_mitigation = "Conservative single executor baseline."
 
     shadow_diff = {
         "divergence": divergence,
+        "guard_notice": f"Shadow Mode active: recommended {adaptive_decision.rule_id} ({adaptive_decision.selected_strategy}); actual execution guarded to baseline S1.",
         "recommended_rule_id": adaptive_decision.rule_id,
         "recommended_strategy": adaptive_decision.selected_strategy,
         "recommended_workers": adaptive_decision.workers_count,
@@ -479,8 +636,16 @@ def _apply_shadow_mode_guard(
         "executed_workers": baseline_workers,
         "executed_model": baseline_model,
         "predicted_benefits": {
-            "predicted_speedup": predicted_speedup,
-            "predicted_cost_ratio": cost_ratio,
+            "predicted_speedup": {
+                "value": predicted_speedup,
+                "provenance": "CALIBRATED_SIMULATION" if adaptive_decision.workers_count > 1 else "ARCHITECTURAL_INVARIANT",
+                "method": "Amdahl scaling model (25% coordination overhead parameter)" if adaptive_decision.workers_count > 1 else "Direct bypass",
+            },
+            "predicted_cost_ratio": {
+                "value": cost_ratio,
+                "provenance": "CALIBRATED_SIMULATION",
+                "method": "Catalog standard tier pricing model",
+            },
             "predicted_quality_delta": predicted_quality_delta,
             "risk_mitigation": risk_mitigation,
         },
@@ -500,7 +665,7 @@ def _apply_shadow_mode_guard(
         deterministic_short_circuit=adaptive_decision.deterministic_short_circuit,
         is_rollback=adaptive_decision.is_rollback,
         rollback_reason=adaptive_decision.rollback_reason,
-        justification=f"Shadow Mode active: recommended {adaptive_decision.rule_id} ({adaptive_decision.selected_strategy}); actual execution guarded to baseline S1.",
+        justification=adaptive_decision.justification,
         mode=MODE_SHADOW,
         shadow_diff=shadow_diff,
         conflict_analysis=adaptive_decision.conflict_analysis,

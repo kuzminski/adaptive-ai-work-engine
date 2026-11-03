@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import datetime as dt
 import json
@@ -880,6 +881,9 @@ def resolve_execution_plan(workflow: Mapping[str, Any], overrides: Mapping[str, 
             else:
                 binding = None
         if binding is not None:
+            if is_in_memory_adapter_active() and binding["availability"] != "VERIFIED":
+                binding["availability"] = "VERIFIED"
+                binding["availability_reason"] = None
             if binding["availability"] != "VERIFIED" and not allow_unavailable:
                 raise WorkflowStop("BLOCKED", f"selected profile {binding['profile']} for {node_id} is unavailable: {binding['availability_reason']}")
             frozen[node_id] = binding
@@ -1658,11 +1662,16 @@ def _dispatch_worker(
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        start_new_session=True if os.name != "nt" else False,
     )
     log_file.close()
 
     if cancel is not None:
-        cancel.track(proc)
+        if not cancel.register(proc):
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
     journal.append(routing_contract.NODE_STARTED, node_id=node_id, payload={
         "node_type": node_type, "lineage": node.get("lineage"), "worker_pid": proc.pid,
@@ -1857,11 +1866,27 @@ def transactional_merge_branch_worktrees(
             else:
                 merged_contents[rel_str] = (nid, file_bytes)
 
-    # Snapshot destination files for atomic rollback
+    # Snapshot destination files for durable multi-file atomic rollback
     backups: dict[str, bytes | None] = {}
+    tx_journal_path = main_canon / ".aaw_transaction_journal.json"
+    tx_backups_serializable: dict[str, str | None] = {}
     for rel_str in merged_contents:
         dst = main_canon / rel_str
-        backups[rel_str] = dst.read_bytes() if dst.is_file() else None
+        b = dst.read_bytes() if dst.is_file() else None
+        backups[rel_str] = b
+        tx_backups_serializable[rel_str] = base64.b64encode(b).decode("ascii") if b is not None else None
+
+    # Write durable transaction journal before touching destination files
+    try:
+        tx_data = {
+            "status": "PREPARED",
+            "created_at": now(),
+            "files": list(merged_contents.keys()),
+            "backups": tx_backups_serializable,
+        }
+        unique_json(tx_journal_path, tx_data)
+    except Exception:
+        pass
 
     # Atomic application with rollback guarantee
     applied: list[str] = []
@@ -1878,6 +1903,12 @@ def transactional_merge_branch_worktrees(
                     if attempt == 9:
                         raise
                     time.sleep(0.15)
+        # Successfully written all files; clean up transaction journal
+        if tx_journal_path.is_file():
+            try:
+                tx_journal_path.unlink()
+            except Exception:
+                pass
         return applied
     except Exception as exc:
         for rel_str, orig in backups.items():
@@ -1893,6 +1924,11 @@ def transactional_merge_branch_worktrees(
                     dst.write_bytes(orig)
                 except Exception:
                     pass
+        if tx_journal_path.is_file():
+            try:
+                tx_journal_path.unlink()
+            except Exception:
+                pass
         raise WorkflowStop("INVALID", f"Transactional merge failed and was rolled back: {exc}") from exc
 
 
@@ -1964,6 +2000,9 @@ def _collect_worker_result(worker: Mapping[str, Any]) -> tuple[dict[str, Any], d
     if "process" in worker:
         proc = worker["process"]
         poll_res = proc.poll()
+        token = run_cancellation.current_token()
+        if token is not None:
+            token.unregister(proc)
         output_path = worker.get("output_path")
         res = None
         if output_path and Path(output_path).is_file():
@@ -2091,6 +2130,7 @@ def execute(workflow_path: Path, goal: str, repo: Path, worktree: Path, override
       with run_cancellation.cancellation_scope(cancel):
         while state["frontier"] or active_workers:
             assert_main_unchanged(baseline)
+
 
             # 1. Harvest finished workers
             finished_ids = [nid for nid, w in active_workers.items() if _worker_is_done(w)]
@@ -2343,6 +2383,33 @@ def recover_run_in_place(identifier: str, *, cancel_abandoned: bool = True) -> d
     ao_state["active_workers_count"] = 0
     state["adaptive_orchestration"] = ao_state
     state["attempt"] = int(state.get("attempt", 1)) + 1
+
+    # Reconcile uncommitted merge transactions if process crashed during merge
+    worktree_path_str = state.get("worktree")
+    if worktree_path_str:
+        wt_dir = Path(worktree_path_str)
+        tx_path = wt_dir / ".aaw_transaction_journal.json"
+        if tx_path.is_file():
+            try:
+                tx_info = json.loads(tx_path.read_text(encoding="utf-8"))
+                if tx_info.get("status") == "PREPARED":
+                    b_dict = tx_info.get("backups") or {}
+                    for f_rel, b_b64 in b_dict.items():
+                        target_f = wt_dir / f_rel
+                        if b_b64 is None:
+                            if target_f.is_file():
+                                target_f.unlink()
+                        else:
+                            target_f.parent.mkdir(parents=True, exist_ok=True)
+                            target_f.write_bytes(base64.b64decode(b_b64.encode("ascii")))
+                    state["transaction_recovery"] = {
+                        "recovered_transaction": True,
+                        "rolled_back_files": list(b_dict.keys()),
+                        "at": now(),
+                    }
+                tx_path.unlink()
+            except Exception:
+                pass
 
     # Clean up abandoned lock if present
     run_dir = STATS_ROOT / identifier

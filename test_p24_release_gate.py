@@ -10,6 +10,7 @@ Validates:
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -248,3 +249,95 @@ def test_verification_failure_never_creates_promotable_candidate(tmp_path: Path)
         try_promote(candidate)
 
     assert exc.value.status == "UNVERIFIED"
+
+
+
+def test_crash_recovery_restores_uncommitted_merge_transaction(tmp_path: Path, monkeypatch) -> None:
+    """Gate 5: Mid-merge crash recovery restores pre-transaction file contents atomically."""
+    import base64
+    import workflow_runner as runner
+
+    stats = tmp_path / "03_STATS"
+    stats.mkdir()
+    monkeypatch.setattr(runner, "STATS_ROOT", stats)
+
+    run_id = "RUN_TX_RECOVERY_TEST"
+    run_dir = stats / run_id / "WORKFLOW"
+    run_dir.mkdir(parents=True)
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (wt / "file_a.txt").write_text("original A content\n", encoding="utf-8")
+    (wt / "file_b.txt").write_text("partially written new B\n", encoding="utf-8")
+    (wt / "new_file_c.txt").write_text("uncommitted newly created C\n", encoding="utf-8")
+
+    # Prepared transaction journal representing a crash mid-copy
+    tx_journal = wt / ".aaw_transaction_journal.json"
+    tx_data = {
+        "status": "PREPARED",
+        "created_at": "2026-11-03T02:00:00Z",
+        "files": ["file_b.txt", "new_file_c.txt"],
+        "backups": {
+            "file_b.txt": base64.b64encode(b"original B content\n").decode("ascii"),
+            "new_file_c.txt": None,
+        },
+    }
+    tx_journal.write_text(json.dumps(tx_data), encoding="utf-8")
+
+    state = {
+        "AAW_RUN_ID": run_id,
+        "workflow_id": "TX_TEST",
+        "status": "RUNNING",
+        "worktree": str(wt),
+        "started_at": "2026-11-03T02:00:00Z",
+        "llm_calls": 0,
+        "completed_nodes": [],
+        "repair_cycle": 0,
+        "telemetry": [],
+        "adaptive_orchestration": {"running_nodes": {}, "active_workers_count": 0},
+    }
+    (run_dir / "workflow_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    # Perform in-place crash recovery
+    rec_state = runner.recover_run_in_place(run_id)
+    assert rec_state["status"] == "BLOCKED"
+    assert rec_state.get("transaction_recovery", {}).get("recovered_transaction") is True
+
+    # Assert pristine pre-transaction state
+    assert (wt / "file_a.txt").read_text(encoding="utf-8") == "original A content\n"
+    assert (wt / "file_b.txt").read_text(encoding="utf-8") == "original B content\n"
+    assert not (wt / "new_file_c.txt").exists(), "Newly created uncommitted file must be removed"
+    assert not tx_journal.exists(), "Transaction journal must be cleared after atomic rollback"
+
+
+def test_shadow_mode_execution_equivalence_with_disabled(tmp_path: Path, monkeypatch) -> None:
+    """Gate 2: SHADOW mode does not alter actual execution semantics compared to DISABLED."""
+    import adaptive_policy as ap
+    import autonomy_controller as ac
+    import adaptive_orchestrator as ao
+
+    # Verify both modes select identical baseline execution DAG/path
+    task = {
+        "id": "T_EQUIV_01",
+        "task_class": "MODERATE",
+        "criticality": "NORMAL",
+        "subtasks": [
+            {"id": "S1", "files_to_change": ["a.py"]},
+            {"id": "S2", "files_to_change": ["b.py"]},
+        ],
+    }
+
+    dec_disabled = ap.evaluate_policy(task, mode=ap.MODE_DISABLED)
+    dec_shadow = ap.evaluate_policy(task, mode=ap.MODE_SHADOW)
+
+    # In both modes, the executed baseline must be S1 single executor
+    assert dec_disabled.selected_template == ao.TEMPLATE_SINGLE_EXECUTOR
+    assert dec_disabled.workers_count == 1
+    assert dec_disabled.mode == ap.MODE_DISABLED
+
+    # Shadow returns recommendation with shadow_diff attached
+    assert dec_shadow.mode == ap.MODE_SHADOW
+    assert dec_shadow.shadow_diff is not None
+    assert dec_shadow.shadow_diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
+    assert dec_shadow.shadow_diff["executed_workers"] == 1
+

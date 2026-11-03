@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import signal
 import subprocess
 import threading
 from contextlib import contextmanager
@@ -174,8 +175,16 @@ class CancellationToken:
             record["signal"] = "TASKKILL_TREE"
         else:
             try:
-                process.terminate()
-                record["signal"] = "TERMINATE"
+                if hasattr(os, "killpg") and hasattr(os, "getpgid") and os.name != "nt":
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                        record["signal"] = "SIGTERM_PGID"
+                    except Exception:
+                        process.terminate()
+                        record["signal"] = "TERMINATE"
+                else:
+                    process.terminate()
+                    record["signal"] = "TERMINATE"
             except Exception as exc:  # a child that vanished is already stopped
                 record["signal"] = f"TERMINATE_FAILED: {exc}"
                 return record

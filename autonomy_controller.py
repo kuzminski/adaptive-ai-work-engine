@@ -1319,45 +1319,43 @@ class AutonomyController:
                 telemetry=self._telemetry() if hasattr(self, "_telemetry") else None,
                 adaptive_enabled=True,
             )
-            effective_strategy = strategy
-            if strategy.get("mode") == "SHADOW":
-                effective_strategy = dict(strategy)
-                effective_strategy["selected_template"] = ao.TEMPLATE_SINGLE_EXECUTOR
-                effective_strategy["workers_count"] = 1
-                effective_strategy["model_profile"] = "GPT6_LUNA_HIGH"
-
-            dag = ao.generate_adaptive_dag(effective_strategy, goal=plan["goal"], subtasks=task_def.get("subtasks"))
-            valid, dag_errs = ao.validate_dag_structure(dag)
-            if not valid:
-                self._escalate(ac.E_PLAN_INVALID, f"Adaptive DAG invalid: {dag_errs}", iteration_id)
-                return
+            mode = strategy.get("mode", "SHADOW")
 
             run_root = self.stats_root / self.run_id
             autonomy_path = run_root / "AUTONOMY"
-            workflow_path = run_root / "WORKFLOW"
             autonomy_path.mkdir(parents=True, exist_ok=True)
-            workflow_path.mkdir(parents=True, exist_ok=True)
             strategy_file = autonomy_path / "adaptive_strategy.json"
-            dag_file = workflow_path / "adaptive_workflow.json"
             _atomic_json(strategy_file, strategy)
-            _atomic_json(dag_file, dag)
 
             self.journal.append("ADAPTIVE_STRATEGY_SELECTED", iteration_id=iteration_id, phase=ac.PLAN, payload={
                 "strategy": strategy,
                 "strategy_file": str(strategy_file),
-                "workflow_file": str(dag_file),
+                "mode": mode,
                 "template": strategy.get("selected_template"),
                 "workers_count": strategy.get("workers_count"),
                 "reason_code": strategy.get("reason_code"),
+                "shadow_diff": strategy.get("shadow_diff"),
             })
             self.state["adaptive_orchestration"] = {
-                "enabled": True,
+                "enabled": (mode == "CONTROLLED_ADAPTIVE"),
+                "mode": mode,
                 "strategy": strategy,
-                "workflow_path": str(dag_file),
                 "strategy_path": str(strategy_file),
                 "task_definition": task_def,
             }
             self._it()["adaptive_strategy"] = strategy
+
+            if mode == "CONTROLLED_ADAPTIVE":
+                workflow_path = run_root / "WORKFLOW"
+                workflow_path.mkdir(parents=True, exist_ok=True)
+                dag = ao.generate_adaptive_dag(strategy, goal=plan["goal"], subtasks=task_def.get("subtasks"))
+                valid, dag_errs = ao.validate_dag_structure(dag)
+                if not valid:
+                    self._escalate(ac.E_PLAN_INVALID, f"Adaptive DAG invalid: {dag_errs}", iteration_id)
+                    return
+                dag_file = workflow_path / "adaptive_workflow.json"
+                _atomic_json(dag_file, dag)
+                self.state["adaptive_orchestration"]["workflow_path"] = str(dag_file)
 
         self.state["planning"] = None
         self._record_working_roadmap(plan, index, iteration_id)
@@ -1391,7 +1389,7 @@ class AutonomyController:
 
     def _do_execute(self) -> None:
         adaptive = self.state.get("adaptive_orchestration") or {}
-        if adaptive.get("enabled"):
+        if adaptive.get("enabled") and adaptive.get("workflow_path"):
             import workflow_runner as wr
             wf_path = Path(adaptive["workflow_path"])
             cancel_token = run_cancellation.current_token()
@@ -1421,11 +1419,13 @@ class AutonomyController:
             if wf_state.get("status") == "WAITING_FOR_HUMAN":
                 candidate = wf_state.get("candidate") or {}
                 if candidate:
+                    is_candidate_verified = bool(candidate.get("verified")) and bool(candidate.get("ready_for_acceptance")) and candidate.get("verification_status") == "PASS"
                     self.state["candidate"] = candidate
                     self.state["hold"] = {
                         "reason": ac.HOLD_AWAITING_INITIAL_APPROVAL if len(self.state["iterations"]) <= 1 else ac.HOLD_CONTINUATION,
                         "candidate_id": candidate.get("candidate_id"),
-                        "promotable": True,
+                        "promotable": is_candidate_verified,
+                        "verification_status": candidate.get("verification_status", "UNVERIFIED"),
                         "at": _now(),
                     }
                 self.journal.append("ADAPTIVE_DAG_COMPLETED", iteration_id=self._iteration_id(), phase=ac.EXECUTE, payload={
@@ -1447,6 +1447,8 @@ class AutonomyController:
                 return
 
         # Original single-executor path
+        if adaptive.get("strategy") and adaptive.get("strategy", {}).get("shadow_diff"):
+            self._it()["shadow_diff"] = adaptive["strategy"]["shadow_diff"]
         result = self._call("execute", "implementer", {"iteration": self._it(), "plan": self._it()["plan"]})
         if self.state["status"] != ac.RUNNING:
             return
