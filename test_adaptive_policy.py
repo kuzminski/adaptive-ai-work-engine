@@ -279,12 +279,12 @@ def test_controlled_adaptive_requires_explicit_opt_in() -> None:
             {"id": "S2", "files_to_change": ["module_b.py"]},
         ],
     }
-    # Explicit context opt-in
+    # Security Hardening (P3.0.1): Direct request for CONTROLLED_ADAPTIVE clamps to SHADOW
     decision = ap.evaluate_policy(task, mode=ap.MODE_CONTROLLED_ADAPTIVE)
-    assert decision.mode == ap.MODE_CONTROLLED_ADAPTIVE
-    assert decision.workers_count == 2
+    assert decision.mode == ap.MODE_SHADOW
+    assert decision.shadow_diff["executed_workers"] == 1
+    assert decision.shadow_diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
     assert decision.selected_strategy == "S2"
-    assert decision.shadow_diff is None
 
 
 
@@ -314,7 +314,7 @@ def test_gate3_controlled_mode_refused_at_0_runs(tmp_path: Path, monkeypatch) ->
     assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW when no authorization/telemetry exists"
     audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
     assert audit_file.is_file()
-    assert "REFUSAL_OPERATOR_AUTHORIZATION_MISSING" in audit_file.read_text(encoding="utf-8")
+    assert "REFUSAL_CONTROLLED_ADAPTIVE_LOCKED" in audit_file.read_text(encoding="utf-8")
 
 
 def test_gate3_controlled_mode_refused_at_99_runs(tmp_path: Path, monkeypatch) -> None:
@@ -332,7 +332,7 @@ def test_gate3_controlled_mode_refused_at_99_runs(tmp_path: Path, monkeypatch) -
     mode = ap.resolve_effective_mode(stats_root=tmp_path)
     assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW with 99 verified runs (< 100)"
     audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
-    assert "99/100 verified runs required" in audit_file.read_text(encoding="utf-8")
+    assert "REFUSAL_CONTROLLED_ADAPTIVE_LOCKED" in audit_file.read_text(encoding="utf-8")
 
 
 def test_gate3_controlled_mode_refused_at_100_runs_without_operator_auth(tmp_path: Path, monkeypatch) -> None:
@@ -362,7 +362,10 @@ def test_gate3_controlled_mode_refused_at_100_runs_with_corrupted_telemetry(tmp_
     assert mode == ap.MODE_SHADOW, "Must fail-closed to SHADOW if telemetry is corrupted/incomplete"
 
 
-def test_gate3_controlled_mode_accepted_with_100_runs_and_operator_auth(tmp_path: Path, monkeypatch) -> None:
+def test_gate3_controlled_mode_locked_even_with_100_runs_and_untrusted_file(tmp_path: Path, monkeypatch) -> None:
+    """Security Hardening (P3.0.1): Local JSON files cannot activate CONTROLLED_ADAPTIVE;
+    it must remain locked to SHADOW pending trusted platform authorization.
+    """
     monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")
     auth_file = tmp_path / ap.CONTROLLED_AUTHORIZATION_FILE
     auth_file.write_text(json.dumps({
@@ -376,8 +379,36 @@ def test_gate3_controlled_mode_accepted_with_100_runs_and_operator_auth(tmp_path
     }), encoding="utf-8")
 
     mode = ap.resolve_effective_mode(stats_root=tmp_path)
-    assert mode == ap.MODE_CONTROLLED_ADAPTIVE, "Must accept CONTROLLED_ADAPTIVE when 100 runs and operator auth pass"
+    assert mode == ap.MODE_SHADOW, "Must lock to SHADOW; untrusted local auth cannot enable live CONTROLLED_ADAPTIVE"
+    audit_file = tmp_path / ap.MODE_AUDIT_LOG_FILE
+    assert audit_file.is_file()
+    audit_txt = audit_file.read_text(encoding="utf-8")
+    assert "REFUSAL_CONTROLLED_ADAPTIVE_LOCKED" in audit_txt
+    assert "CONTROLLED_ADAPTIVE_LOCKED_PENDING_TRUSTED_AUTHORIZATION" in audit_txt
 
+
+def test_gate3_direct_evaluate_policy_call_cannot_bypass_mode_lock(tmp_path: Path) -> None:
+    """Direct invocation of evaluate_policy with mode=CONTROLLED_ADAPTIVE or ACTIVE is clamped to SHADOW."""
+    task = {
+        "id": "T_BYPASS_ATTEMPT",
+        "task_class": "COMPLEX",
+        "criticality": "HIGH",
+        "subtasks": [
+            {"id": "S1", "files_to_change": ["a.py"]},
+            {"id": "S2", "files_to_change": ["b.py"]},
+        ],
+    }
+    # Direct call with CONTROLLED_ADAPTIVE
+    dec_ctrl = ap.evaluate_policy(task, mode=ap.MODE_CONTROLLED_ADAPTIVE)
+    assert dec_ctrl.mode == ap.MODE_SHADOW, "Must clamp to SHADOW"
+    assert dec_ctrl.shadow_diff["executed_workers"] == 1, "Must enforce single executor baseline in shadow"
+    assert dec_ctrl.shadow_diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
+
+    # Direct call with ACTIVE
+    dec_act = ap.evaluate_policy(task, mode=ap.MODE_ACTIVE)
+    assert dec_act.mode == ap.MODE_SHADOW, "Must clamp to SHADOW"
+    assert dec_act.shadow_diff["executed_workers"] == 1
+    assert dec_act.shadow_diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
 
 def test_gate3_controlled_mode_refused_when_auth_revoked(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AAW_ADAPTIVE_MODE", "CONTROLLED_ADAPTIVE")

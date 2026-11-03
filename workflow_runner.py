@@ -1866,9 +1866,20 @@ def transactional_merge_branch_worktrees(
             else:
                 merged_contents[rel_str] = (nid, file_bytes)
 
+    if not merged_contents:
+        return []
+
     # Snapshot destination files for durable multi-file atomic rollback
     backups: dict[str, bytes | None] = {}
     tx_journal_path = main_canon / ".aaw_transaction_journal.json"
+
+    # Fail-closed: refuse to merge if an unrecovered transaction journal already exists
+    if tx_journal_path.exists():
+        raise WorkflowStop(
+            "BLOCKED",
+            f"Cannot proceed with transactional merge: existing unrecovered transaction journal found at {tx_journal_path}",
+        )
+
     tx_backups_serializable: dict[str, str | None] = {}
     for rel_str in merged_contents:
         dst = main_canon / rel_str
@@ -1876,23 +1887,40 @@ def transactional_merge_branch_worktrees(
         backups[rel_str] = b
         tx_backups_serializable[rel_str] = base64.b64encode(b).decode("ascii") if b is not None else None
 
-    # Write durable transaction journal before touching destination files
+    # Write durable transaction journal before touching destination files (fail-closed)
+    tx_id = f"TX_MERGE_{uuid.uuid4().hex[:12]}"
+    tx_data = {
+        "status": "PREPARED",
+        "transaction_id": tx_id,
+        "created_at": now(),
+        "worktree": str(main_canon),
+        "files": sorted(merged_contents.keys()),
+        "backups": tx_backups_serializable,
+    }
+    tmp_journal = main_canon / f".aaw_tx_journal_{uuid.uuid4().hex[:8]}.tmp"
     try:
-        tx_data = {
-            "status": "PREPARED",
-            "created_at": now(),
-            "files": list(merged_contents.keys()),
-            "backups": tx_backups_serializable,
-        }
-        unique_json(tx_journal_path, tx_data)
-    except Exception:
-        pass
+        tmp_journal.write_text(json.dumps(tx_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        with tmp_journal.open("a", encoding="utf-8") as f:
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_journal, tx_journal_path)
+    except Exception as exc:
+        if tmp_journal.is_file():
+            try:
+                tmp_journal.unlink()
+            except Exception:
+                pass
+        raise WorkflowStop("INVALID", f"Transactional merge aborted: failed to create durable transaction journal: {exc}") from exc
 
     # Atomic application with rollback guarantee
     applied: list[str] = []
     try:
         for rel_str, (nid, file_bytes) in merged_contents.items():
             dst = main_canon / rel_str
+            # Path security check: ensure destination path does not escape worktree
+            dst_resolved = dst.resolve()
+            if not str(dst_resolved).startswith(str(main_canon)):
+                raise WorkflowStop("INVALID", f"Path traversal attempt in destination merge: {rel_str}")
             dst.parent.mkdir(parents=True, exist_ok=True)
             for attempt in range(10):
                 try:
@@ -1911,25 +1939,34 @@ def transactional_merge_branch_worktrees(
                 pass
         return applied
     except Exception as exc:
+        rollback_errors: list[str] = []
         for rel_str, orig in backups.items():
             dst = main_canon / rel_str
             if orig is None:
                 if dst.is_file():
                     try:
                         dst.unlink()
-                    except Exception:
-                        pass
+                    except Exception as rb_err:
+                        rollback_errors.append(f"failed to delete newly created {rel_str}: {rb_err}")
             else:
                 try:
                     dst.write_bytes(orig)
+                except Exception as rb_err:
+                    rollback_errors.append(f"failed to restore {rel_str}: {rb_err}")
+        if rollback_errors:
+            rb_details = "; ".join(rollback_errors)
+            # Rollback failed: keep transaction journal intact so crash recovery / operator can inspect
+            raise WorkflowStop(
+                "INVALID",
+                f"Transactional merge failed ({exc}) and rollback could not be completed cleanly ({rb_details}). Transaction journal preserved at {tx_journal_path} for recovery.",
+            ) from exc
+        else:
+            if tx_journal_path.is_file():
+                try:
+                    tx_journal_path.unlink()
                 except Exception:
                     pass
-        if tx_journal_path.is_file():
-            try:
-                tx_journal_path.unlink()
-            except Exception:
-                pass
-        raise WorkflowStop("INVALID", f"Transactional merge failed and was rolled back: {exc}") from exc
+            raise WorkflowStop("INVALID", f"Transactional merge failed and was rolled back: {exc}") from exc
 
 
 def _merge_branch_worktree(
@@ -2391,25 +2428,81 @@ def recover_run_in_place(identifier: str, *, cancel_abandoned: bool = True) -> d
         tx_path = wt_dir / ".aaw_transaction_journal.json"
         if tx_path.is_file():
             try:
-                tx_info = json.loads(tx_path.read_text(encoding="utf-8"))
-                if tx_info.get("status") == "PREPARED":
-                    b_dict = tx_info.get("backups") or {}
-                    for f_rel, b_b64 in b_dict.items():
-                        target_f = wt_dir / f_rel
-                        if b_b64 is None:
-                            if target_f.is_file():
-                                target_f.unlink()
-                        else:
-                            target_f.parent.mkdir(parents=True, exist_ok=True)
-                            target_f.write_bytes(base64.b64decode(b_b64.encode("ascii")))
-                    state["transaction_recovery"] = {
-                        "recovered_transaction": True,
-                        "rolled_back_files": list(b_dict.keys()),
-                        "at": now(),
-                    }
+                tx_raw = tx_path.read_text(encoding="utf-8")
+                tx_info = json.loads(tx_raw)
+            except Exception as exc:
+                raise WorkflowStop("BLOCKED", f"Corrupted transaction journal at {tx_path}: {exc}") from exc
+
+            if not isinstance(tx_info, dict):
+                raise WorkflowStop("BLOCKED", f"Invalid transaction journal structure at {tx_path}: expected JSON object")
+
+            status = tx_info.get("status")
+            if status != "PREPARED":
+                raise WorkflowStop("BLOCKED", f"Invalid transaction journal status at {tx_path}: {status}")
+
+            files = tx_info.get("files")
+            backups = tx_info.get("backups")
+            if not isinstance(files, list) or not isinstance(backups, dict):
+                raise WorkflowStop("BLOCKED", f"Incomplete transaction journal at {tx_path}: missing or invalid 'files' or 'backups'")
+
+            wt_canon = canonical(wt_dir)
+            restorations: list[tuple[Path, bytes | None]] = []
+            for f_rel in files:
+                if not isinstance(f_rel, str) or not f_rel.strip():
+                    raise WorkflowStop("BLOCKED", f"Invalid filename in transaction journal: {f_rel!r}")
+                rel_p = Path(f_rel)
+                if rel_p.is_absolute() or ".." in rel_p.parts:
+                    raise WorkflowStop("BLOCKED", f"Path traversal attempt in transaction journal: {f_rel}")
+                target_f = wt_canon / f_rel
+                try:
+                    check_p = target_f.resolve() if target_f.exists() else target_f.parent.resolve()
+                    if not str(check_p).startswith(str(wt_canon)):
+                        raise WorkflowStop("BLOCKED", f"Path outside worktree in transaction journal: {f_rel}")
+                except Exception as exc:
+                    raise WorkflowStop("BLOCKED", f"Invalid path resolution in transaction journal for {f_rel}: {exc}") from exc
+
+                if f_rel not in backups:
+                    raise WorkflowStop("BLOCKED", f"Missing backup for declared file in transaction journal: {f_rel}")
+
+                b_b64 = backups[f_rel]
+                if b_b64 is None:
+                    restorations.append((target_f, None))
+                else:
+                    try:
+                        restorations.append((target_f, base64.b64decode(b_b64.encode("ascii"))))
+                    except Exception as exc:
+                        raise WorkflowStop("BLOCKED", f"Corrupted base64 backup in transaction journal for {f_rel}: {exc}") from exc
+
+            recovery_errors: list[str] = []
+            rolled_back_files: list[str] = []
+            for target_f, content in restorations:
+                rel_str = str(target_f.relative_to(wt_canon)).replace("\\", "/")
+                try:
+                    if content is None:
+                        if target_f.is_file():
+                            target_f.unlink()
+                            rolled_back_files.append(rel_str)
+                    else:
+                        target_f.parent.mkdir(parents=True, exist_ok=True)
+                        target_f.write_bytes(content)
+                        rolled_back_files.append(rel_str)
+                except Exception as exc:
+                    recovery_errors.append(f"failed to restore {rel_str}: {exc}")
+
+            if recovery_errors:
+                rec_details = "; ".join(recovery_errors)
+                raise WorkflowStop("BLOCKED", f"Crash recovery failed during transaction rollback: {rec_details}")
+
+            try:
                 tx_path.unlink()
             except Exception:
                 pass
+
+            state["transaction_recovery"] = {
+                "recovered_transaction": True,
+                "rolled_back_files": rolled_back_files,
+                "at": now(),
+            }
 
     # Clean up abandoned lock if present
     run_dir = STATS_ROOT / identifier

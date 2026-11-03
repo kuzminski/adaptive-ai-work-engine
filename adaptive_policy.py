@@ -31,6 +31,7 @@ POLICY_VERSION = "AAW_ADAPTIVE_POLICY_V1.0"
 
 MIN_VERIFIED_RUNS_FOR_CONTROLLED = 100
 CONTROLLED_AUTHORIZATION_FILE = "CONTROLLED_ADAPTIVE_AUTHORIZATION.json"
+REFUSAL_CONTROLLED_LOCKED = "CONTROLLED_ADAPTIVE_LOCKED_PENDING_TRUSTED_AUTHORIZATION: production activation locked pending cryptographically verified platform authorization"
 MODE_AUDIT_LOG_FILE = "ADAPTIVE_MODE_AUDIT.jsonl"
 
 
@@ -55,69 +56,26 @@ def verify_controlled_mode_authorization(
     stats_root: Path | None = None,
     auth_file: Path | None = None,
 ) -> tuple[bool, str, dict[str, Any] | None]:
-    """Verify operator authorization and telemetry criteria for CONTROLLED_ADAPTIVE mode."""
+    """Verify operator authorization and telemetry criteria for CONTROLLED_ADAPTIVE mode.
+    
+    SECURITY HARDENING (P3.0.1): Production activation of CONTROLLED_ADAPTIVE and ACTIVE
+    is strictly locked. Local files, environment variables, self-asserted runs summaries,
+    and non-cryptographic tokens cannot unlock adaptive multi-worker execution.
+    """
     root = stats_root or STATS_ROOT
     target_auth = auth_file or (root / CONTROLLED_AUTHORIZATION_FILE)
-
-    if not target_auth.is_file():
-        return False, "REFUSAL_OPERATOR_AUTHORIZATION_MISSING: authorization file not found", None
-
-    try:
-        auth_data = json.loads(target_auth.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return False, f"REFUSAL_CORRUPTED_AUTHORIZATION: {exc}", None
-
-    if auth_data.get("policy_version") != POLICY_VERSION:
-        return False, f"REFUSAL_POLICY_VERSION_MISMATCH: expected {POLICY_VERSION}, got {auth_data.get('policy_version')}", auth_data
-
-    if auth_data.get("revoked") is True:
-        return False, f"REFUSAL_AUTHORIZATION_REVOKED: revoked at {auth_data.get('revoked_at')}", auth_data
-
-    if auth_data.get("authorized_mode") != MODE_CONTROLLED_ADAPTIVE:
-        return False, f"REFUSAL_INVALID_AUTHORIZED_MODE: {auth_data.get('authorized_mode')}", auth_data
-
-    authorized_by = auth_data.get("authorized_by")
-    agent_roles = {"CODE_IMPLEMENTER", "INDEPENDENT_REVIEWER", "PLANNER", "AUTONOMY_CONTROLLER", "REPAIRER", "MODEL"}
-    if not isinstance(authorized_by, str) or not authorized_by.strip() or authorized_by.upper() in agent_roles:
-        return False, f"REFUSAL_UNAUTHORIZED_OPERATOR: verified human operator identity required, got {authorized_by}", auth_data
-
-    token = auth_data.get("authorization_token")
-    if not isinstance(token, str) or not token.strip():
-        return False, "REFUSAL_MISSING_AUTHORIZATION_TOKEN", auth_data
-
-    # Check verified telemetry history
-    runs_file = root / "VERIFIED_PRODUCTION_RUNS.jsonl"
-    runs_data = []
-    if runs_file.is_file():
+    auth_data = None
+    if target_auth.is_file():
         try:
-            for line in runs_file.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    runs_data.append(json.loads(line))
-        except Exception as exc:
-            return False, f"REFUSAL_CORRUPTED_TELEMETRY: {exc}", auth_data
-    elif "runs_summary" in auth_data and isinstance(auth_data["runs_summary"], list):
-        runs_data = auth_data["runs_summary"]
+            auth_data = json.loads(target_auth.read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
-    valid_runs = 0
-    seen_ids = set()
-    for row in runs_data:
-        rid = row.get("run_id")
-        if not rid or rid in seen_ids:
-            continue
-        seen_ids.add(rid)
-        if row.get("status") not in ("COMPLETED", "WAITING_FOR_HUMAN"):
-            continue
-        if row.get("provenance") not in ("REAL_MEASURED", "REAL_PRODUCTION"):
-            continue
-        tel = row.get("telemetry") or {}
-        if not tel or (tel.get("wall_time_s", 0) <= 0 and tel.get("tokens_total", 0) <= 0):
-            continue
-        valid_runs += 1
-
-    if valid_runs < MIN_VERIFIED_RUNS_FOR_CONTROLLED:
-        return False, f"REFUSAL_INSUFFICIENT_TELEMETRY: {valid_runs}/{MIN_VERIFIED_RUNS_FOR_CONTROLLED} verified runs required", auth_data
-
-    return True, "AUTHORIZED_CONTROLLED_ADAPTIVE", auth_data
+    return (
+        False,
+        "CONTROLLED_ADAPTIVE_LOCKED_PENDING_TRUSTED_AUTHORIZATION: production activation locked pending cryptographically verified platform authorization",
+        auth_data,
+    )
 
 
 def load_policy_health(stats_root: Path | None = None) -> PolicyHealthState:
@@ -261,49 +219,44 @@ def resolve_effective_mode(
     context: Mapping[str, Any] | None = None,
     stats_root: Path | None = None,
 ) -> str:
-    """Determine operating mode with hard gating for CONTROLLED_ADAPTIVE.
-    
-    P3 Gating Rule: Default mode is strictly MODE_SHADOW unless explicitly
-    overridden. CONTROLLED_ADAPTIVE requires verified operator authorization and
-    at least 100 verified production runs. ACTIVE mode is permanently locked.
-    """
+    """Determine operating mode with hard gating for CONTROLLED_ADAPTIVE and ACTIVE."""
     root = stats_root or STATS_ROOT
+    env_mode = os.environ.get("AAW_ADAPTIVE_MODE", "").strip().upper()
+
     requested_mode = None
-
-    env_mode = os.environ.get("AAW_ADAPTIVE_MODE", "").upper().strip()
-    if env_mode in OPERATING_MODES:
+    if env_mode in (MODE_DISABLED, MODE_SHADOW, MODE_CONTROLLED_ADAPTIVE, MODE_ACTIVE):
         requested_mode = env_mode
-    elif context and context.get("adaptive_mode") in OPERATING_MODES:
-        requested_mode = str(context["adaptive_mode"])
 
-    # Boolean flags for backwards compatibility
-    env_enabled = os.environ.get("AAW_ADAPTIVE_ORCHESTRATION_ENABLED", "").lower().strip()
-    if env_enabled in ("0", "false", "no", "off") or (context and context.get("adaptive_orchestration_enabled") is False):
-        requested_mode = MODE_DISABLED
-    elif requested_mode is None and (env_enabled in ("1", "true", "yes", "on") or (context and context.get("adaptive_orchestration_enabled") is True)):
-        requested_mode = MODE_SHADOW
+    if not requested_mode and context and isinstance(context, Mapping):
+        ao_ctx = context.get("adaptive_orchestration") or {}
+        if isinstance(ao_ctx, Mapping):
+            m = ao_ctx.get("mode", "").strip().upper()
+            if m in (MODE_DISABLED, MODE_SHADOW, MODE_CONTROLLED_ADAPTIVE, MODE_ACTIVE):
+                requested_mode = m
 
-    if requested_mode is None:
+    if not requested_mode:
         requested_mode = MODE_SHADOW
 
     if requested_mode == MODE_DISABLED:
         return MODE_DISABLED
 
     if requested_mode == MODE_ACTIVE:
-        _append_mode_audit(root, "REFUSAL_ACTIVE_MODE_LOCKED", {"requested": requested_mode, "fallback": MODE_SHADOW})
+        _append_mode_audit(root, "REFUSAL_ACTIVE_MODE_LOCKED", {
+            "requested": requested_mode,
+            "reason": "UNAUTHORIZED_ACTIVE_MODE: active mode is permanently locked",
+            "fallback": MODE_SHADOW,
+        })
         return MODE_SHADOW
 
     if requested_mode == MODE_CONTROLLED_ADAPTIVE:
         ok, reason, auth_data = verify_controlled_mode_authorization(root)
-        if ok:
-            _append_mode_audit(root, "MODE_AUTHORIZED_CONTROLLED", {
-                "authorized_by": auth_data.get("authorized_by") if auth_data else "UNKNOWN",
-                "scope": auth_data.get("scope") if auth_data else [],
-            })
-            return MODE_CONTROLLED_ADAPTIVE
-        else:
-            _append_mode_audit(root, "REFUSAL_CONTROLLED_ADAPTIVE_UNMET", {"requested": requested_mode, "reason": reason, "fallback": MODE_SHADOW})
-            return MODE_SHADOW
+        _append_mode_audit(root, "REFUSAL_CONTROLLED_ADAPTIVE_LOCKED", {
+            "requested": requested_mode,
+            "reason": reason,
+            "fallback": MODE_SHADOW,
+            "has_auth_file": bool(auth_data),
+        })
+        return MODE_SHADOW
 
     return MODE_SHADOW
 
@@ -318,7 +271,19 @@ def evaluate_policy(
     """Evaluate task against the strict 5-layer constraint hierarchy:
     SAFETY → CONTRACT VALIDITY → QUALITY FLOOR → BUDGET → PERFORMANCE.
     """
-    mode = mode or resolve_effective_mode(task_definition)
+    if mode is not None:
+        if mode not in (MODE_DISABLED, MODE_SHADOW):
+            # Direct calls cannot bypass mode lock!
+            root = getattr(task_definition, "stats_root", None) or STATS_ROOT
+            _append_mode_audit(root, "REFUSAL_DIRECT_CALL_MODE_LOCKED", {
+                "requested": mode,
+                "reason": "CONTROLLED_ADAPTIVE_LOCKED_PENDING_TRUSTED_AUTHORIZATION: direct call cannot bypass mode lock",
+                "fallback": MODE_SHADOW,
+            })
+            mode = MODE_SHADOW
+    else:
+        mode = resolve_effective_mode(task_definition)
+
     health = health_state or PolicyHealthState()
 
     task_class = str(task_definition.get("task_class") or mr.MODERATE).upper()
@@ -326,7 +291,6 @@ def evaluate_policy(
     subtasks = list(task_definition.get("subtasks") or [])
     subtask_count = len(subtasks)
 
-    # ─────────────────────────────────────────────────────────────────────────
     # A. MODE_DISABLED: Always return conservative baseline (S1)
     # ─────────────────────────────────────────────────────────────────────────
     if mode == MODE_DISABLED:
@@ -353,7 +317,7 @@ def evaluate_policy(
 
     # --- 1. CONSTRAINT: SAFETY & INTEGRITY ---
     # 1.1. Health State Rollback Trigger (Controlled Adaptive Mode)
-    if mode == MODE_CONTROLLED_ADAPTIVE:
+    if mode in (MODE_CONTROLLED_ADAPTIVE, MODE_SHADOW):
         if health.merge_failures > 0:
             return PolicyDecision(
                 rule_id=RULE_ROLLBACK_MERGE_FAILURE,

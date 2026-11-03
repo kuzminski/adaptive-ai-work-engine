@@ -341,3 +341,218 @@ def test_shadow_mode_execution_equivalence_with_disabled(tmp_path: Path, monkeyp
     assert dec_shadow.shadow_diff["executed_template"] == ao.TEMPLATE_SINGLE_EXECUTOR
     assert dec_shadow.shadow_diff["executed_workers"] == 1
 
+
+def test_merge_aborts_when_journal_creation_fails(test_env, monkeypatch):
+    """Fail-closed: If writing transaction journal fails, merge aborts without modifying target worktree."""
+    main_wt = test_env["main_wt"]
+    wt1 = test_env["wt1"]
+
+    (wt1 / "dest_file.txt").write_text("branch new data", encoding="utf-8")
+    (main_wt / "dest_file.txt").write_text("pre-existing data", encoding="utf-8")
+
+    orig_replace = os.replace
+
+    def failing_replace(src, dst):
+        if ".aaw_transaction_journal.json" in str(dst):
+            raise OSError("Simulated disk error writing journal")
+        return orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    branch_specs = [
+        ("NODE_1", wt1, {"files_to_change": ["dest_file.txt"]}),
+    ]
+
+    with pytest.raises(WorkflowStop) as exc:
+        transactional_merge_branch_worktrees(
+            repo=test_env["repo"],
+            main_worktree=main_wt,
+            branch_worktrees=branch_specs,
+            baseline=test_env["baseline"],
+        )
+
+    assert exc.value.status == "INVALID"
+    assert "Transactional merge aborted: failed to create durable transaction journal" in str(exc.value)
+    # Target file must be strictly untouched
+    assert (main_wt / "dest_file.txt").read_text("utf-8") == "pre-existing data"
+
+
+def test_merge_aborts_if_unrecovered_journal_already_present(test_env):
+    """Fail-closed: Merge refuses to start if an unrecovered journal file is already on disk."""
+    main_wt = test_env["main_wt"]
+    wt1 = test_env["wt1"]
+    (wt1 / "some_file.txt").write_text("content", encoding="utf-8")
+
+    # Create unrecovered journal
+    journal_path = main_wt / ".aaw_transaction_journal.json"
+    journal_path.write_text(json.dumps({"status": "PREPARED"}), encoding="utf-8")
+
+    branch_specs = [("NODE_1", wt1, {"files_to_change": ["some_file.txt"]})]
+
+    with pytest.raises(WorkflowStop) as exc:
+        transactional_merge_branch_worktrees(
+            repo=test_env["repo"],
+            main_worktree=main_wt,
+            branch_worktrees=branch_specs,
+            baseline=test_env["baseline"],
+        )
+
+    assert exc.value.status == "BLOCKED"
+    assert "existing unrecovered transaction journal found" in str(exc.value)
+    assert not (main_wt / "some_file.txt").exists()
+
+
+def test_merge_preserves_journal_if_rollback_fails(test_env, monkeypatch):
+    """When rollback cannot cleanly restore, the transaction journal is preserved on disk for recovery."""
+    main_wt = test_env["main_wt"]
+    wt1 = test_env["wt1"]
+
+    (main_wt / "existing.txt").write_text("original content", encoding="utf-8")
+    (wt1 / "existing.txt").write_text("modified content", encoding="utf-8")
+    (wt1 / "trigger_err.txt").write_text("trigger", encoding="utf-8")
+
+    orig_write = Path.write_bytes
+
+    def failing_write(path_obj, data):
+        if "trigger_err" in str(path_obj):
+            raise OSError("Simulated merge write error")
+        if data == b"original content":
+            raise PermissionError("Simulated rollback failure")
+        return orig_write(path_obj, data)
+
+    monkeypatch.setattr(Path, "write_bytes", failing_write)
+
+    branch_specs = [("NODE_1", wt1, {"files_to_change": ["existing.txt", "trigger_err.txt"]})]
+
+    with pytest.raises(WorkflowStop) as exc:
+        transactional_merge_branch_worktrees(
+            repo=test_env["repo"],
+            main_worktree=main_wt,
+            branch_worktrees=branch_specs,
+            baseline=test_env["baseline"],
+        )
+
+    assert exc.value.status == "INVALID"
+    assert "rollback could not be completed cleanly" in str(exc.value)
+    # Journal MUST be preserved
+    assert (main_wt / ".aaw_transaction_journal.json").is_file()
+
+
+def test_crash_recovery_corrupted_or_incomplete_journal_blocked(tmp_path: Path, monkeypatch):
+    """In crash recovery, corrupted or incomplete journal halts with BLOCKED without clobbering data."""
+    import workflow_runner as runner
+
+    stats = tmp_path / "03_STATS"
+    stats.mkdir()
+    monkeypatch.setattr(runner, "STATS_ROOT", stats)
+
+    run_id = "RUN_CORRUPT_JRNL_TEST"
+    run_dir = stats / run_id / "WORKFLOW"
+    run_dir.mkdir(parents=True)
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (wt / "data.txt").write_text("intact data", encoding="utf-8")
+
+    # Corrupted JSON
+    (wt / ".aaw_transaction_journal.json").write_text("{invalid json", encoding="utf-8")
+
+    state = {
+        "AAW_RUN_ID": run_id, "workflow_id": "T1", "status": "RUNNING", "worktree": str(wt),
+        "started_at": "2026-11-03T02:00:00Z", "llm_calls": 0, "completed_nodes": [],
+        "repair_cycle": 0, "telemetry": [], "adaptive_orchestration": {"running_nodes": {}, "active_workers_count": 0},
+    }
+    (run_dir / "workflow_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(WorkflowStop) as exc:
+        runner.recover_run_in_place(run_id)
+
+    assert exc.value.status == "BLOCKED"
+    assert "Corrupted transaction journal" in str(exc.value)
+    assert (wt / "data.txt").read_text("utf-8") == "intact data"
+
+
+def test_crash_recovery_path_traversal_in_journal_blocked(tmp_path: Path, monkeypatch):
+    """In crash recovery, path traversal in journal files halts with BLOCKED."""
+    import workflow_runner as runner
+
+    stats = tmp_path / "03_STATS"
+    stats.mkdir()
+    monkeypatch.setattr(runner, "STATS_ROOT", stats)
+
+    run_id = "RUN_TRAVERSAL_JRNL_TEST"
+    run_dir = stats / run_id / "WORKFLOW"
+    run_dir.mkdir(parents=True)
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+
+    # Malicious journal with traversal
+    tx_data = {
+        "status": "PREPARED",
+        "created_at": "2026-11-03T02:00:00Z",
+        "files": ["../../outside.txt"],
+        "backups": {"../../outside.txt": None},
+    }
+    (wt / ".aaw_transaction_journal.json").write_text(json.dumps(tx_data), encoding="utf-8")
+
+    state = {
+        "AAW_RUN_ID": run_id, "workflow_id": "T1", "status": "RUNNING", "worktree": str(wt),
+        "started_at": "2026-11-03T02:00:00Z", "llm_calls": 0, "completed_nodes": [],
+        "repair_cycle": 0, "telemetry": [], "adaptive_orchestration": {"running_nodes": {}, "active_workers_count": 0},
+    }
+    (run_dir / "workflow_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(WorkflowStop) as exc:
+        runner.recover_run_in_place(run_id)
+
+    assert exc.value.status == "BLOCKED"
+    assert "Path traversal attempt in transaction journal" in str(exc.value)
+
+
+def test_crash_recovery_is_idempotent_and_does_not_touch_unrelated_files(tmp_path: Path, monkeypatch):
+    """Crash recovery restores target files, leaves unrelated files untouched, and reruns idempotently."""
+    import base64
+    import workflow_runner as runner
+
+    stats = tmp_path / "03_STATS"
+    stats.mkdir()
+    monkeypatch.setattr(runner, "STATS_ROOT", stats)
+
+    run_id = "RUN_IDEMPOTENT_TEST"
+    run_dir = stats / run_id / "WORKFLOW"
+    run_dir.mkdir(parents=True)
+
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (wt / "unrelated.txt").write_text("operator created file\n", encoding="utf-8")
+    (wt / "in_tx.txt").write_text("partially written in tx\n", encoding="utf-8")
+
+    tx_data = {
+        "status": "PREPARED",
+        "created_at": "2026-11-03T02:00:00Z",
+        "files": ["in_tx.txt"],
+        "backups": {"in_tx.txt": base64.b64encode(b"original in_tx\n").decode("ascii")},
+    }
+    (wt / ".aaw_transaction_journal.json").write_text(json.dumps(tx_data), encoding="utf-8")
+
+    state = {
+        "AAW_RUN_ID": run_id, "workflow_id": "T1", "status": "RUNNING", "worktree": str(wt),
+        "started_at": "2026-11-03T02:00:00Z", "llm_calls": 0, "completed_nodes": [],
+        "repair_cycle": 0, "telemetry": [], "adaptive_orchestration": {"running_nodes": {}, "active_workers_count": 0},
+    }
+    (run_dir / "workflow_state.json").write_text(json.dumps(state), encoding="utf-8")
+
+    # First recovery
+    s1 = runner.recover_run_in_place(run_id)
+    assert s1["status"] == "BLOCKED"
+    assert (wt / "in_tx.txt").read_text("utf-8") == "original in_tx\n"
+    assert (wt / "unrelated.txt").read_text("utf-8") == "operator created file\n"
+    assert not (wt / ".aaw_transaction_journal.json").exists()
+
+    # Second recovery (idempotent call)
+    s2 = runner.recover_run_in_place(run_id)
+    assert s2["status"] == "BLOCKED"
+    assert (wt / "in_tx.txt").read_text("utf-8") == "original in_tx\n"
+    assert (wt / "unrelated.txt").read_text("utf-8") == "operator created file\n"
+
