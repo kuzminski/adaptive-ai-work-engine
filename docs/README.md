@@ -4,6 +4,12 @@ Niniejszy katalog zawiera kompletną dokumentację architektoniczną, kontrakty 
 
 ---
 
+## Roadmapa
+
+- [`AAW_ROADMAP_V1.md`](specs/AAW_ROADMAP_V1.md) — Roadmapa rozbudowy funkcjonalnej po P3.0.1 i PR #6: diagnoza stanu, etapy 0–5 (konsolidacja, pętla dowodowa z prawdziwej pracy, od pomysłu do programu, wiele projektów, kontrolowana adaptacja, dojrzałość produktu) i wynikające z nich widoki UI/UX.
+
+---
+
 ## Indeks specyfikacji technicznych
 
 ### 1. Architektura produktu i MVP
