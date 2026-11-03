@@ -83,6 +83,8 @@ def test_legacy_form_shape_still_works():
     assert ids == ["STEP_1", "STEP_2", prun.CONTINUATION_ITEM_ID]
 
 
+@pytest.mark.slow
+@pytest.mark.e2e
 def test_long_text_survives_start_save_and_reopen(env):
     env.install("claude")
     run_id = start(env, goal=LONG, first_iteration=LONG[:60_000],
@@ -148,6 +150,8 @@ def test_old_mandates_without_the_new_fields_behave_as_before():
 
 # ── end to end: the loop does not stop at 2 ──────────────────────────────────
 
+@pytest.mark.slow
+@pytest.mark.e2e
 def test_run_continues_past_two_iterations_until_the_planner_ends_it_with_a_reason(env):
     env.install("claude")
     env.monkeypatch.setenv("AAW_FAKE_CONTINUATION_PASSES", "4")

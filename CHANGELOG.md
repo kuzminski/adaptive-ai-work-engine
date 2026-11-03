@@ -18,7 +18,7 @@ Details: `AAW_RISK_REGISTER_CHARTER_V0_1.md`.
 
 ## Unreleased — chain mode, telemetry V1, AAW-Bench
 
-Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
+Details and rationale: `docs/specs/AAW_OPTIMIZATION_PROJECT_V0_1.md`.
 - **Chain mode** (`autonomy_chain.py`, `chain` block of `AUTONOMY_ROLES.json`, on by default; `enabled: false` restores
   the classic cycle): iterations run in chains of 8 with deterministic self-verification and one cheap review that only
   a CRITICAL defect can fail; the last iteration of a chain gets the serious review (final-review tier floor `HARD`) over
@@ -33,7 +33,7 @@ Details and rationale: `AAW_OPTIMIZATION_PROJECT_V0_1.md`.
 - Review fixes during the project: the Human Gate now lists only findings the polish pass did not attempt; an
   unrunnable final-review floor profile falls back instead of stopping the run.
 - Tests: `test_autonomy_chain.py` (34), `test_aaw_bench.py` (17). Lifecycle tests pin the classic cycle explicitly.
-- **Experience** (`aaw_experience.py`, `aaw_benchstats.py`, `PRODUCT_UI/experience.js`; `AAW_UX_REALTIME_EXPERIENCE_V0_1.md`):
+- **Experience** (`aaw_experience.py`, `aaw_benchstats.py`, `PRODUCT_UI/experience.js`; `docs/specs/AAW_UX_REALTIME_EXPERIENCE_V0_1.md`):
   the benchmark now builds itself from real runs (no lab step): per-task-kind cost per solved task with intervals, Pareto
   front and a user-mix-weighted overall choice, "what would be optimal" statements with evidence, horizon ("how far runs get
   without a human"), forecast for a running or new run (a range, or an explicit "no data"), settlement at the gate.

@@ -153,6 +153,47 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
+    def _mcp_status() -> dict[str, Any]:
+        import aaw_mcp_config
+        ag_path = aaw_mcp_config.get_antigravity_config_path()
+        claude_desk_path = aaw_mcp_config.get_claude_desktop_config_path()
+        claude_code_path = aaw_mcp_config.get_claude_code_config_path()
+        codex_path = aaw_mcp_config.get_codex_config_path()
+        return {
+            "antigravity": {
+                "path": str(ag_path),
+                "configured": ag_path.is_file(),
+            },
+            "claude": {
+                "desktop_path": str(claude_desk_path),
+                "desktop_configured": claude_desk_path.is_file(),
+                "code_path": str(claude_code_path),
+                "code_configured": claude_code_path.is_file(),
+                "configured": claude_desk_path.is_file() or claude_code_path.is_file(),
+            },
+            "codex": {
+                "path": str(codex_path),
+                "configured": codex_path.is_file(),
+            },
+        }
+
+    def _mcp_configure(body: dict[str, Any]) -> dict[str, Any]:
+        import aaw_mcp_config
+        target = str(body.get("target") or "all").lower().strip()
+        if target not in ("all", "antigravity", "claude", "codex"):
+            raise prun.ProductError(f"Nieobsługiwany cel MCP: {target}. Dostępne: all, antigravity, claude, codex")
+        install = bool(body.get("install", False))
+        if install:
+            return aaw_mcp_config.install_config(target=target)
+        snippet = aaw_mcp_config.generate_config_snippet(target=target)
+        config = aaw_mcp_config.generate_config(target=target)
+        return {
+            "target": target,
+            "installed": False,
+            "snippet": snippet,
+            "config": config,
+        }
+
     get_routes: dict[str, Callable[..., Any]] = {
         "/api/bootstrap": app.bootstrap,
         "/api/home": lambda q: pv.home_view(),
@@ -161,6 +202,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/experience": lambda q: pv.experience_view(q),
         "/api/ping": lambda q: {"ok": True, "version": APP_VERSION},
         "/api/version": lambda q: product_version.describe(),
+        "/api/mcp/status": lambda q: _mcp_status(),
     }
     post_routes: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/providers/detect": app.detect,
@@ -179,6 +221,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/recommendations/update": app.update_recommendations,
         "/api/quit": app.quit,
         "/api/advanced/control-center": app.open_control_center,
+        "/api/mcp/configure": _mcp_configure,
     }
     run_get = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)(/evidence)?$")
     run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue)$")

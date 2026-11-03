@@ -34,7 +34,7 @@ def isolated_runtime(tmp_path, monkeypatch):
 
 def _args(**overrides) -> argparse.Namespace:
     base = dict(host="127.0.0.1", port=8787, repo=None, worktree=None,
-                timeout=1.0, open_browser=False)
+                timeout=1.0, open_browser=False, legacy_canvas=True)
     base.update(overrides)
     return argparse.Namespace(**base)
 
@@ -299,3 +299,57 @@ def test_main_defaults_to_start(monkeypatch):
 def test_main_dispatches_stop(monkeypatch):
     monkeypatch.setattr(launcher, "cmd_stop", lambda args: 0)
     assert launcher.main(["stop"]) == 0
+
+
+def test_cmd_start_delegates_to_product_by_default(monkeypatch, capsys):
+    delegated = []
+    monkeypatch.setattr(launcher, "delegate_to_product", lambda args: delegated.append(args) or 0)
+    args = argparse.Namespace(legacy_canvas=False)
+    rc = launcher.cmd_start(args)
+    assert rc == 0
+    assert len(delegated) == 1
+    out = capsys.readouterr().out
+    assert "Delegating to AAW product application" in out
+    assert "--legacy-canvas" in out
+
+
+def test_delegate_to_product_invokes_aaw_py(monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "AAW_EXE", tmp_path / "AAW.exe")
+    monkeypatch.setattr(launcher, "AAW_PY", tmp_path / "AAW.py")
+    (tmp_path / "AAW.py").write_text("# stub", encoding="utf-8")
+    called_cmd = []
+
+    def fake_run(cmd, cwd=None):
+        called_cmd.append((cmd, cwd))
+        class Res:
+            returncode = 0
+        return Res()
+
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+    args = argparse.Namespace(open_browser=False, port=8787)
+    rc = launcher.delegate_to_product(args)
+    assert rc == 0
+    assert called_cmd[0][0] == [launcher.sys.executable, str(tmp_path / "AAW.py"), "--no-browser"]
+
+
+def test_cmd_start_legacy_canvas_collision_with_product_server(monkeypatch, capsys):
+    monkeypatch.setattr(launcher, "find_product_server",
+                        lambda: {"port": 8787, "token": "tok", "pid": 1111, "url": "http://127.0.0.1:8787/"})
+    rc = launcher.cmd_start(_args(legacy_canvas=True, port=8787))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "occupied by the running AAW product server" in out
+
+
+def test_main_parses_legacy_canvas_flag(monkeypatch):
+    seen = {}
+
+    def _fake_start(args):
+        seen["args"] = args
+        return 0
+
+    monkeypatch.setattr(launcher, "cmd_start", _fake_start)
+    rc = launcher.main(["start", "--legacy-canvas"])
+    assert rc == 0
+    assert seen["args"].legacy_canvas is True

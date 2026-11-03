@@ -72,10 +72,22 @@ def self_test(report_file: Path | None = None) -> int:
     mappings = pr.exact_mappings(catalog)
     mapping_ok = all(target in profiles and profiles[target].get("exact_runtime_mapping_of") == source
                      for source, target in mappings.items())
+    import aaw_mcp_server
+    mcp_resp = aaw_mcp_server.AawMcpServer().handle_request({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {},
+    })
+    mcp_ok = bool(
+        mcp_resp
+        and mcp_resp.get("result", {}).get("serverInfo", {}).get("name") == "aaw-mcp"
+    )
     checks = {"profiles": bool(profiles), "catalog": bool(catalog), "ui": all(f.is_file() for f in ui_files),
               "exact_mappings": mapping_ok, "probe_classifier": pp.classify_probe("claude", 0, '{"is_error": false, '
                                                                                    f'"result": "{pp.PROBE_TOKEN}"}}',
-                                                                                   "")[0] == pp.PROBE_ACCEPTED}
+                                                                                   "")[0] == pp.PROBE_ACCEPTED,
+              "mcp": mcp_ok}
     report = {"status": "PASS" if all(checks.values()) else "FAIL", "checks": checks,
               "release": product_version.RELEASE, "release_name": product_version.RELEASE_NAME,
               "profiles": len(profiles), "recommendations_catalog": catalog["catalog_version"],
@@ -113,6 +125,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--detect", action="store_true")
     parser.add_argument("--version", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--mcp", action="store_true", help="start universal MCP server on stdio")
+    parser.add_argument("--mcp-http", nargs="?", const=8788, type=int, default=None,
+                        help="start MCP server over HTTP (default port: 8788)")
+    parser.add_argument("--mcp-config", nargs="?", const="all", default=None,
+                        help="print or inspect MCP config for targets (antigravity, claude, codex, all)")
+    parser.add_argument("--mcp-install", nargs="?", const="all", default=None,
+                        help="install MCP config for targets (antigravity, claude, codex, all)")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--report-file", type=Path,
@@ -137,6 +156,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.self_test:
         return self_test(args.report_file)
+    if args.mcp:
+        import aaw_mcp_server
+        return aaw_mcp_server.serve_stdio()
+    if args.mcp_http is not None:
+        import aaw_mcp_server
+        return aaw_mcp_server.serve_http(port=args.mcp_http or 8788)
+    if args.mcp_config is not None:
+        import aaw_mcp_config
+        return aaw_mcp_config.main(["--target", args.mcp_config or "all", "--print"])
+    if args.mcp_install is not None:
+        import aaw_mcp_config
+        return aaw_mcp_config.main(["--target", args.mcp_install or "all", "--install"])
     import product_server
     return product_server.serve(port=args.port, open_browser=not args.no_browser)
 

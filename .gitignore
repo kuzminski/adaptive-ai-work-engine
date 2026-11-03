@@ -71,3 +71,4 @@ Thumbs.db
 # Portable build output
 build/
 dist/
+*.egg-info/
