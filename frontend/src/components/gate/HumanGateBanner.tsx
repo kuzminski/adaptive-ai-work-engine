@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { DecisionAction, RunDetail } from "../../api/types";
 import { GateDecisionModal } from "./GateDecisionModal";
+import { SettlementCard } from "./SettlementCard";
 
 export interface HumanGateBannerProps {
   run?: RunDetail | null;
@@ -314,6 +315,10 @@ export const HumanGateBanner: React.FC<HumanGateBannerProps> = ({
             </button>
           </div>
         </div>
+
+        {(run?.gate as any)?.settlement && (
+          <SettlementCard settlement={(run?.gate as any).settlement} forecast={(run as any)?.live?.forecast} />
+        )}
       </div>
 
       {/* Standalone fallback modal support if not controlled externally */}

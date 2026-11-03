@@ -768,6 +768,16 @@ def forecast_view(body: Mapping[str, Any]) -> dict[str, Any]:
         detection = prun.detection_snapshot()
         current = str(body.get("current_profile_id") or "") or None
         import product_recommendations as pr
+        if not current:
+            # The wizard knows only the level (e.g. RECOMMENDED); resolve it to the profile that would really run.
+            settings = product_home.load_settings()
+            choices = {g: body.get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
+            try:
+                slots = pr.resolve_choices(choices, runnable=prun.pp.runnable_profiles(detection), detection=detection,
+                                           states=prun.pp.profile_states(detection))["slots"]
+                current = (slots.get("implementer_default") or {}).get("profile_id") or None
+            except Exception:  # a forecast must never fail because the setup cannot be resolved
+                current = None
         current_chain = [str(x) for x in (body.get("current_chain") or []) if str(x).strip()]
         rec["apply"] = {"slot": "implementer_default", "profile_id": rec["profile_id"],
                         "runnable": rec["profile_id"] in prun.pp.runnable_profiles(detection),

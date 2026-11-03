@@ -260,6 +260,18 @@ def test_with_an_implementer_chain_the_recommendation_becomes_step_one_and_keeps
     assert apply["current_chain"] == chain
 
 
+def test_without_a_profile_id_the_forecast_resolves_the_chosen_level_to_the_profile_that_would_run(home):
+    from unittest import mock
+    import product_recommendations as pr
+    history = many("BUGFIX", "TERRA_HIGH", 8, 8, 0.02)
+    resolved = {"slots": {"implementer_default": {"profile_id": "GPT6_LUNA_HIGH"}}}
+    with mock.patch.object(pv, "_history", return_value={"rows": history, "summaries": [], "records": []}),             mock.patch.object(pv.prun, "detection_snapshot", return_value={}),             mock.patch.object(pv.prun.pp, "runnable_profiles", return_value={"TERRA_HIGH", "GPT6_LUNA_HIGH"}),             mock.patch.object(pv.prun.pp, "profile_states", return_value={}),             mock.patch.object(pr, "resolve_choices", return_value=resolved) as resolve:
+        out = pv.forecast_view({"goal": "Napraw błąd", "directions": [], "implementation": "RECOMMENDED"})
+    apply = out["recommended"]["apply"]
+    assert resolve.call_args[0][0]["implementation"] == "RECOMMENDED"
+    assert apply["current_profile_id"] == "GPT6_LUNA_HIGH" and apply["differs"] is True
+
+
 def test_the_audit_record_keeps_the_applied_chain():
     form = prun.normalize_form({"goal": "Zbuduj coś ciekawego", "advanced": {"recommendation": {
         "slot": "implementer_chain", "profile_id": "TERRA_HIGH", "chain": ["TERRA_HIGH", "GPT6_LUNA_HIGH"], "kind": "BUGFIX"}}})

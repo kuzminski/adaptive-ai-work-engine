@@ -364,6 +364,51 @@ export class ApiClient {
       body: JSON.stringify(settings),
     });
   }
+
+  /**
+   * GET /api/experience — benchmark built passively from this machine's real runs
+   * (per task kind: cost x solve rate, Pareto front, recommendations, provenance).
+   */
+  public async getExperience(params: { kind?: string; persona?: string } = {}): Promise<any> {
+    const query = new URLSearchParams();
+    if (params.kind) query.set("kind", params.kind);
+    // the backend's demo switch is `demo=<persona>` (a clearly labelled synthetic preview)
+    if (params.persona) query.set("demo", params.persona);
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return this.request<any>(`/api/experience${suffix}`, { method: "GET" });
+  }
+
+  /**
+   * POST /api/experience/forecast — before START: what history says about work like this goal
+   * (horizon, cost range, recommended implementation model with an `apply` hint).
+   */
+  public async postForecast(body: Record<string, any>): Promise<any> {
+    return this.request<any>("/api/experience/forecast", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST /api/intake/propose — one confirmed read-only planner call that turns a loose idea
+   * into scope + roadmap + risks, with a forecast. Costs one planner call; the UI must confirm first.
+   */
+  public async postIntake(body: { idea: string; repo?: string; chain_mode?: boolean; planning?: string }): Promise<any> {
+    return this.request<any>("/api/intake/propose", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST /api/models/verify — probe which configured models actually answer on this machine.
+   */
+  public async verifyModels(body: Record<string, any> = {}): Promise<any> {
+    return this.request<any>("/api/models/verify", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
 }
 
 // Singleton client instance for application-wide use

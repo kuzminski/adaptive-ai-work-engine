@@ -13,6 +13,10 @@ import { runPhaseGraphTests } from "./phaseGraphTests";
 import { runGateComponentTests } from "./gateComponentTests";
 import { runRightDrawerComponentTests } from "./rightDrawerComponentTests";
 import { runViewComponentTests } from "./viewComponentTests";
+import { runExperienceViewTests } from "./experienceViewTests";
+import { runLiveChainPanelTests } from "./liveChainPanelTests";
+import { runIntakeTests } from "./intakeTests";
+import { runSettingsPanelsTests } from "./settingsPanelsTests";
 
 async function runTests() {
   console.log("=== Starting AAW Frontend Unit Tests ===");
@@ -319,6 +323,10 @@ async function runTests() {
 
   // ── Views & Dynamic Navigation Routing Tests ──────────────────────────────
   await runViewComponentTests();
+  await runExperienceViewTests();
+  await runLiveChainPanelTests();
+  await runIntakeTests();
+  await runSettingsPanelsTests();
 
   console.log("\n=== ALL FRONTEND UNIT TESTS PASSED ===");
 }
