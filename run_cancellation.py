@@ -177,8 +177,14 @@ class CancellationToken:
             try:
                 if hasattr(os, "killpg") and hasattr(os, "getpgid") and os.name != "nt":
                     try:
-                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                        record["signal"] = "SIGTERM_PGID"
+                        proc_pgid = os.getpgid(process.pid)
+                        current_pgid = os.getpgid(0)
+                        if proc_pgid != current_pgid:
+                            os.killpg(proc_pgid, signal.SIGTERM)
+                            record["signal"] = "SIGTERM_PGID"
+                        else:
+                            process.terminate()
+                            record["signal"] = "TERMINATE"
                     except Exception:
                         process.terminate()
                         record["signal"] = "TERMINATE"
