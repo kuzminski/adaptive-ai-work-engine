@@ -217,117 +217,15 @@ def recommend_strategy(
     *,
     adaptive_enabled: bool = True,
 ) -> dict[str, Any]:
-    """Select orchestration strategy based on task difficulty, subtasks, and telemetry."""
-    task_class = str(task_definition.get("task_class") or mr.MODERATE).upper()
-    criticality = str(task_definition.get("criticality") or mr.NORMAL_CRITICALITY).upper()
-    subtasks = list(task_definition.get("subtasks") or [])
-    subtask_count = len(subtasks)
-    now_iso = dt.datetime.now(dt.timezone.utc).isoformat()
-
-    # If adaptive recommendations are disabled by user, fall back to single executor
-    if not adaptive_enabled:
-        return {
-            "orchestrator_version": ORCHESTRATOR_VERSION,
-            "timestamp": now_iso,
-            "adaptive_enabled": False,
-            "selected_template": TEMPLATE_SINGLE_EXECUTOR,
-            "workers_count": 1,
-            "model_profile": "GPT6_LUNA_HIGH",
-            "effort_level": "medium",
-            "independent_review_required": False,
-            "reason_code": "ADAPTIVE_DISABLED_USER_OVERRIDE",
-            "justification": "Adaptive recommendations disabled by configuration; using single executor baseline.",
-            "conflict_analysis": None,
-        }
-
-    # 1. TRIVIAL task: deterministic short-circuit
-    if task_class == mr.TRIVIAL:
-        return {
-            "orchestrator_version": ORCHESTRATOR_VERSION,
-            "timestamp": now_iso,
-            "adaptive_enabled": True,
-            "selected_template": TEMPLATE_SINGLE_EXECUTOR,
-            "workers_count": 0,
-            "model_profile": None,
-            "effort_level": "none",
-            "independent_review_required": False,
-            "deterministic_short_circuit": True,
-            "reason_code": "TRIVIAL_DETERMINISTIC_DIRECT",
-            "justification": "Task is deterministic and requires no LLM invocations or parallel workers.",
-            "conflict_analysis": None,
-        }
-
-    # 2. CRITICAL task: highest security, mandatory independent review
-    if task_class == mr.CRITICAL or criticality == mr.CRITICAL:
-        return {
-            "orchestrator_version": ORCHESTRATOR_VERSION,
-            "timestamp": now_iso,
-            "adaptive_enabled": True,
-            "selected_template": TEMPLATE_CRITICAL_INDEPENDENT_REVIEW,
-            "workers_count": 1,
-            "model_profile": "OPUS_5_5_HIGH",
-            "effort_level": "max",
-            "independent_review_required": True,
-            "deterministic_short_circuit": False,
-            "reason_code": "CRITICAL_SECURITY_INDEPENDENT_REVIEW",
-            "justification": "Critical/high-risk task requires strongest model and mandatory independent review gate.",
-            "conflict_analysis": None,
-        }
-
-    # 3. SIMPLE task: economic single worker
-    if task_class == mr.SIMPLE or subtask_count <= 1:
-        return {
-            "orchestrator_version": ORCHESTRATOR_VERSION,
-            "timestamp": now_iso,
-            "adaptive_enabled": True,
-            "selected_template": TEMPLATE_SINGLE_EXECUTOR,
-            "workers_count": 1,
-            "model_profile": "AGY_GEMINI_FLASH",
-            "effort_level": "low",
-            "independent_review_required": False,
-            "deterministic_short_circuit": False,
-            "reason_code": "SIMPLE_ECONOMIC_SINGLE_EXECUTOR",
-            "justification": "Task is simple or has only one subtask; economic single worker is most cost-efficient.",
-            "conflict_analysis": None,
-        }
-
-    # 4. MODERATE or COMPLEX with multiple subtasks: evaluate parallelism
-    conflict_report = detect_scope_conflicts(subtasks)
-
-    if conflict_report["has_conflict"]:
-        # Overlapping files -> Enforce safe serialization
-        return {
-            "orchestrator_version": ORCHESTRATOR_VERSION,
-            "timestamp": now_iso,
-            "adaptive_enabled": True,
-            "selected_template": TEMPLATE_SERIAL_FALLBACK,
-            "workers_count": 1,
-            "model_profile": "GPT6_LUNA_HIGH" if task_class == mr.MODERATE else "SONNET_5_5_MEDIUM",
-            "effort_level": "medium" if task_class == mr.MODERATE else "high",
-            "independent_review_required": (task_class == mr.COMPLEX),
-            "deterministic_short_circuit": False,
-            "reason_code": "SCOPE_OVERLAP_SERIALIZATION_REQUIRED",
-            "justification": f"File scope conflict detected ({conflict_report['conflict_count']} conflict(s)); safe serialization enforced.",
-            "conflict_analysis": conflict_report,
-        }
-
-    # Independent subtasks: evaluate cost justification for parallel dispatch
-    # Overhead includes worktree creation, isolated git branch, and ALL_REQUIRED merge resolution.
-    workers_count = min(subtask_count, MAX_PARALLEL_WORKERS)
-    return {
-        "orchestrator_version": ORCHESTRATOR_VERSION,
-        "timestamp": now_iso,
-        "adaptive_enabled": True,
-        "selected_template": TEMPLATE_PARALLEL_INDEPENDENT,
-        "workers_count": workers_count,
-        "model_profile": "GPT6_LUNA_HIGH" if task_class == mr.MODERATE else "SONNET_5_5_MEDIUM",
-        "effort_level": "medium",
-        "independent_review_required": (task_class == mr.COMPLEX),
-        "deterministic_short_circuit": False,
-        "reason_code": "INDEPENDENT_SUBTASKS_PARALLEL_APPROVED",
-        "justification": f"Detected {subtask_count} independent subtasks with zero file scope overlap; spawning {workers_count} parallel workers.",
-        "conflict_analysis": conflict_report,
-    }
+    """Select orchestration strategy based on task difficulty, subtasks, telemetry, and P3 policy hierarchy."""
+    import adaptive_policy as ap
+    mode = ap.MODE_DISABLED if not adaptive_enabled else ap.resolve_effective_mode(task_definition)
+    decision = ap.evaluate_policy(
+        task_definition=task_definition,
+        telemetry=telemetry,
+        mode=mode,
+    )
+    return decision.to_dict()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +266,7 @@ def generate_adaptive_dag(
     strategy: Mapping[str, Any],
     goal: str,
     subtasks: Sequence[Mapping[str, Any]] | None = None,
+    verification_command: list[str] | None = None,
 ) -> dict[str, Any]:
     """Generate a validated AAW workflow JSON conforming to routing_contract and workflow_schema."""
     template = strategy.get("selected_template", TEMPLATE_SINGLE_EXECUTOR)
@@ -479,7 +378,7 @@ def generate_adaptive_dag(
                 "role": None, "model": None, "effort": None,
                 "instructions": "Validate workspace and fan-out independent subtasks.",
                 "acceptance": ["Machine gate passes."],
-                "command": ["python", "-c", "import sys; sys.exit(0)"],
+                "command": ["git", "status", "--porcelain"],
                 "timeout_seconds": 60,
                 "on_pass": None, "on_fail": None,
                 "routing": "ALL_MATCHES",
@@ -612,11 +511,15 @@ def generate_adaptive_dag(
                 "role": None, "model": None, "effort": None,
                 "instructions": "Run automated regression tests.",
                 "acceptance": ["Automated tests exit 0"],
-                "command": ["python", "-c", "import sys; sys.exit(0)"],
+                "command": list(verification_command) if verification_command else ["git", "status", "--porcelain"],
                 "timeout_seconds": 120,
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_CRIT_MACHINE_TO_REV", "to": "N03_STRONG_REVIEW", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_CRIT_MACHINE_TO_REV", "to": "N03_STRONG_REVIEW", "when": {"outcome": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_CRIT_MACHINE_FAIL", "to": "STOP", "when": {"outcome": "FAIL"}, "kind": "CONTINUE", "label": "FAIL"},
+                    {"edge_id": "E_CRIT_MACHINE_BLOCKED", "to": "STOP", "when": {"outcome": "BLOCKED"}, "kind": "CONTINUE", "label": "BLOCKED"},
+                ],
             },
             {
                 "id": "N03_STRONG_REVIEW",
@@ -630,7 +533,11 @@ def generate_adaptive_dag(
                 "acceptance": ["Strong independent review passes."],
                 "on_pass": None, "on_fail": None,
                 "routing": "FIRST_MATCH",
-                "edges": [{"edge_id": "E_CRIT_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"}],
+                "edges": [
+                    {"edge_id": "E_CRIT_REV_TO_GATE", "to": "N09_HUMAN_GATE", "when": {"verdict": "PASS"}, "kind": "CONTINUE", "label": "PASS"},
+                    {"edge_id": "E_CRIT_REV_REPAIR", "to": "STOP", "when": {"verdict": "REPAIR"}, "kind": "CONTINUE", "label": "REPAIR"},
+                    {"edge_id": "E_CRIT_REV_BLOCKED", "to": "STOP", "when": {"verdict": "BLOCKED"}, "kind": "CONTINUE", "label": "BLOCKED"},
+                ],
             },
             {
                 "id": "N09_HUMAN_GATE",

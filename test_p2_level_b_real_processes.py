@@ -106,9 +106,14 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 120, "outp
 sys.exit(0)
 """, encoding="utf-8")
 
-    # On Windows, wrap in .cmd
-    mock_cmd = bin_dir / "codex.cmd"
-    mock_cmd.write_text(f'@"{sys.executable}" "{mock_cli_py}" %*\n', encoding="utf-8")
+    # On Windows, wrap in .cmd; on POSIX/Linux, create executable shell wrapper
+    if os.name == "nt":
+        mock_cmd = bin_dir / "codex.cmd"
+        mock_cmd.write_text(f'@"{sys.executable}" "{mock_cli_py}" %*\n', encoding="utf-8")
+    else:
+        mock_sh = bin_dir / "codex"
+        mock_sh.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{mock_cli_py}" "$@"\n', encoding="utf-8")
+        mock_sh.chmod(0o755)
 
     # Prepend to PATH so runner finds mock_bin/codex.cmd first
     current_path = os.environ.get("PATH", "")

@@ -1,37 +1,37 @@
 {
-  "timestamp": "2026-11-02T16:34:55Z",
+  "timestamp": "2026-11-02T20:21:15Z",
   "provider": "OpenAI Codex CLI (codex 0.164.0)",
   "model": "gpt-5.6-sol",
   "sequential": {
     "identifier": "BENCH_SEQUENTIAL",
     "max_workers": 1,
     "status": "WAITING_FOR_HUMAN",
-    "total_wall_s": 156.276,
-    "critical_path_s": 96.048,
+    "total_wall_s": 164.014,
+    "critical_path_s": 93.46,
     "subtask_1": {
       "node_id": "N02_SUB_01",
-      "pid": 33564,
-      "duration_s": 56.242,
-      "start": 220730.5730391,
-      "end": 220786.8147018
+      "pid": 6620,
+      "duration_s": 66.477,
+      "start": 234300.4382903,
+      "end": 234366.9150669
     },
     "subtask_2": {
       "node_id": "N02_SUB_02",
-      "pid": 42572,
-      "duration_s": 72.119,
-      "start": 220787.8599767,
-      "end": 220859.9790055
+      "pid": 26752,
+      "duration_s": 64.831,
+      "start": 234368.3749039,
+      "end": 234433.2062952
     },
-    "subtask_stage_span_s": 129.406,
+    "subtask_stage_span_s": 132.768,
     "overlap_s": 0.0,
-    "sum_subtask_durations_s": 128.361,
-    "scheduler_overhead_s": 2.941,
+    "sum_subtask_durations_s": 131.308,
+    "scheduler_overhead_s": 4.263,
     "model_calls": 3,
     "tokens": {
-      "input_tokens": 743455,
-      "cached_input_tokens": 670336,
-      "output_tokens": 6376,
-      "total_tokens": 749831
+      "input_tokens": 779204,
+      "cached_input_tokens": 705280,
+      "output_tokens": 6040,
+      "total_tokens": 785244
     },
     "cost_accounting": {
       "cost_status": "REAL_USAGE_UNKNOWN_PRICING",
@@ -47,32 +47,32 @@
     "identifier": "BENCH_PARALLEL",
     "max_workers": 2,
     "status": "WAITING_FOR_HUMAN",
-    "total_wall_s": 98.596,
-    "critical_path_s": 95.475,
+    "total_wall_s": 101.507,
+    "critical_path_s": 96.795,
     "subtask_1": {
       "node_id": "N02_SUB_01",
-      "pid": 41348,
-      "duration_s": 38.519,
-      "start": 220887.3972773,
-      "end": 220925.9166665
+      "pid": 39712,
+      "duration_s": 67.464,
+      "start": 234465.0895368,
+      "end": 234532.5538439
     },
     "subtask_2": {
       "node_id": "N02_SUB_02",
-      "pid": 22968,
-      "duration_s": 67.458,
-      "start": 220887.6272359,
-      "end": 220955.085053
+      "pid": 39908,
+      "duration_s": 67.447,
+      "start": 234465.3630538,
+      "end": 234532.8104238
     },
-    "subtask_stage_span_s": 67.688,
-    "overlap_s": 38.289,
-    "sum_subtask_durations_s": 105.977,
-    "scheduler_overhead_s": 2.891,
+    "subtask_stage_span_s": 67.721,
+    "overlap_s": 67.191,
+    "sum_subtask_durations_s": 134.911,
+    "scheduler_overhead_s": 4.455,
     "model_calls": 3,
     "tokens": {
-      "input_tokens": 603457,
-      "cached_input_tokens": 552320,
-      "output_tokens": 5379,
-      "total_tokens": 608836
+      "input_tokens": 701238,
+      "cached_input_tokens": 619136,
+      "output_tokens": 5951,
+      "total_tokens": 707189
     },
     "cost_accounting": {
       "cost_status": "REAL_USAGE_UNKNOWN_PRICING",
@@ -85,21 +85,21 @@
     }
   },
   "comparison": {
-    "subtask_stage_speedup": 1.91,
-    "total_workflow_speedup": 1.59,
-    "parallel_overlap_s": 38.289,
+    "subtask_stage_speedup": 1.96,
+    "total_workflow_speedup": 1.62,
+    "parallel_overlap_s": 67.191,
     "sequential_overlap_s": 0.0,
     "tokens_sequential": {
-      "input_tokens": 743455,
-      "cached_input_tokens": 670336,
-      "output_tokens": 6376,
-      "total_tokens": 749831
+      "input_tokens": 779204,
+      "cached_input_tokens": 705280,
+      "output_tokens": 6040,
+      "total_tokens": 785244
     },
     "tokens_parallel": {
-      "input_tokens": 603457,
-      "cached_input_tokens": 552320,
-      "output_tokens": 5379,
-      "total_tokens": 608836
+      "input_tokens": 701238,
+      "cached_input_tokens": 619136,
+      "output_tokens": 5951,
+      "total_tokens": 707189
     }
   }
 }
