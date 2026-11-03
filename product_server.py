@@ -44,7 +44,8 @@ UI_ROOT = Path(__file__).resolve().with_name("PRODUCT_UI")
 APP_VERSION = f"AAW {product_version.RELEASE}"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                 ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
-                ".ico": "image/x-icon"}
+                ".ico": "image/x-icon", ".woff2": "font/woff2",
+                ".json": "application/json; charset=utf-8"}
 
 
 class App:
@@ -197,6 +198,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     get_routes: dict[str, Callable[..., Any]] = {
         "/api/bootstrap": app.bootstrap,
         "/api/home": lambda q: pv.home_view(),
+        "/api/runs": lambda q: pv.home_view(),
         "/api/settings": lambda q: product_home.load_settings(),
         "/api/recommendations": app.recommendations,
         "/api/experience": lambda q: pv.experience_view(q),
@@ -217,6 +219,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/pick-folder": app.pick_folder,
         "/api/tasks/preview": lambda b: prun.public_preview(prun.preview_task(b.get("form") or {})),
         "/api/tasks/start": lambda b: prun.start_task(b.get("form") or {}),
+        "/api/start": lambda b: prun.start_task(b.get("form") if "form" in b else b),
         "/api/settings": app.settings_post,
         "/api/recommendations/update": app.update_recommendations,
         "/api/quit": app.quit,
@@ -224,7 +227,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/mcp/configure": _mcp_configure,
     }
     run_get = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)(/evidence)?$")
-    run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue)$")
+    run_post = re.compile(r"^/api/runs/([A-Za-z0-9_\-]+)/(stop|resume|accept|reject|continue|decision)$")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "AAW/0.2"
@@ -275,8 +278,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 return
             if url.path.startswith("/static/"):
                 name = url.path[len("/static/"):]
-                target = (UI_ROOT / name).resolve()
-                if UI_ROOT.resolve() not in target.parents or not target.is_file():
+                resolved_ui = UI_ROOT.resolve()
+                try:
+                    target = (UI_ROOT / name.lstrip("/\\")).resolve()
+                    if not target.is_relative_to(resolved_ui) or not target.is_file():
+                        self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+                        return
+                except (ValueError, OSError):
                     self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
                     return
                 self._send(HTTPStatus.OK, target.read_bytes(),
@@ -316,7 +324,23 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return prun.accept(run_id, early_end=bool(body.get("early_end")))
                 if action == "reject":
                     return prun.reject(run_id, reason=str(body.get("reason") or ""))
-                return prun.prepare_continuation(run_id, mode=str(body.get("mode") or ""))
+                if action == "decision":
+                    decision_act = str(body.get("action") or "").lower().strip()
+                    reason = str(body.get("feedback") or body.get("reason") or "")
+                    if decision_act == "accept":
+                        return prun.accept(run_id, early_end=bool(body.get("early_end")))
+                    if decision_act == "reject":
+                        return prun.reject(run_id, reason=reason)
+                    if decision_act == "continue":
+                        mode = str(body.get("mode") or "").strip()
+                        if mode not in ("direction", "new_goal"):
+                            mode = "direction"
+                        return prun.prepare_continuation(run_id, mode=mode)
+                    raise prun.ProductError(f"Nieobsługiwana decyzja: {decision_act}")
+                mode = str(body.get("mode") or "").strip()
+                if mode not in ("direction", "new_goal"):
+                    mode = "direction"
+                return prun.prepare_continuation(run_id, mode=mode)
             self._api(act)
 
     return Handler
@@ -352,7 +376,7 @@ def serve(*, port: int = 0, open_browser: bool = True, ready: Callable[[str], No
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     product_home.write_json(product_home.home() / "ui.json", {"port": server.server_address[1], "token": token,
                                                              "pid": os.getpid()})
-    print(f"AAW działa: {url}  (zamknij z poziomu aplikacji: Ustawienia → Zamknij AAW)", flush=True)
+    print(f"AAW działa: {url}  (zamknij z poziomu aplikacji: Ustawienia -> Zamknij AAW)", flush=True)
     if ready:
         ready(url)
     if open_browser:

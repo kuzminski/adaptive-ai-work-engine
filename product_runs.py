@@ -427,6 +427,15 @@ def normalize_risks(values: Any, direction_count: int) -> list[dict[str, Any]]:
     return rows
 
 
+def _clean_choice_val(v: Any) -> str | None:
+    if isinstance(v, dict):
+        v = v.get("default") or v.get("value") or v.get("selected")
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
 def _clean_chain(value: Any) -> list[str] | None:
     """The user's own implementer chain (ordered profile IDs) or None for the system default."""
     if value in (None, "", []):
@@ -455,9 +464,9 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
                                       "Pierwsza iteracja"),
         "directions": directions,
         "directions_text": _check_len(directions_text.strip(), MAX_ROADMAP_CHARS, "Kierunek / roadmapa"),
-        "planning": form.get("planning") or None,
-        "implementation": form.get("implementation") or None,
-        "review": form.get("review") or None,
+        "planning": _clean_choice_val(form.get("planning")),
+        "implementation": _clean_choice_val(form.get("implementation")),
+        "review": _clean_choice_val(form.get("review")),
         "implementer_chain": _clean_chain(form.get("implementer_chain")),
         "advanced": {
             "acceptance_criteria": _clean_list(advanced.get("acceptance_criteria"), 100),
@@ -475,6 +484,7 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
             "exploration": advanced.get("exploration") if isinstance(advanced.get("exploration"), bool) else None,
             # Audit record when the user applied a recommended model for a task kind (UI-confirmed, never automatic).
             "recommendation": _clean_recommendation(advanced.get("recommendation")),
+            "adaptive_orchestration_enabled": bool(advanced.get("adaptive_orchestration_enabled", False)),
             "profile_overrides": {k: str(v) for k, v in (advanced.get("profile_overrides") or {}).items() if v},
             "risks": normalize_risks(risks_raw, len(directions)),
         },
@@ -549,6 +559,7 @@ def build_mandate(form: Mapping[str, Any], mandate_id: str, settings: Mapping[st
             },
             # Only present with risks, so a mandate without them keeps its previous shape and hash.
             **({"risk_register": [dict(r) for r in advanced["risks"]]} if advanced.get("risks") else {}),
+            **({"adaptive_orchestration_enabled": True} if (advanced.get("adaptive_orchestration_enabled") or settings.get("adaptive_orchestration_enabled")) else {}),
         },
     }
 
@@ -625,7 +636,7 @@ def resolve_setup(choices: Mapping[str, Any], *, detection: Mapping[str, Any] | 
     """The three simple levels → the actual models (wizard step 'model setup'); no goal needed."""
     settings = product_home.load_settings()
     detection = detection or detection_snapshot()
-    picked = {g: (choices or {}).get(g) or settings.get(g) for g in pr.CHOICE_GROUPS}
+    picked = {g: _clean_choice_val((choices or {}).get(g)) or settings.get(g) for g in pr.CHOICE_GROUPS}
     states = pp.profile_states(detection)
     resolution = pr.resolve_choices(picked, runnable=pp.runnable_profiles(detection), detection=detection,
                                     states=states, implementer_chain=_clean_chain(implementer_chain))
@@ -673,7 +684,7 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
     settings = product_home.load_settings()
     detection = detection or detection_snapshot()
     repo = inspect_repo(form["repo"])
-    choices = {g: form[g] or settings.get(g) for g in pr.CHOICE_GROUPS}
+    choices = {g: _clean_choice_val(form[g]) or settings.get(g) for g in pr.CHOICE_GROUPS}
     resolution = pr.resolve_choices(choices, runnable=pp.runnable_profiles(detection),
                                     overrides=form["advanced"]["profile_overrides"], detection=detection,
                                     states=pp.profile_states(detection), implementer_chain=form["implementer_chain"])

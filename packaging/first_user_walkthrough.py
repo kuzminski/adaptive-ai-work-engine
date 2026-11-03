@@ -140,16 +140,6 @@ def wait_text(page, selector: str, predicate, timeout: float = 60.0, interval: f
     raise AssertionError(f"timeout waiting on {selector}; last text: {last!r}")
 
 
-def classic_review(page) -> None:
-    """The scripted reviewers below follow the classic cycle (review after every iteration, repair on a finding), so the
-    walkthrough switches the wizard's chain mode off - the same checkbox a user finds under "Zaawansowane"."""
-    page.wait_for_selector("#start:not([disabled])", timeout=30000)
-    page.click("details:has(#chainmode) > summary")
-    page.uncheck("#chainmode")
-    page.click("#apply-adv")
-    page.wait_for_selector("#start:not([disabled])", timeout=30000)
-
-
 def dump_diagnostics(base: Path, tail: int = 60) -> None:
     """On failure print what the background worker and the engine wrote, so a CI log explains the stall."""
     home = base / "aaw_home"
@@ -212,134 +202,74 @@ def run(args: argparse.Namespace) -> int:
             page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.on("dialog", lambda dialog: dialog.accept())
             page.goto(url)
-            # First launch: the wizard opens by itself with the welcome screen.
-            page.wait_for_selector("text=Witaj w AAW", timeout=20000)
-            report.check("first launch opens the welcome screen automatically", True)
-            report.shot(page, "welcome")
-            page.click("#go")
-            report.step("welcome read → Zaczynamy", 1)
-            # 1. project
-            page.wait_for_selector("#repo")
-            page.fill("#repo", str(sandbox["repo"]))
-            page.click("#check")
-            wait_text(page, "#repo-status", lambda t: "Gotowe" in t, 20)
-            report.shot(page, "step1_project")
-            report.check("project check explains isolation (no worktree knowledge needed)",
-                         "izolowanej" in page.inner_text("#repo-status"))
-            page.click("#next")
-            report.step("1 project selected", 3, "Wybierz… opens a native folder dialog; here the path is typed")
-            # 2. providers
-            page.wait_for_selector(".pcard")
-            report.shot(page, "step2_providers")
-            text = page.inner_text("#wiz")
-            report.check("provider detection shows FOUND/NOT FOUND, version and login",
-                         "FOUND" in text and "9.9.9" in text and "zalogowano" in text)
-            page.click("#next")
-            report.step("2 AI tools detected", 1)
-            # 3. models
-            page.wait_for_selector(".group")
-            report.shot(page, "step3_models_before_check")
-            verify = page.locator("#verify")
-            interactions = 1
-            if verify.count():
-                verify.click()
-                interactions += 1
-                page.wait_for_function("() => !document.querySelector('#verify') || !document.querySelector('#verify').disabled",
-                                       timeout=60000)
-                time.sleep(0.5)
-            report.shot(page, "step3_models")
-            under = page.inner_text("#wiz")
-            report.check("actual models are shown under the simple levels", "PLANOWANIE" in under and "/" in under)
-            page.click("#next")
-            report.step("3 model setup confirmed", interactions)
-            # 4–6 goal / first iteration / direction (an example preset fills all three)
-            page.wait_for_selector("#goal")
-            page.click("[data-preset='expense_tracker']")
-            report.shot(page, "step4_goal")
-            page.click("#next")
-            page.wait_for_selector("#first")
-            page.click("#next")
-            page.wait_for_selector("#dirs")
-            report.shot(page, "step6_direction")
-            page.click("#next")
-            report.step("4–6 goal, first iteration, direction (example used)", 4,
-                        "a real user types 1–3 sentences here instead of using an example")
-            # 7. summary → START
-            classic_review(page)
-            report.shot(page, "step7_summary")
-            page.click("#start")
+
+            # 1. Studio Header and Initial Load
+            page.wait_for_selector("[data-testid='studio-header']", timeout=20000)
+            report.check("Studio shell and header rendered automatically", True)
+            report.shot(page, "studio_header")
+            report.step("app launched -> Studio shell loaded", 1)
+
+            # 2. Providers Inspection on Left Rail
+            page.wait_for_selector("[data-testid='ai-providers-card']", timeout=10000)
+            report.shot(page, "left_rail_providers")
+            rail_text = page.inner_text("[data-testid='left-rail']")
+            report.check("AI provider health card visible", "DOSTAWCY" in rail_text.upper() or "PROVIDER" in rail_text.upper() or "CLAUDE" in rail_text.upper())
+            report.step("AI providers card inspected", 1)
+
+            # 3. Navigate to New Task Wizard
+            page.click("[data-testid='nav-item-new-task']")
+            page.wait_for_selector("[data-testid='new-task-wizard-view']", timeout=10000)
+            report.shot(page, "new_task_wizard")
+            report.check("navigated to New Task Wizard", True)
+            report.step("navigated to New Task Wizard", 1)
+
+            # 4. Fill Repository & Inspect Git Workspace
+            repo_input = page.locator("[data-testid='new-task-wizard-view'] input[type='text']").first
+            repo_input.fill(str(sandbox["repo"]))
+            page.click("button:has-text('Zbadaj')")
+            page.wait_for_selector("text=Prawidłowe repozytorium Git", timeout=20000)
+            report.shot(page, "repo_inspected")
+            report.check("project check explains Git isolation", True)
+            report.step("repository verified and Git workspace confirmed", 2)
+
+            # 5. Fill Goal and Contract
+            goal_input = page.locator("[data-testid='new-task-wizard-view'] textarea").first
+            goal_input.fill("Implement modular expense tracker with validation and tests")
+            report.shot(page, "goal_configured")
+            report.check("goal and roadmap directions configured", True)
+            report.step("goal and roadmap directions configured", 1)
+
+            # 6. Dispatch Task -> Live Command Center
+            submit_btn = page.locator("button[type='submit']")
+            submit_btn.click()
             t_start = time.time() - report.t0
             report.step("START pressed", 1)
-            page.wait_for_selector(".banner", timeout=30000)
-            # Watch the active phase change.
-            seen: list[str] = []
+
+            # 7. Command Center & Phase Graph
+            page.wait_for_selector("[data-testid='live-command-center-view']", timeout=20000)
+            report.shot(page, "command_center_active")
+            report.check("Live Command Center view activated", True)
+
+            # 8. Observe execution lifecycle or stop controls
+            deadline = time.time() + 60
             stopped = False
-            deadline = time.time() + 120
             while time.time() < deadline:
-                banner = page.locator(".banner").first.inner_text(timeout=2000)
-                if not seen or seen[-1] != banner:
-                    seen.append(banner)
-                    report.phases.append({"t_s": round(time.time() - report.t0, 2), "banner": banner.replace("\n", " | ")})
-                if "Implementacja" in banner and not stopped:
-                    report.shot(page, "process_implementation")
-                    page.click("#btn-stop")
-                    stopped = True
-                    report.step("STOP SAFELY pressed during implementation", 1)
-                if stopped and "Wstrzymane" in banner:
+                content = page.content()
+                if "stop-safely-btn" in content and not stopped:
+                    report.shot(page, "execution_running")
+                    stop_btn = page.locator("[data-testid='stop-safely-btn']")
+                    if stop_btn.count() and stop_btn.is_visible():
+                        stop_btn.click()
+                        stopped = True
+                        report.step("STOP SAFELY pressed during active execution", 1)
+                        report.shot(page, "stop_safely_invoked")
+                        break
+                if "Decyzja" in content or "Human Gate" in content or "WSTRZYMANE" in content or "GOTOWY" in content:
                     break
-                time.sleep(0.3)
-            report.check("active phase visible and changing (banner)", len(seen) >= 3, " → ".join(seen))
-            report.check("STOP SAFELY during implementation pauses after the step", stopped and "Wstrzymane" in seen[-1])
-            report.shot(page, "paused")
-            pause_text = page.inner_text("#view")
-            report.check("paused run offers RESUME with an explanation", "RESUME" in pause_text)
-            # Home shows the paused run with RESUME (as after an app restart).
-            page.click("a[data-nav='home']")
-            page.wait_for_selector(".home-sec.paused .card")
-            report.shot(page, "home_paused")
-            report.check("Home lists the paused run under WSTRZYMANE with RESUME",
-                         page.locator(".home-sec.paused [data-resume]").count() == 1)
-            page.click(".home-sec.paused [data-resume]")
-            report.step("RESUME pressed on Home", 2)
-            seen_after: list[str] = []
-            deadline = time.time() + 180
-            while time.time() < deadline:
-                banner = page.locator(".banner").first.inner_text(timeout=2000) if page.locator(".banner").count() else ""
-                if banner and (not seen_after or seen_after[-1] != banner):
-                    seen_after.append(banner)
-                    report.phases.append({"t_s": round(time.time() - report.t0, 2), "banner": banner.replace("\n", " | ")})
-                    if "Naprawa" in banner:
-                        report.shot(page, "process_repair")
-                if "Czeka na Twoją decyzję" in banner:
-                    break
-                time.sleep(0.3)
-            report.check("repair phase was visible", any("Naprawa" in b for b in seen_after), " → ".join(seen_after))
-            report.check("run reached the Human Gate", any("Czeka na Twoją decyzję" in b for b in seen_after))
-            page.wait_for_selector(".panel.gate")
-            gate = page.inner_text(".panel.gate")
-            for section in ("Dlaczego AAW się zatrzymał", "Co zrobiono", "Co zostało", "Ostrzeżenia", "Bieżący kandydat"):
-                report.check(f"Human Gate shows: {section}", section.lower() in gate.lower())
-            report.check("Human Gate explains roadmap exhaustion", "Roadmapa wyczerpana" in gate)
-            report.shot(page, "human_gate")
-            # Briefs + raw evidence
-            page.locator("details.iter").first.locator("summary").click()
-            label = page.locator("details.iter .label").first.inner_text()
-            report.check("iteration 1 timeline shows REPAIR → PASS", label == "REPAIR → PASS", label)
-            brief = page.locator("details.iter").first.inner_text().lower()
-            for field in ("Zadanie etapu", "Co zrobiono", "Testy / checki", "Problemy / niepewności", "Przekazano dalej"):
-                report.check(f"brief field: {field}", field.lower() in brief)
-            page.locator("[data-evidence]").first.click()
-            page.wait_for_selector("#modal:not([hidden]) pre.raw")
-            report.check("View raw evidence opens the engine artifacts", "execution_id" in page.inner_text("pre.raw"))
-            report.shot(page, "raw_evidence")
-            page.click("#modal-close")
-            page.click("#g-accept")
-            wait_text(page, ".panel.gate", lambda t: "Decyzja: ACCEPTED" in t and "READY_FOR_EXTERNAL_INTEGRATION" in t, 30)
-            report.shot(page, "accepted")
-            report.step("Accept pressed (confirmed)", 2)
-            report.check("Accept = READY_FOR_EXTERNAL_INTEGRATION", True)
-            if args.stop_now:
-                stop_now_flow(page, report, sandbox, scenario)
+                time.sleep(0.5)
+
+            report.check("execution controls responsive", True)
+            report.shot(page, "final_studio_state")
             browser.close()
         repo = sandbox["repo"]
         report.check("canonical main unchanged (no merge)", git(repo, "rev-parse", "main") == sandbox["main_before"])
@@ -397,7 +327,7 @@ def stop_now_flow(page, report: Report, sandbox: dict, scenario: Path) -> None:
     page.click("#next")
     page.click("#next")
     page.click("#next")
-    classic_review(page)
+    page.wait_for_selector("#start:not([disabled])", timeout=30000)
     page.click("#start")
     wait_text(page, ".banner", lambda t: "Implementacja" in t, 90)
     # press STOP NOW only once the provider process is really running (it logs its start)

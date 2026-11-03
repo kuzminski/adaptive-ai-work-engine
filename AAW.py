@@ -66,8 +66,13 @@ def self_test(report_file: Path | None = None) -> int:
     import workflow_runner as wr
     profiles = wr.load_implementer_profiles()
     catalog = pr.builtin_catalog()
-    ui_files = [product_server.UI_ROOT / name for name in ("index.html", "app.js", "app.css", "icon.svg")]
-    ui = ui_files[0]
+    ui_index = product_server.UI_ROOT / "index.html"
+    ui_icon = product_server.UI_ROOT / "icon.svg"
+    ui_assets = product_server.UI_ROOT / "assets"
+    has_assets = ui_assets.is_dir() and any(ui_assets.glob("*.js")) and any(ui_assets.glob("*.css"))
+    legacy_ui = (product_server.UI_ROOT / "app.js").is_file() and (product_server.UI_ROOT / "app.css").is_file()
+    ui_ok = ui_index.is_file() and ui_icon.is_file() and (has_assets or legacy_ui)
+    ui = ui_index
     # the model-availability layer must agree with the frozen catalog on every exact mapping
     mappings = pr.exact_mappings(catalog)
     mapping_ok = all(target in profiles and profiles[target].get("exact_runtime_mapping_of") == source
@@ -83,7 +88,7 @@ def self_test(report_file: Path | None = None) -> int:
         mcp_resp
         and mcp_resp.get("result", {}).get("serverInfo", {}).get("name") == "aaw-mcp"
     )
-    checks = {"profiles": bool(profiles), "catalog": bool(catalog), "ui": all(f.is_file() for f in ui_files),
+    checks = {"profiles": bool(profiles), "catalog": bool(catalog), "ui": ui_ok,
               "exact_mappings": mapping_ok, "probe_classifier": pp.classify_probe("claude", 0, '{"is_error": false, '
                                                                                    f'"result": "{pp.PROBE_TOKEN}"}}',
                                                                                    "")[0] == pp.PROBE_ACCEPTED,

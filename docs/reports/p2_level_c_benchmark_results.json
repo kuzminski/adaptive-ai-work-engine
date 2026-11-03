@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-11-02T20:21:15Z",
+  "provider": "OpenAI Codex CLI (codex 0.164.0)",
+  "model": "gpt-5.6-sol",
+  "sequential": {
+    "identifier": "BENCH_SEQUENTIAL",
+    "max_workers": 1,
+    "status": "WAITING_FOR_HUMAN",
+    "total_wall_s": 164.014,
+    "critical_path_s": 93.46,
+    "subtask_1": {
+      "node_id": "N02_SUB_01",
+      "pid": 6620,
+      "duration_s": 66.477,
+      "start": 234300.4382903,
+      "end": 234366.9150669
+    },
+    "subtask_2": {
+      "node_id": "N02_SUB_02",
+      "pid": 26752,
+      "duration_s": 64.831,
+      "start": 234368.3749039,
+      "end": 234433.2062952
+    },
+    "subtask_stage_span_s": 132.768,
+    "overlap_s": 0.0,
+    "sum_subtask_durations_s": 131.308,
+    "scheduler_overhead_s": 4.263,
+    "model_calls": 3,
+    "tokens": {
+      "input_tokens": 779204,
+      "cached_input_tokens": 705280,
+      "output_tokens": 6040,
+      "total_tokens": 785244
+    },
+    "cost_accounting": {
+      "cost_status": "REAL_USAGE_UNKNOWN_PRICING",
+      "note": "Token counts are measured from real provider CLI telemetry; exact USD rate depends on ChatGPT subscription tier / API quota.",
+      "estimated_cost_usd": null
+    },
+    "files_created": {
+      "math_utils_exists": true,
+      "string_utils_exists": true
+    }
+  },
+  "bounded_parallel": {
+    "identifier": "BENCH_PARALLEL",
+    "max_workers": 2,
+    "status": "WAITING_FOR_HUMAN",
+    "total_wall_s": 101.507,
+    "critical_path_s": 96.795,
+    "subtask_1": {
+      "node_id": "N02_SUB_01",
+      "pid": 39712,
+      "duration_s": 67.464,
+      "start": 234465.0895368,
+      "end": 234532.5538439
+    },
+    "subtask_2": {
+      "node_id": "N02_SUB_02",
+      "pid": 39908,
+      "duration_s": 67.447,
+      "start": 234465.3630538,
+      "end": 234532.8104238
+    },
+    "subtask_stage_span_s": 67.721,
+    "overlap_s": 67.191,
+    "sum_subtask_durations_s": 134.911,
+    "scheduler_overhead_s": 4.455,
+    "model_calls": 3,
+    "tokens": {
+      "input_tokens": 701238,
+      "cached_input_tokens": 619136,
+      "output_tokens": 5951,
+      "total_tokens": 707189
+    },
+    "cost_accounting": {
+      "cost_status": "REAL_USAGE_UNKNOWN_PRICING",
+      "note": "Token counts are measured from real provider CLI telemetry; exact USD rate depends on ChatGPT subscription tier / API quota.",
+      "estimated_cost_usd": null
+    },
+    "files_created": {
+      "math_utils_exists": true,
+      "string_utils_exists": true
+    }
+  },
+  "comparison": {
+    "subtask_stage_speedup": 1.96,
+    "total_workflow_speedup": 1.62,
+    "parallel_overlap_s": 67.191,
+    "sequential_overlap_s": 0.0,
+    "tokens_sequential": {
+      "input_tokens": 779204,
+      "cached_input_tokens": 705280,
+      "output_tokens": 6040,
+      "total_tokens": 785244
+    },
+    "tokens_parallel": {
+      "input_tokens": 701238,
+      "cached_input_tokens": 619136,
+      "output_tokens": 5951,
+      "total_tokens": 707189
+    }
+  }
+}
