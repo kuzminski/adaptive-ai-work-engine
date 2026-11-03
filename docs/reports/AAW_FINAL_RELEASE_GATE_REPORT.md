@@ -4,7 +4,7 @@
 **Repository:** `kuzminski/adaptive-ai-work-engine`  
 **Working Branch:** `feat/aaw-p24-p25-p3-adaptive-reliability`  
 **Reference Base Commit:** `8ef3585d3210f6dba7bd2be7a5bbe07aaff3c311` (03.11.2026)  
-**Final HEAD Commit:** Pending integration commit on `feat/aaw-p24-p25-p3-adaptive-reliability`  
+**Final HEAD Commit:** `75e1e54b8d780ecab894aeec3d4df713f019f635` on `feat/aaw-p24-p25-p3-adaptive-reliability` (GitHub Actions Run `41567722152` — **ALL GREEN**)  
 **Audit & Verification Date:** 2026-11-03  
 **Verdict:** **READY_FOR_MERGE (ALL GATES PASSED — 0 FAIL)**
 
@@ -83,7 +83,10 @@ Rozbicie 63 awarii według pakietów i ich status po naprawie:
   - `test_production_use_evidence.py`: 19 passed, 0 failed (100%)
   - `test_adaptive_orchestration_p2.py`: 7 passed, 0 failed (100%)
   - `test_planner_proposal_pipeline.py`: 85 passed, 0 failed (100%)
-- **ŁĄCZNY WYNIK REGRESJI:** **281 testów zbadanych bezpośrednio w sesji — 281 PASS, 0 FAIL.**
+- **ŁĄCZNY WYNIK REGRESJI LOKALNEJ:** **281 testów zbadanych bezpośrednio w sesji — 281 PASS, 0 FAIL.**
+- **WYNIK GITHUB ACTIONS CI (RUN `41567722152`):**
+  - **Linux (`ubuntu-latest`):** `885 passed, 2 skipped, 0 failed` in 2m28s (100% GREEN)
+  - **Windows x64:** Complete suite pass, frozen EXE build, Microsoft Defender scan, loopback UI verification, and first-user Playwright walkthrough in 6m02s (100% GREEN)
 
 ### 4.2. Windows x64 EXE & CI Walkthrough
 - Środowisko Windows przechodzi testy jednostkowe, integracyjne oraz kompilację przenośną PyInstaller bez błędów.
