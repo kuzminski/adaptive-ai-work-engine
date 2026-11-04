@@ -1,0 +1,15 @@
+{
+  "id": "T05_business_days",
+  "difficulty": "MEDIUM",
+  "title": "Fix business-day arithmetic across two modules",
+  "goal": "Fix shop.schedule and shop.sla so business-day counting and due dates follow the documented rules.",
+  "acceptance_criteria": [
+    "is_business_day is False on Saturday, Sunday and on any holiday",
+    "business_days_between(start, end, holidays) counts business days in [start, end) (start included, end excluded) and returns 0 when start >= end",
+    "due_date(start, n, holidays) returns start when n == 0; otherwise the date after n further business days (start itself is never counted, even when it is a business day), and raises ValueError for n < 0",
+    "holidays may be any iterable of dates (list, set, tuple)"
+  ],
+  "constraints": ["standard library only", "keep function names and signatures"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

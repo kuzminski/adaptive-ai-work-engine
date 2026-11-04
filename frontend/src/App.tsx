@@ -15,6 +15,7 @@ import { LiveCommandCenterView } from "./components/views/LiveCommandCenterView"
 import { NewTaskWizardView } from "./components/views/NewTaskWizardView";
 import { RunsHistoryView } from "./components/views/RunsHistoryView";
 import { SettingsView } from "./components/views/SettingsView";
+import { ExperienceView } from "./components/views/ExperienceView";
 
 export function App() {
   const {
@@ -38,6 +39,8 @@ export function App() {
         return <NewTaskWizardView />;
       case "runs":
         return <RunsHistoryView />;
+      case "experience":
+        return <ExperienceView />;
       case "settings":
         return <SettingsView />;
       case "command-center":

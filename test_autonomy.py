@@ -67,6 +67,7 @@ class Harness:
         # V0.1/V0.2 lifecycle tests keep exercising their historical role
         # bindings; V0.3 policy behavior has its own focused test module.
         self.roles.pop("policy_profiles", None)
+        self.roles.pop("chain", None)   # lifecycle tests pin the classic per-iteration cycle; chain mode has its own tests
         self.ctxs = {}
 
     def script(self, name, *steps):

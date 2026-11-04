@@ -22,7 +22,7 @@ import {
   TaskStartResult,
 } from "../api/types";
 
-export type NavItem = "command-center" | "new-task" | "runs" | "settings";
+export type NavItem = "command-center" | "new-task" | "runs" | "experience" | "settings";
 export type AutonomyPreset = "conservative" | "balanced" | "autonomous";
 
 export interface EngineStoreState {

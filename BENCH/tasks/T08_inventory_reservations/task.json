@@ -1,0 +1,16 @@
+{
+  "id": "T08_inventory_reservations",
+  "difficulty": "MEDIUM",
+  "title": "Fix reservation accounting without touching the model",
+  "goal": "Fix shop.inventory.Inventory so reservations are accounted correctly, and add commit. shop/models.py must not change.",
+  "acceptance_criteria": [
+    "available(sku) is on_hand - reserved (0 for an unknown sku)",
+    "reserve(sku, qty) raises ValueError for qty <= 0 and models.OutOfStock when qty exceeds available(sku) (including unknown skus), leaving all state unchanged; otherwise returns a new reservation id",
+    "release(reservation_id) frees the reserved quantity exactly once; releasing an unknown or already used id raises KeyError",
+    "commit(reservation_id) turns a reservation into a sale (on_hand and reserved both drop by its quantity), returns the quantity and raises KeyError for an unknown or already used id",
+    "shop/models.py is not modified and existing method signatures stay"
+  ],
+  "constraints": ["standard library only", "do not modify shop/models.py"],
+  "forbidden_paths": ["shop/models.py"],
+  "touched_areas": ["shop"]
+}

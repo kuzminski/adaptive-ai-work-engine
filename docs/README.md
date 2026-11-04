@@ -4,6 +4,12 @@ Niniejszy katalog zawiera kompletną dokumentację architektoniczną, kontrakty 
 
 ---
 
+## Roadmapa
+
+- [`AAW_ROADMAP_V1.md`](specs/AAW_ROADMAP_V1.md) — Roadmapa rozbudowy funkcjonalnej po P3.0.1 i PR #6: diagnoza stanu, etapy 0–5 (konsolidacja, pętla dowodowa z prawdziwej pracy, od pomysłu do programu, wiele projektów, kontrolowana adaptacja, dojrzałość produktu) i wynikające z nich widoki UI/UX.
+
+---
+
 ## Indeks specyfikacji technicznych
 
 ### 1. Architektura produktu i MVP
@@ -26,6 +32,9 @@ Specyfikacje kontrolera autonomii, zarządzania pętlą wykonania i eskalacji im
 - [`AAW_LONG_AUTONOMY_V0_1.md`](specs/AAW_LONG_AUTONOMY_V0_1.md) — Długie pola formularzy i bezlicznikowa autonomia (count-free autonomy, praca do wyczerpania planu lub eskalacji).
 - [`AAW_IMPLEMENTER_CHAIN_V0_1.md`](specs/AAW_IMPLEMENTER_CHAIN_V0_1.md) — Łańcuch implementatorów (uporządkowana sekwencja profili: najsłabszy pierwszy, deterministyczna eskalacja).
 - [`AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md`](specs/AAW_IMPLEMENTER_EFFECTIVENESS_PLAN_V0_1.md) — Plan podniesienia skuteczności implementatorów (kończenie iteracji, przydzielanie trudnych zadań silniejszym modelom).
+
+- [`AAW_OPTIMIZATION_PROJECT_V0_1.md`](specs/AAW_OPTIMIZATION_PROJECT_V0_1.md) — Projekt optymalizacji: tryb łańcuchowy (długie serie iteracji z lekkim review, jedno poważne review na końcu serii, polerowanie), telemetria V1 i pasywny benchmark kosztu na zadanie.
+- [`AAW_UX_REALTIME_EXPERIENCE_V0_1.md`](specs/AAW_UX_REALTIME_EXPERIENCE_V0_1.md) — Widok przebiegu na żywo, samobudujący się benchmark w układzie współrzędnych, rekomendacje „co byłoby optymalne” i prognoza „od pomysłu do końca w jednym ciągu”.
 
 ### 3. Planowanie i walidacja
 Specyfikacje modułu planowania (Planner), generowania propozycji, naprawy pakietów i dyscypliny złożoności.

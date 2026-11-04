@@ -1,0 +1,16 @@
+{
+  "id": "T04_ttl_cache",
+  "difficulty": "MEDIUM",
+  "title": "Implement an LRU cache with TTL",
+  "goal": "Implement shop.cache.TTLCache exactly as specified in its docstring.",
+  "acceptance_criteria": [
+    "TTLCache(max_size, ttl, clock=time.monotonic) raises ValueError for max_size < 1 or ttl <= 0",
+    "set stores a value that expires when clock() >= set time + ttl; get returns the default for missing or expired keys and removes expired ones",
+    "a successful get and every set make the key most recently used; get does not extend the ttl",
+    "when size would exceed max_size, expired entries are purged first, then least recently used entries are evicted",
+    "len() and `in` ignore expired entries (`in` does not change recency); purge() removes expired entries and returns how many"
+  ],
+  "constraints": ["standard library only", "the clock is injectable and must be the only time source"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

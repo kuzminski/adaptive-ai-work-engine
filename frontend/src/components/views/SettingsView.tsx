@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { client } from "../../api/client";
 import { useEngineStore } from "../../store/engineStore";
+import { AdaptationPanel } from "../settings/AdaptationPanel";
+import { ModelVerifyPanel } from "../settings/ModelVerifyPanel";
 
 export const SettingsView: React.FC = () => {
   const {
@@ -63,12 +65,16 @@ export const SettingsView: React.FC = () => {
     setSaveSuccess(false);
     setSaveError(null);
 
-    const payload = {
+    const payload: Record<string, any> = {
       ...settings,
       max_repair_attempts: Number(settings.max_repair_attempts),
       provider_timeout_s: Number(settings.provider_timeout_s),
       online_recommendation_updates: Boolean(settings.online_recommendation_updates),
     };
+    // Exploration settings are owned by AdaptationPanel; do not overwrite them with values loaded at mount.
+    delete payload.exploration_enabled;
+    delete payload.exploration_max_percent;
+    delete payload.exploration_max_per_run;
 
     try {
       const updated = await client.saveSettings(payload);
@@ -115,6 +121,10 @@ export const SettingsView: React.FC = () => {
           <span>{saveError}</span>
         </div>
       )}
+
+      <AdaptationPanel />
+
+      <ModelVerifyPanel />
 
       <form onSubmit={handleSave} className="space-y-6">
         {/* Section 1: Loop Limits & Safety */}

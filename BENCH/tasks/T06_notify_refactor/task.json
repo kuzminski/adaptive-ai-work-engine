@@ -1,0 +1,16 @@
+{
+  "id": "T06_notify_refactor",
+  "difficulty": "MEDIUM",
+  "title": "Extract a shared renderer and add an SMS notice",
+  "goal": "Refactor shop.notify so the three email_* functions share one private _render helper without changing their output, and add sms_receipt.",
+  "acceptance_criteria": [
+    "_render(subject, line, name) returns 'Subject: <subject>\\n\\nHello <Name Title-Cased and stripped>,\\n<line>\\nThanks!' and all three email_* functions use it",
+    "the output of email_receipt, email_shipping and email_refund is byte-for-byte unchanged",
+    "sms_receipt(name, order_id, total) returns 'Hi <Name Title-Cased and stripped>: order <order_id> total <total with 2 decimals>'",
+    "an SMS longer than 40 characters is cut to its first 39 characters followed by the single character '…'",
+    "shop/templates.py is not modified and the public function names stay"
+  ],
+  "constraints": ["standard library only", "do not modify shop/templates.py"],
+  "forbidden_paths": ["shop/templates.py"],
+  "touched_areas": ["shop"]
+}

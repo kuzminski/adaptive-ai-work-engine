@@ -27,6 +27,10 @@ import {
 import { client } from "../../api/client";
 import { RepoInspectResult } from "../../api/types";
 import { useEngineStore } from "../../store/engineStore";
+import { IdeaIntakePanel, IntakePrefill } from "../intake/IdeaIntakePanel";
+import { StartForecast } from "../intake/StartForecast";
+
+const IMPLEMENTER_STATIC_OPTIONS = ["", "claude-3-5-sonnet", "gemini-2.5-flash", "claude-3-5-haiku"];
 
 export const NewTaskWizardView: React.FC = () => {
   const {
@@ -57,10 +61,43 @@ export const NewTaskWizardView: React.FC = () => {
     bootstrap?.limits?.default_max_iterations || 5
   );
   const [continueAutonomously, setContinueAutonomously] = useState<boolean>(true);
+  const [chainMode, setChainMode] = useState<boolean>(true);
 
   // Model selections
   const [planningModel, setPlanningModel] = useState<string>("");
   const [implementerModel, setImplementerModel] = useState<string>("");
+  // "Użyj rekomendowanego modelu": a per-task override of the default implementer (the level stays as chosen),
+  // sent as advanced.profile_overrides + an audit record; undo simply drops it.
+  const [modelOverride, setModelOverride] = useState<{ profileId: string; rec: any } | null>(null);
+  // Risks / acceptance criteria / forbidden areas copied from an accepted "Od pomysłu" proposal.
+  const [intakeAdvanced, setIntakeAdvanced] = useState<IntakePrefill["advanced"] | null>(null);
+
+  const parsedDirections = directionsText
+    .split("\n")
+    .map((d) => d.replace(/^\s*\d+[\.\)]\s*/, "").trim())
+    .filter(Boolean);
+  const appliedProfileId = modelOverride ? modelOverride.profileId : null;
+
+  const applyIntake = (prefill: IntakePrefill) => {
+    setGoal(prefill.goal);
+    setFirstIteration(prefill.first_iteration || "");
+    // Roadmap lines come as "- [człowiek] ..." from the intake; the wizard keeps plain lines.
+    setDirectionsText(
+      (prefill.directions || "")
+        .split("\n")
+        .map((line) => line.replace(/^\s*-\s*/, ""))
+        .join("\n")
+    );
+    setIntakeAdvanced(prefill.advanced || null);
+  };
+
+  const applyRecommendedModel = (profileId: string, rec?: any) => {
+    setModelOverride({ profileId, rec: rec || null });
+  };
+
+  const undoRecommendedModel = () => {
+    setModelOverride(null);
+  };
 
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -132,10 +169,7 @@ export const NewTaskWizardView: React.FC = () => {
     setSubmitting(true);
     setSubmitError(null);
 
-    const directions = directionsText
-      .split("\n")
-      .map((d) => d.replace(/^\s*\d+[\.\)]\s*/, "").trim())
-      .filter(Boolean);
+    const directions = parsedDirections;
 
     const formPayload = {
       repo: repoPath.trim(),
@@ -146,8 +180,24 @@ export const NewTaskWizardView: React.FC = () => {
       implementation: implementerModel || undefined,
       preset: activePolicyPreset,
       advanced: {
+        ...(intakeAdvanced || {}),
         max_iterations: Number(maxIterations),
         continue_autonomously: continueAutonomously,
+        chain_mode: chainMode,
+        ...(modelOverride
+          ? {
+              profile_overrides: { implementer_default: modelOverride.profileId },
+              recommendation: {
+                slot: "implementer_default",
+                profile_id: modelOverride.profileId,
+                kind: modelOverride.rec?.apply?.kind ?? modelOverride.rec?.kind ?? null,
+                previous_profile_id: modelOverride.rec?.apply?.current_profile_id ?? null,
+                n: modelOverride.rec?.n ?? null,
+                rate: modelOverride.rec?.rate ?? null,
+                cost_per_solved: modelOverride.rec?.cost_per_solved ?? null,
+              },
+            }
+          : {}),
       },
     };
 
@@ -309,6 +359,8 @@ export const NewTaskWizardView: React.FC = () => {
             />
           </div>
 
+          <IdeaIntakePanel repoPath={repoPath} chainMode={chainMode} onApply={applyIntake} />
+
           <div className="space-y-1">
             <label className="text-xs font-medium text-slate-300 block">
               Skupienie pierwszej iteracji (opcjonalnie):
@@ -379,6 +431,9 @@ export const NewTaskWizardView: React.FC = () => {
                 <option value="claude-3-5-sonnet">Claude 3.5 Sonnet (Wysoka precyzja refaktoryzacji)</option>
                 <option value="gemini-2.5-flash">Gemini 2.5 Flash (Szybkie i ekonomiczne mikro-zadania)</option>
                 <option value="claude-3-5-haiku">Claude 3.5 Haiku (Lokalne formatowanie i lintery)</option>
+                {implementerModel && !IMPLEMENTER_STATIC_OPTIONS.includes(implementerModel) && (
+                  <option value={implementerModel}>{implementerModel}</option>
+                )}
               </select>
             </div>
           </div>
@@ -463,7 +518,30 @@ export const NewTaskWizardView: React.FC = () => {
               </label>
             </div>
           </div>
+
+          <label className="flex items-start gap-2.5 text-xs text-slate-300 cursor-pointer" data-testid="chain-mode-toggle">
+            <input
+              type="checkbox"
+              checked={chainMode}
+              onChange={(e) => setChainMode(e.target.checked)}
+              data-testid="chain-mode-checkbox"
+              className="mt-0.5 rounded border-subtle bg-elevated text-sky-500 focus:ring-sky-500 w-4 h-4"
+            />
+            <span>Tryb łańcuchowy: długie serie z lekkim review, jedno poważne review na końcu serii</span>
+          </label>
         </div>
+
+        {/* Forecast before START (debounced, read-only) */}
+        <StartForecast
+          goal={goal}
+          firstIteration={firstIteration}
+          directions={parsedDirections}
+          chainMode={chainMode}
+          currentProfileId={implementerModel}
+          appliedProfileId={appliedProfileId}
+          onApplyRecommended={applyRecommendedModel}
+          onUndoRecommended={undoRecommendedModel}
+        />
 
         {/* Submit Action Bar */}
         <div className="flex items-center justify-between pt-2">

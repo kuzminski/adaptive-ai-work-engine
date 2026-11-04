@@ -1,0 +1,17 @@
+{
+  "id": "T03_discount_rules",
+  "difficulty": "MEDIUM",
+  "title": "Tiered discount in the cart summary",
+  "goal": "Add tiered discounts to shop.cart.summary using a new shop.pricing.discount_rate, with cent rounding.",
+  "acceptance_criteria": [
+    "pricing.discount_rate(eligible) returns Decimal('0.15') for eligible >= 250, Decimal('0.10') for eligible >= 100, otherwise Decimal('0')",
+    "eligible is the subtotal of items whose kind is not 'gift_card' (items without a kind are eligible); gift cards never earn or receive a discount",
+    "the discount is eligible * rate rounded to cents with ROUND_HALF_UP",
+    "tax is TAX_RATE of (subtotal - discount), rounded to cents with ROUND_HALF_UP",
+    "cart.summary returns a dict with keys subtotal, discount, tax, total, all Decimals with exactly two decimals; total = subtotal - discount + tax",
+    "an empty cart gives all zeros (0.00)"
+  ],
+  "constraints": ["standard library only", "keep existing function names"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

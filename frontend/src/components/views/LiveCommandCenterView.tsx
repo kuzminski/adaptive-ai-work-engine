@@ -26,6 +26,7 @@ import { useEngineStore } from "../../store/engineStore";
 import { PhaseGraph } from "../graph/PhaseGraph";
 import { HumanGateBanner } from "../gate/HumanGateBanner";
 import { GateDecisionModal } from "../gate/GateDecisionModal";
+import { LiveChainPanel } from "../live/LiveChainPanel";
 
 export const LiveCommandCenterView: React.FC = () => {
   const {
@@ -259,6 +260,9 @@ export const LiveCommandCenterView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Live chain panel (roadmap 2.3): journey, chain slots, meter, forecast, feed */}
+      {(run as any)?.live && <LiveChainPanel live={(run as any).live} status={run?.status} />}
 
       {/* 7-Phase Execution Graph with Animated State Machine */}
       <PhaseGraph run={run} />

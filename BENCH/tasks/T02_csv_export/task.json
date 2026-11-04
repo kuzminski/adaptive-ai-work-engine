@@ -1,0 +1,15 @@
+{
+  "id": "T02_csv_export",
+  "difficulty": "EASY",
+  "title": "Add CSV export for orders",
+  "goal": "Add shop.report.to_csv(orders) that renders orders as RFC 4180 CSV.",
+  "acceptance_criteria": [
+    "first line is the header id,customer,total",
+    "one line per order in input order; total is formatted with exactly two decimals (ints, floats and Decimals alike)",
+    "fields containing a comma, a double quote or a newline are quoted with doubled quotes",
+    "lines end with CRLF including the last one; an empty list yields only the header line"
+  ],
+  "constraints": ["standard library only", "do not change to_rows"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

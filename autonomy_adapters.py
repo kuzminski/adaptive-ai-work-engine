@@ -129,6 +129,17 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
                  "semantic_verification_reason": {"type": ["string", "null"]},
                  "working_roadmap": {"type": ["string", "null"]},
                  "next_recommended_step": {"type": ["string", "null"]},
+                 "chain_plan": {"type": ["array", "null"], "items": {
+                     "type": "object", "additionalProperties": False,
+                     "required": ["goal", "roadmap_refs", "scope_justification", "acceptance_criteria",
+                                  "touched_areas", "implementation_complexity", "complexity_evidence", "work_packet"],
+                     "properties": {"goal": {"type": "string"}, "roadmap_refs": _STRS,
+                                    "scope_justification": {"type": "string"}, "acceptance_criteria": _STRS,
+                                    "touched_areas": _STRS,
+                                    "implementation_complexity": {"type": "string",
+                                                                  "enum": ["NORMAL", "HARDER", "SIGNIFICANTLY_DIFFICULT"]},
+                                    "complexity_evidence": _STRS,
+                                    "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}}},
                  "work_packet": copy.deepcopy(wp.WORK_PACKET_SCHEMA)}},
     "execute": {"type": "object", "additionalProperties": False,
                 "required": ["summary", "changed_files", "checks", "deviations", "uncertainties"],
@@ -293,6 +304,46 @@ ROLE_INSTRUCTIONS["diagnose"] = (
     "Propose concrete next_actions. Do not repeat a previous diagnosis; do not edit anything.")
 ROLE_INSTRUCTIONS["final_review"] = ROLE_INSTRUCTIONS["review"].replace("REVIEWER", "FINAL REVIEWER")
 
+# Chain mode (autonomy_chain). Added to the role instruction only when the handoff has CHAIN / CHAIN_PLANNING.
+CHAIN_INSTRUCTIONS: dict[str, str] = {
+    "plan": (" CHAIN PLANNING: CHAIN_PLANNING.slots_after_this is how many further iterations may run back to back "
+             "before one serious review. After the iteration you return now, outline those iterations in `chain_plan` "
+             "(in execution order, at most slots_after_this entries, each with goal, roadmap_refs, scope_justification, "
+             "acceptance_criteria, touched_areas, implementation_complexity, complexity_evidence, work_packet). Each entry must be a "
+             "self-contained, bounded step that can be implemented and tested without re-planning, reference only "
+             "pending roadmap items whose dependencies are met by this iteration or earlier entries (one item per "
+             "iteration; an item is completed by its iteration), and stay inside the mandate. Return null or [] when "
+             "fewer steps are justified. Entries are re-validated before use; an invalid one is dropped. Give an entry "
+             "a work_packet (same rules as the iteration's own) only for paths that already exist or that an earlier "
+             "entry creates; otherwise null (that iteration then runs from its acceptance criteria alone)."),
+    "review_light": (" CHAIN MODE, LIGHT REVIEW (CHAIN.mode LIGHT): this is a quick mid-chain check, not the serious "
+                     "review. Look only for defects that harm real behaviour: crashes, wrong results, data loss, "
+                     "security holes, a failed or missing required check, an acceptance criterion not met. Report "
+                     "anything smaller (style, naming, minor edge cases, docs, performance nits) as severity LOW or "
+                     "MEDIUM with blocking=false in a single short line; those are polished at the end. Use severity "
+                     "CRITICAL with blocking=true ONLY when the work cannot continue on top of this change (build "
+                     "broken, feature entirely non-functional); use HIGH for serious defects, which the chain-closing "
+                     "review will repair. Prefer PASS."),
+    "review_close": (" CHAIN MODE, SERIOUS REVIEW (CHAIN.mode CHAIN_CLOSE or POLISH): review the whole diff of "
+                     "CHAIN.iterations as one change: does it do what each iteration's acceptance_criteria say, and do "
+                     "the iterations fit together? Re-verify the HIGH items in CHAIN.deferred_findings and report any "
+                     "that are real. Findings that harm real behaviour (wrong results, crashes, data loss, security, "
+                     "failing checks, unmet criteria) are severity HIGH or CRITICAL with blocking=true and will be "
+                     "repaired. Everything smaller is severity LOW or MEDIUM with blocking=false: it is recorded and "
+                     "polished later and must not hold the chain back. Do not block on taste. PASS means the "
+                     "chain is good enough to ship as it is."),
+}
+
+
+def chain_instruction(name: str, handoff: Mapping[str, Any]) -> str:
+    chain_block = handoff.get("CHAIN")
+    if name == "plan":
+        view = handoff.get("CHAIN_PLANNING")
+        return CHAIN_INSTRUCTIONS["plan"] if isinstance(view, Mapping) and view.get("slots_after_this") else ""
+    if name in ("review", "final_review") and isinstance(chain_block, Mapping):
+        return CHAIN_INSTRUCTIONS["review_light" if chain_block.get("mode") == "LIGHT" else "review_close"]
+    return ""
+
 
 # ── role → runtime resolution ───────────────────────────────────────────────
 
@@ -368,6 +419,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                 "FROZEN_DIRECTIONAL_CHARTER_HASH": ctx.get("directional_charter_hash"),
                 "ROADMAP_STATUS": ctx["roadmap"], "HISTORY": ctx["history"],
                 "WORKING_ROADMAP": ctx.get("working_roadmap"),
+                **({"CHAIN_PLANNING": ctx["chain"]} if ctx.get("chain") else {}),
                 "ITERATION_CONTRACT": ctx.get("iteration_contract"), "WORKSPACE": ctx.get("workspace")}
     if name in ("execute", "repair", "self_verify", "diagnose"):
         it = ctx["iteration"]
@@ -419,6 +471,7 @@ def build_handoff(name: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
                               "changed_files", "head", "base_head", "commits")},
             "RAW_EVIDENCE_MANIFEST": raw.get("manifest", []),
             "PREVIOUS_UNRESOLVED_FINDINGS": raw.get("previous_findings", []),
+            **({"CHAIN": ctx["chain"]} if ctx.get("chain") else {}),
             "RAW_EVIDENCE": ctx.get("raw_evidence_results", [])}
 
 
@@ -512,7 +565,8 @@ class DirectRoleExecutor:
         if adapter is not None and runtime["harness"] not in SUPPORTED_HARNESSES:
             # A registered non-built-in provider (e.g. Antigravity) owns its own dispatch.
             return adapter.invoke(ctx, runtime, handoff)
-        prompt = (ROLE_INSTRUCTIONS[self.name] + "\nFinish with exactly the JSON object required by the output "
+        prompt = (ROLE_INSTRUCTIONS[self.name] + chain_instruction(self.name, handoff)
+                  + "\nFinish with exactly the JSON object required by the output "
                   "schema.\n\nHANDOFF:\n" + json.dumps(handoff, indent=2, ensure_ascii=False, default=str))
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="aaw_autonomy_role_") as temp:

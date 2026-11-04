@@ -1,0 +1,15 @@
+{
+  "id": "T01_pagination",
+  "difficulty": "EASY",
+  "title": "Fix 1-based pagination and add page_count",
+  "goal": "Make shop.pagination.paginate treat pages as 1-based and add shop.pagination.page_count, as documented in the module docstring.",
+  "acceptance_criteria": [
+    "paginate(items, page, per_page) returns the items of the 1-based page; the last page may be partial; a page past the end returns []",
+    "paginate raises ValueError for page < 1 or per_page < 1",
+    "paginate accepts any iterable and never mutates its input",
+    "page_count(total, per_page) returns the number of pages (0 for 0 items) and raises ValueError for per_page < 1"
+  ],
+  "constraints": ["standard library only"],
+  "forbidden_paths": [],
+  "touched_areas": ["shop"]
+}

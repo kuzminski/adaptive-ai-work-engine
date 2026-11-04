@@ -98,6 +98,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "max_repair_attempts": 2,
     "provider_timeout_s": 3600,
     "first_run_completed": False,
+    # Opt-in controlled exploration (autonomy_explore): a small, visible share of ordinary iterations is implemented by
+    # another already-runnable model of the same or lower cost class, so thin benchmark cells fill from real work.
+    "exploration_enabled": False,
+    "exploration_max_percent": 20,
+    "exploration_max_per_run": 3,
 }
 
 
@@ -121,5 +126,9 @@ def save_settings(values: Mapping[str, Any]) -> dict[str, Any]:
         current[key] = value
     if not 1 <= int(current["max_repair_attempts"]) <= 6:
         raise ValueError("max_repair_attempts must be between 1 and 6")
+    if not 1 <= int(current["exploration_max_percent"]) <= 50:
+        raise ValueError("exploration_max_percent must be between 1 and 50")
+    if not 1 <= int(current["exploration_max_per_run"]) <= 10:
+        raise ValueError("exploration_max_per_run must be between 1 and 10")
     write_json(home() / "settings.json", current)
     return current
