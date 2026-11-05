@@ -375,3 +375,13 @@ def test_demo_rows_are_deterministic_labelled_and_persona_dependent():
         assert len(ex.benchmark(ex.demo_rows(persona))["overall"]) >= 3, persona
     web_kinds = set(ex.benchmark(ex.demo_rows("web"))["kinds"])
     assert "UI" in web_kinds and ex.mix_of(ex.demo_rows("web")) != ex.mix_of(a)
+
+
+def test_telemetry_record_carries_shadow_summary_in_single_record():
+    import aaw_telemetry as tel
+    diff = {"divergence": True, "recommended_rule_id": "R1", "recommended_strategy": "S3", "recommended_workers": 2,
+            "recommended_model": "m", "executed_strategy": "S1", "executed_workers": 1, "executed_model": "m0",
+            "predicted_benefits": {"predicted_speedup": {"value": 1.4, "provenance": "CALIBRATED_SIMULATION"}}}
+    rec = tel.build_record(run_id="r", execution={"execution_id": "e", "executor": "x"}, iteration={"shadow_diff": diff})
+    assert rec["shadow"]["recommended_strategy"] == "S3" and rec["shadow"]["predicted_speedup"]["value"] == 1.4
+    assert tel.build_record(run_id="r", execution={})["shadow"] is None

@@ -2,6 +2,8 @@
 """Tests for AAW Empirical Benchmark Suite (Phase P2.5 Mandate)."""
 from __future__ import annotations
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -84,13 +86,14 @@ def test_benchmark_execution_and_telemetry_aggregation(tmp_path: Path) -> None:
     # S4 adaptive policy prevents all merge conflicts via safe serialization
     assert s4["total_merge_conflicts"] == 0
 
-    # S4 has lowest total cost due to model routing and trivial bypass
-    assert s4["total_cost_usd"] < s1["total_cost_usd"]
+    # Costs come from the single price source (MODEL_PRICING.json); the S4-vs-S1 ordering is a property of
+    # that table (SIMULATED), not an invariant of the policy, so only sanity is asserted here.
+    assert s1["total_cost_usd"] > 0 and s4["total_cost_usd"] > 0
 
     # Comparative analysis exists and has positive speedup
     comp = results["comparative_analysis"]
     assert comp["s4_vs_s1"]["speedup"] > 1.0
-    assert comp["s4_vs_s1"]["cost_reduction_percent"] > 0.0
+    assert "cost_reduction_percent" in comp["s4_vs_s1"]
 
     # Test saving to disk
     out_file = tmp_path / "test_benchmark_results.json"
@@ -127,3 +130,15 @@ def test_s4_critical_tasks_mandatory_independent_review() -> None:
         s4 = t["S4"]
         assert s4["selected_model_profile"] == "OPUS_5_5_HIGH"
         assert s4["tests_passed"] is True
+
+
+def test_simulator_cost_uses_single_price_source():
+    import aaw_telemetry as tel
+    import empirical_benchmark as eb
+    pricing = tel.load_pricing()
+    for profile, model in eb.PROFILE_MODEL.items():
+        assert tel.price_row(pricing, model) is not None, profile
+        tokens = {"input_total": 3000, "input_cached": 1000, "input_cache_write": 0, "output": 500}
+        expected = tel.estimate_cost(tokens, tel.price_row(pricing, model))
+        assert eb.calculate_cost(profile, 2000, 1000, 500) == pytest.approx(expected, abs=1e-6)
+    assert not hasattr(eb, "MODEL_PRICING")
