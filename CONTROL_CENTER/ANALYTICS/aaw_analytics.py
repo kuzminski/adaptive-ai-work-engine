@@ -711,6 +711,8 @@ def classify(path: Path, stats_root: Path) -> tuple[str, str]:
     name = path.name
     parts = path.relative_to(stats_root).parts
     if path.suffix.lower() != ".json":
+        if name == "telemetry.jsonl" and "AUTONOMY" in parts:
+            return "TELEMETRY_V1", "TELEMETRY"
         if "LEDGER" in parts and name.endswith(".jsonl"):
             return "LEDGER", "LEDGER"
         if "LEDGER" in parts:
@@ -1916,6 +1918,42 @@ _PREPROCESS_DECISION = {
 }
 
 
+def ingest_telemetry_v1(builder: RunBuilder, ref: SourceRef) -> None:
+    """Read the single per-call record (``AAW_TELEMETRY_V1``, written by the autonomy controller).
+
+    It is the authority for usage / wall time / model of the executions it names. It only enriches rows that
+    an identity source (descriptor / state) already created; a record naming no known execution is a
+    diagnostic, never a synthesised row. The file is parsed by ``aaw_telemetry`` itself.
+    """
+    try:
+        if str(AAW_ROOT) not in sys.path:
+            sys.path.insert(0, str(AAW_ROOT))
+        import aaw_telemetry  # type: ignore[import-not-found]
+        records = aaw_telemetry.read_records(ref.path)
+    except Exception as exc:  # noqa: BLE001 - analytics must degrade, not crash
+        builder.diag("TELEMETRY_READ_ERROR", f"{type(exc).__name__}: {exc}", ref.path)
+        return
+    for index, record in enumerate(records):
+        if record.get("schema") != "AAW_TELEMETRY_V1":
+            builder.diag("TELEMETRY_UNKNOWN_SCHEMA", f"record {index}: {record.get('schema')!r}", ref.path)
+            continue
+        execution_id = _text(record.get("execution_id"))
+        row = builder.execution_by_id(execution_id) if execution_id else None
+        if row is None:
+            builder.diag("TELEMETRY_UNMATCHED_EXECUTION",
+                         f"record {index}: execution_id {execution_id!r} has no identity source", ref.path)
+            continue
+        tokens = record.get("tokens") if isinstance(record.get("tokens"), Mapping) else {}
+        usage = {"input_tokens": tokens.get("input_total"), "cached_input_tokens": tokens.get("input_cached"),
+                 "output_tokens": tokens.get("output"), "reasoning_tokens": tokens.get("reasoning")}
+        builder.observe_usage(
+            row,
+            {"wall_time_s": record.get("wall_s"), "harness": record.get("harness"), "model": record.get("model"),
+             "effort": record.get("effort"), "implementer_profile": record.get("profile_id"),
+             "telemetry_status": "TELEMETRY_V1"},
+            usage=usage, source_label="TELEMETRY_V1", ref=ref)
+
+
 def ingest_preprocess(builder: RunBuilder, data: Mapping[str, Any], ref: SourceRef,
                       known_node_ids: set[str]) -> None:
     """Preprocess decision. A SKIPPED decision is not an LLM invocation.
@@ -2357,7 +2395,7 @@ _LAYOUT_ORDER = {
     "EXECUTION_DESCRIPTOR": 0,
     "CUSTOM_JOB_STATE": 1, "WORKFLOW_STATE": 1,
     "CANDIDATE": 2, "HUMAN_DECISION": 3,
-    "LEDGER": 4, "PREPROCESS": 5,
+    "LEDGER": 4, "PREPROCESS": 5, "TELEMETRY_V1": 6,
 }
 
 _SKIP_DETAIL = {
@@ -2432,7 +2470,7 @@ def _known_node_ids(builder: RunBuilder) -> set[str]:
 
 def _status_for(layout: str, source_type: str, run_kind: str | None) -> tuple[str, str | None]:
     if layout in ("EXECUTION_DESCRIPTOR", "CUSTOM_JOB_STATE", "WORKFLOW_STATE", "CANDIDATE",
-                  "HUMAN_DECISION", "LEDGER", "PREPROCESS", "LEGACY_FLAT"):
+                  "HUMAN_DECISION", "LEDGER", "PREPROCESS", "LEGACY_FLAT", "TELEMETRY_V1"):
         return "INDEXED", None
     if layout in ("SINGLE_TASK_NODE", "CLASSIFIER"):
         if run_kind == "SINGLE_TASK":
@@ -2463,7 +2501,7 @@ def ingest_unit(conn: sqlite3.Connection, unit_key: str, paths: Sequence[Path],
                         layout, source_type, None)
         status, detail = _status_for(layout, source_type, run_kind)
         payload: Any = None
-        if status == "INDEXED" and layout != "LEDGER":
+        if status == "INDEXED" and layout not in ("LEDGER", "TELEMETRY_V1"):
             try:
                 payload = _load_json(path)
                 if isinstance(payload, Mapping):
@@ -2535,6 +2573,8 @@ def ingest_unit(conn: sqlite3.Connection, unit_key: str, paths: Sequence[Path],
         try:
             if ref.layout == "LEDGER":
                 ingest_ledger(builder, ref)
+            elif ref.layout == "TELEMETRY_V1":
+                ingest_telemetry_v1(builder, ref)
             elif ref.layout == "EXECUTION_DESCRIPTOR":
                 ingest_descriptor(builder, payload, ref)
             elif ref.layout == "CUSTOM_JOB_STATE":

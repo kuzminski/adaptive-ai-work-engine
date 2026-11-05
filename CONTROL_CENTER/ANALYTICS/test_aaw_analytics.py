@@ -946,3 +946,26 @@ def test_cross_run_identity_collision_preserves_the_original(tmp_path):
     assert {"review_finding", "candidate", "human_decision"} <= entities
     assert _one(db, "SELECT COUNT(*) FROM ingest_diagnostic "
                     "WHERE kind='DATA_INTEGRITY_ERROR'") >= 3
+
+
+def test_telemetry_v1_is_read_as_usage_authority_without_synthesising_rows(tmp_path):
+    root = tmp_path / "03_STATS"
+    root.mkdir()
+    _modern_run(root)
+    auto = root / "AAW_V2" / "AUTONOMY"
+    auto.mkdir()
+    records = [
+        {"schema": "AAW_TELEMETRY_V1", "run_id": "AAW_V2", "execution_id": EXEC_A, "model": "claude-opus-5-5",
+         "wall_s": 12.5, "tokens": {"input_total": 9999, "input_cached": 10, "output": 77, "reasoning": None}},
+        {"schema": "AAW_TELEMETRY_V1", "run_id": "AAW_V2", "execution_id": "EXE_" + "f" * 32,
+         "tokens": {"input_total": 1, "output": 1}},
+    ]
+    (auto / "telemetry.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    db = tmp_path / "index.sqlite"
+    A.ingest(db, root, rebuild=True)
+    assert _one(db, "SELECT layout FROM source_file WHERE rel_path LIKE '%telemetry.jsonl'") == "TELEMETRY_V1"
+    assert _one(db, "SELECT status FROM source_file WHERE rel_path LIKE '%telemetry.jsonl'") == "INDEXED"
+    assert _one(db, "SELECT input_tokens FROM execution WHERE execution_id=?", EXEC_A) == 9999
+    assert _one(db, "SELECT output_tokens FROM execution WHERE execution_id=?", EXEC_A) == 77
+    assert _one(db, "SELECT COUNT(*) FROM execution WHERE execution_id=?", "EXE_" + "f" * 32) == 0
+    assert _one(db, "SELECT COUNT(*) FROM ingest_diagnostic WHERE kind='TELEMETRY_UNMATCHED_EXECUTION'") == 1
