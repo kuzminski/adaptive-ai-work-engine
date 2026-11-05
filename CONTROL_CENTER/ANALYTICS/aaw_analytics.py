@@ -58,8 +58,8 @@ if str(_MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(_MODULE_ROOT))
 from aaw_paths import ANALYTICS_DB_PATH, STATS_ROOT
 
-SCHEMA_VERSION = "AAW_ANALYTICS_INDEX_V2"
-PRIOR_SCHEMA_VERSIONS = ("AAW_ANALYTICS_INDEX_V1", "AAW_ANALYTICS_INDEX_V1.1")
+SCHEMA_VERSION = "AAW_ANALYTICS_INDEX_V3"
+PRIOR_SCHEMA_VERSIONS = ("AAW_ANALYTICS_INDEX_V1", "AAW_ANALYTICS_INDEX_V1.1", "AAW_ANALYTICS_INDEX_V2")
 IDENTITY_CONTRACT = "AAW_EXECUTION_DESCRIPTOR_V0.4A"
 LEDGER_SCHEMA_VERSION = "AAW_EXECUTION_LEDGER_V0.4B"
 
@@ -434,6 +434,9 @@ CREATE TABLE execution (
     cached_input_tokens INTEGER,
     output_tokens INTEGER,
     reasoning_tokens INTEGER,
+    cost_usd REAL,                  -- from AAW_TELEMETRY_V1 only; NULL = unknown, never 0
+    cost_basis TEXT,                -- REPORTED | ESTIMATED | UNPRICED (as recorded by telemetry)
+    proxy_units REAL,               -- price-independent cost proxy from telemetry
     usage_observed INTEGER NOT NULL DEFAULT 0,
     telemetry_status TEXT,
     execution_mode TEXT,
@@ -801,7 +804,8 @@ def _blank_execution(run_id: str) -> dict[str, Any]:
         "outcome": None, "outcome_source": None,
         "wall_time_s": None, "wall_time_basis": "NONE",
         "input_tokens": None, "cached_input_tokens": None, "output_tokens": None,
-        "reasoning_tokens": None, "usage_observed": 0,
+        "reasoning_tokens": None, "cost_usd": None, "cost_basis": None, "proxy_units": None,
+        "usage_observed": 0,
         "telemetry_status": None, "execution_mode": None,
         "input_contract_hash": None, "selection_reason": None, "policy_version": None,
         "descriptor_status": None,
@@ -1952,6 +1956,11 @@ def ingest_telemetry_v1(builder: RunBuilder, ref: SourceRef) -> None:
              "effort": record.get("effort"), "implementer_profile": record.get("profile_id"),
              "telemetry_status": "TELEMETRY_V1"},
             usage=usage, source_label="TELEMETRY_V1", ref=ref)
+        cost = record.get("cost_usd")
+        row["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+        row["cost_basis"] = _text(record.get("cost_basis")) or ("UNPRICED" if row["cost_usd"] is None else None)
+        units = record.get("proxy_units")
+        row["proxy_units"] = float(units) if isinstance(units, (int, float)) and not isinstance(units, bool) else None
 
 
 def ingest_preprocess(builder: RunBuilder, data: Mapping[str, Any], ref: SourceRef,
@@ -2157,7 +2166,8 @@ _EXECUTION_COLUMNS = ("execution_id", "row_locator", "run_id", "node_id", "node_
                       "original_review_execution_id", "created_at", "started_at", "ended_at",
                       "started_day", "started_day_basis", "outcome", "outcome_source",
                       "wall_time_s", "wall_time_basis", "input_tokens", "cached_input_tokens",
-                      "output_tokens", "reasoning_tokens", "usage_observed", "telemetry_status",
+                      "output_tokens", "reasoning_tokens", "cost_usd", "cost_basis", "proxy_units",
+                      "usage_observed", "telemetry_status",
                       "execution_mode", "input_contract_hash", "selection_reason",
                       "policy_version", "descriptor_status", "identity_authority",
                       "identity_contract", "evidence_grain", "fixture_class", "fixture_evidence",
@@ -3113,7 +3123,9 @@ class Analytics:
                            SUM(e.input_tokens) AS input_tokens,
                            SUM(e.cached_input_tokens) AS cached_input_tokens,
                            SUM(e.output_tokens) AS output_tokens,
-                           SUM(e.reasoning_tokens) AS reasoning_tokens
+                           SUM(e.reasoning_tokens) AS reasoning_tokens,
+                           SUM(e.cost_usd) AS cost_usd,
+                           SUM(CASE WHEN e.cost_usd IS NULL THEN 1 ELSE 0 END) AS calls_unpriced
                     FROM execution e JOIN run r ON r.run_id=e.run_id
                     WHERE {where} AND e.started_day IS NOT NULL
                     GROUP BY e.started_day ORDER BY e.started_day""", params).fetchall()
@@ -3401,7 +3413,7 @@ class Analytics:
                            e.outcome, e.outcome_source,
                            l.lifecycle_state, l.close_reason, l.effect_certainty,
                            e.input_tokens, e.cached_input_tokens, e.output_tokens,
-                           e.reasoning_tokens, e.usage_observed,
+                           e.reasoning_tokens, e.cost_usd, e.cost_basis, e.proxy_units, e.usage_observed,
                            e.wall_time_s, e.wall_time_basis, e.conflict
                     FROM execution e
                     JOIN run r ON r.run_id=e.run_id

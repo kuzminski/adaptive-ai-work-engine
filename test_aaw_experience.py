@@ -385,3 +385,23 @@ def test_telemetry_record_carries_shadow_summary_in_single_record():
     rec = tel.build_record(run_id="r", execution={"execution_id": "e", "executor": "x"}, iteration={"shadow_diff": diff})
     assert rec["shadow"]["recommended_strategy"] == "S3" and rec["shadow"]["predicted_speedup"]["value"] == 1.4
     assert tel.build_record(run_id="r", execution={})["shadow"] is None
+
+
+def test_one_call_one_record_and_every_consumer_reads_the_same_one(tmp_path):
+    """Roadmap 0.2 criterion: one executor call -> exactly one AAW_TELEMETRY_V1 record; consumers read that file."""
+    h, c, state = real_run(tmp_path, ["Napraw A", "Dodaj B", "Dodaj C"], run_id="RUN_ONE")
+    path = c.dir / "telemetry.jsonl"
+    records = tel.read_records(path)
+    assert records and len(path.read_text(encoding="utf-8").splitlines()) == len(records)   # no stray/duplicate lines
+    ids = [r["execution_id"] for r in records]
+    assert all(ids) and len(set(ids)) == len(ids)                                          # one record per execution
+    assert all(r["schema"] == "AAW_TELEMETRY_V1" for r in records)
+
+    loaded = ex.load_run(tmp_path / "stats" / "RUN_ONE")                                   # experience engine
+    assert loaded["records"] == records
+    assert tel.summarize(records, state)["total"]["calls"] == len(records)                 # telemetry summary / CLI
+    rows = ex.rows_from_state(state, records)
+    assert sum(r["total_cost_usd"] or 0 for r in rows) == pytest.approx(
+        sum(r["cost_usd"] or 0 for r in records if r["iteration_id"] in {x["iteration_id"] for x in state["iterations"]}))
+    assert tel.summarize(records, state)["total"]["cost_usd"] == (
+        sum(r["cost_usd"] for r in records) if any(r["cost_usd"] is not None for r in records) else None)
