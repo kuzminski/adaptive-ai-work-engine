@@ -43,6 +43,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import adaptive_orchestrator as ao
 import aaw_telemetry as tel
+import adaptive_evidence as aev
 import autonomy_chain as chain
 import autonomy_contract as ac
 import autonomy_explore as explore
@@ -2725,6 +2726,7 @@ def _approve_promotion(run_id: str, *, approver: str, candidate_id: str, early_e
     state["status"], state["phase"] = ac.HUMAN_APPROVED, ac.HUMAN_APPROVED
     journal.append("HUMAN_APPROVED", phase=ac.HUMAN_APPROVED, payload=approval)
     _save_state(run_id, state, stats_root)
+    _label_run(run_id, state, stats_root)
     return state
 
 
@@ -2742,7 +2744,17 @@ def _reject(run_id: str, *, approver: str, reason: str, stats_root: Path | None)
     AutonomyJournal(autonomy_dir(run_id, stats_root) / "autonomy_events.jsonl", run_id).append(
         "HUMAN_REJECTED", phase=ac.REJECTED, payload=state["human"])
     _save_state(run_id, state, stats_root)
+    _label_run(run_id, state, stats_root)
     return state
+
+
+def _label_run(run_id: str, state: Mapping[str, Any], stats_root: Path | None) -> None:
+    """Roadmap 1.1: the Gate decision is the ground-truth label for this run. Never raises."""
+    try:
+        records = tel.read_records(autonomy_dir(run_id, stats_root) / "telemetry.jsonl")
+        aev.record_gate_decision(run_id, state, records, stats_root)
+    except Exception:
+        pass
 
 
 def promote(run_id: str, *, promoter: Callable[[ac.PromotionToken, dict[str, Any]], Mapping[str, Any]] | None = None,
