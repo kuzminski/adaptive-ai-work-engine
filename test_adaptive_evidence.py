@@ -28,6 +28,26 @@ def test_approve_writes_one_accept_label_with_hashes_and_is_idempotent(tmp_path)
     assert len(aev.read_runs(h.stats)) == 1                         # same decision_id -> no duplicate
 
 
+def _measured(eid, cost=1.0):
+    return {"execution_id": eid, "tokens": {"input_total": 10, "output": 1}, "cost_usd": cost, "phase": "EXECUTE"}
+
+
+def test_fingerprint_covers_record_contents_not_just_ids():
+    state = {"human": {"verdict": "APPROVED", "approval_id": "A1"}, "executions": [{"execution_id": "E1"}]}
+    a = aev.build_record(run_id="R", state=state, records=[_measured("E1", 1.0)])
+    b = aev.build_record(run_id="R", state=state, records=[_measured("E1", 999.0)])
+    assert a["telemetry_sha256"] != b["telemetry_sha256"]
+
+
+def test_run_with_missing_telemetry_is_never_real_measured():
+    state = {"human": {"verdict": "APPROVED", "approval_id": "A1"},
+             "executions": [{"execution_id": "E1"}, {"execution_id": "E2"}]}
+    partial = aev.build_record(run_id="R", state=state, records=[_measured("E1")])
+    assert partial["provenance"] == aev.NO_USAGE_EVIDENCE and partial["missing_telemetry_executions"] == ["E2"]
+    full = aev.build_record(run_id="R", state=state, records=[_measured("E1"), _measured("E2")])
+    assert full["provenance"] == aev.REAL_MEASURED and full["missing_telemetry_executions"] == []
+
+
 def test_reject_writes_a_reject_label(tmp_path):
     h, _ = held_run(tmp_path)
     ctl.reject("RUN1", approver="kamil", reason="not what I meant", stats_root=h.stats)

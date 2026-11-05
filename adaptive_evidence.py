@@ -55,10 +55,17 @@ def read_runs(stats_root: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
-def _provenance(records: Sequence[Mapping[str, Any]]) -> str:
-    """REAL_MEASURED only when every executor call carries observed provider usage; scripted/no-usage runs
-    can never count towards the stage-4 threshold."""
-    if not records:
+def _missing_executions(state: Mapping[str, Any], records: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Executions the run state names that have no surviving telemetry record (lost append / damaged line)."""
+    have = {r.get("execution_id") for r in records}
+    return sorted(str(e["execution_id"]) for e in (state.get("executions") or [])
+                  if isinstance(e, Mapping) and e.get("execution_id") and e["execution_id"] not in have)
+
+
+def _provenance(records: Sequence[Mapping[str, Any]], missing: Sequence[str] = ()) -> str:
+    """REAL_MEASURED only when every executor call of the run is covered by a record carrying observed
+    provider usage; scripted/no-usage runs or runs with lost telemetry never count towards the stage-4 threshold."""
+    if not records or missing:
         return NO_USAGE_EVIDENCE
     ok = all(isinstance((r.get("tokens") or {}).get("input_total"), int) for r in records)
     return REAL_MEASURED if ok else NO_USAGE_EVIDENCE
@@ -83,6 +90,7 @@ def build_record(*, run_id: str, state: Mapping[str, Any], records: Sequence[Map
     label = LABELS.get(str(human.get("verdict")))
     if label is None:
         return None
+    missing = _missing_executions(state, records)
     costs = [r.get("cost_usd") for r in records]
     priced = [c for c in costs if isinstance(c, (int, float))]
     iterations = state.get("iterations") or []
@@ -93,8 +101,9 @@ def build_record(*, run_id: str, state: Mapping[str, Any], records: Sequence[Map
         "approver": human.get("approver"), "early_end": bool(human.get("early_end")),
         "mandate_hash": state.get("mandate_hash"), "candidate_id": hold.get("candidate_id") or human.get("candidate_id"),
         "candidate_head": hold.get("candidate_head"),
-        "telemetry_sha256": _sha([r.get("execution_id") for r in records]),
-        "calls": len(records), "provenance": _provenance(records),
+        "telemetry_sha256": _sha(list(records)),
+        "calls": len(records), "missing_telemetry_executions": missing,
+        "provenance": _provenance(records, missing),
         "iterations": len(iterations),
         "iterations_accepted": sum(1 for i in iterations if i.get("status") == "ACCEPTED"),
         "repair_calls": sum(1 for r in records if r.get("phase") == "REPAIR"),

@@ -972,3 +972,6 @@ def test_telemetry_v1_is_read_as_usage_authority_without_synthesising_rows(tmp_p
     assert _one(db, "SELECT proxy_units FROM execution WHERE execution_id=?", EXEC_A) == pytest.approx(123.0)
     assert _one(db, "SELECT COUNT(*) FROM execution WHERE execution_id=?", "EXE_" + "f" * 32) == 0
     assert _one(db, "SELECT COUNT(*) FROM ingest_diagnostic WHERE kind='TELEMETRY_UNMATCHED_EXECUTION'") == 1
+    # telemetry is authoritative for wall time and model too, not only gap-filling over descriptor values
+    assert _one(db, "SELECT wall_time_s FROM execution WHERE execution_id=?", EXEC_A) == pytest.approx(12.5)
+    assert _one(db, "SELECT model FROM execution WHERE execution_id=?", EXEC_A) == "claude-opus-5-5"

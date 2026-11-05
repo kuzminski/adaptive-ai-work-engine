@@ -1956,6 +1956,15 @@ def ingest_telemetry_v1(builder: RunBuilder, ref: SourceRef) -> None:
              "effort": record.get("effort"), "implementer_profile": record.get("profile_id"),
              "telemetry_status": "TELEMETRY_V1"},
             usage=usage, source_label="TELEMETRY_V1", ref=ref)
+        # observe_usage only fills gaps; this record is the authority for wall time / model, so replace them.
+        wall = _as_float(record.get("wall_s"))
+        if wall is not None:
+            row["wall_time_s"], row["wall_time_basis"] = wall, "TELEMETRY_V1"
+        for field, key in (("model", "model"), ("harness", "harness"), ("effort", "effort"),
+                           ("profile", "profile_id")):
+            value = _text(record.get(key))
+            if value is not None:
+                row[field] = value
         cost = record.get("cost_usd")
         row["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
         row["cost_basis"] = _text(record.get("cost_basis")) or ("UNPRICED" if row["cost_usd"] is None else None)
