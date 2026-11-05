@@ -202,6 +202,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/settings": lambda q: product_home.load_settings(),
         "/api/recommendations": app.recommendations,
         "/api/experience": lambda q: pv.experience_view(q),
+        "/api/adaptive/evidence": lambda q: pv.adaptive_evidence_view(q),
         "/api/ping": lambda q: {"ok": True, "version": APP_VERSION},
         "/api/version": lambda q: product_version.describe(),
         "/api/mcp/status": lambda q: _mcp_status(),

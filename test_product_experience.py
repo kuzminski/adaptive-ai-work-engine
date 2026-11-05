@@ -105,3 +105,10 @@ def test_the_live_block_is_computed_once_per_change_and_not_at_all_for_the_home_
     seed_run("AAW_TASK_CACHE02", ["Dodaj C", "Dodaj D"], length=2)  # another run's evidence changes history: recompute
     pv.run_view("AAW_TASK_CACHE01")
     assert len(calls) == 2
+
+
+def test_adaptive_evidence_view_is_read_only_and_never_unlocks(home):
+    data = pv.adaptive_evidence_view({})
+    assert data["schema"] == "AAW_ADAPTIVE_EVIDENCE_REPORT_V1" and data["runs_total"] == 0
+    assert data["unlock_allowed"] is False and data["stage4_entry_met"] is False
+    json.dumps(data)

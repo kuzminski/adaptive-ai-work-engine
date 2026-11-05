@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import adaptive_evidence as aev
 import aaw_experience as ex
 import aaw_telemetry as tel
 import autonomy_contract as ac
@@ -702,6 +703,11 @@ def _compute_live_and_settlement(run_id: str, state: Mapping[str, Any], events: 
         everything = history + rows
         settlement = ex.settlement(rows, ex.benchmark(everything, names=_names(everything)))
     return live, settlement
+
+
+def adaptive_evidence_view(query: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Roadmap 1.2: SHADOW vs Gate outcomes and progress to the stage-4 gates. Read-only; never changes the mode."""
+    return aev.evaluate(prun.runs_root())
 
 
 def experience_view(query: Mapping[str, str] | None = None) -> dict[str, Any]:
