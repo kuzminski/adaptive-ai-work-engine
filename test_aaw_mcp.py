@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import product_version
 import socket
 import sys
 import threading
@@ -59,7 +60,7 @@ def test_protocol_handshake_initialize(server: mcp.AawMcpServer) -> None:
 
     result = resp["result"]
     assert result["protocolVersion"] == "2024-11-05"
-    assert result["serverInfo"] == {"name": "aaw-mcp", "version": "0.4.0"}
+    assert result["serverInfo"] == {"name": "aaw-mcp", "version": product_version.RELEASE}
     assert result["capabilities"] == {"tools": {}, "resources": {}}
 
 

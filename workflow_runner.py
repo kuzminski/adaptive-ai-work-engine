@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 import process_observation
+import provider_cli
 import routing_contract
 import run_cancellation
 import run_recovery
@@ -45,8 +46,8 @@ EXECUTION_MODE = "DIRECT_CLI_CONTROL"
 RESULT_OUTCOMES = {"PASS", "FAIL", "BLOCKED", "INVALID"}
 STOP_STATUSES = {"BLOCKED", "INVALID", "WORKFLOW_LIMIT_REACHED", "WAITING_FOR_HUMAN", "READY_FOR_EXTERNAL_INTEGRATION", "REJECTED", "NO_ROUTE", "COMPLETED", "CANCELLED"}
 IMPLEMENTER_NODE_TYPES = {"IMPLEMENT", "REVIEW", "REPAIR"}
-MAX_PARALLEL_WORKERS_DEFAULT = 2
-MAX_PARALLEL_WORKERS_HARD_CEILING = 4
+MAX_PARALLEL_WORKERS_DEFAULT = routing_contract.MAX_PARALLEL_WORKERS_DEFAULT
+MAX_PARALLEL_WORKERS_HARD_CEILING = routing_contract.MAX_PARALLEL_WORKERS_HARD_CEILING
 
 
 class WorkflowStop(RuntimeError):
@@ -520,33 +521,15 @@ def execute_llm_node(workflow: Mapping[str, Any], state: Mapping[str, Any], node
         final_path = temp / "final.json"
         schema_path.write_text(json.dumps(result_schema()), encoding="utf-8")
         if harness == "codex":
-            argv = [
-                executable, "exec", "--ephemeral", "--skip-git-repo-check",
-            ]
-            if os.name == "nt":
-                # On Windows, codex elevated/read-only sandboxes use AppContainer which denies
-                # access to user temp directories and sets restricted ACLs on created files.
-                # Workspace containment and review read-only invariants are enforced by AAW runtime.
-                argv.append("--dangerously-bypass-approvals-and-sandbox")
-            else:
-                sandbox = "read-only" if node["type"] == "REVIEW" else "workspace-write"
-                argv.extend(["--sandbox", sandbox])
-            argv.extend([
-                "--model", model, "--config", f'model_reasoning_effort="{effort}"',
-                "--cd", str(worktree), "--output-schema", str(schema_path),
-                "--output-last-message", str(final_path), "--json", "-",
-            ])
+            argv = provider_cli.codex_argv(
+                executable, model=model, effort=effort, worktree=str(worktree), schema_path=schema_path,
+                final_path=final_path, read_only=node["type"] == "REVIEW", bypass_sandbox=os.name == "nt")
             rc, stdout, stderr = dispatch(argv, cwd=worktree, stdin=prompt)
             events, session_id, usage = parse_codex_events(stdout)
             raw = json.loads(final_path.read_text(encoding="utf-8")) if rc == 0 and final_path.is_file() else None
         else:
-            permission = "plan" if node["type"] == "REVIEW" else "acceptEdits"
-            argv = [
-                executable, "--print", "--no-session-persistence", "--permission-mode", permission,
-                "--model", model, "--effort", effort, "--output-format", "json",
-                "--json-schema", json.dumps(result_schema(), separators=(",", ":")),
-                "--max-turns", "30", prompt,
-            ]
+            argv = provider_cli.claude_argv(executable, model=model, effort=effort, schema=result_schema(),
+                                            max_turns=30, read_only=node["type"] == "REVIEW", prompt=prompt)
             rc, stdout, stderr = dispatch(argv, cwd=worktree)
             events = []
             envelope = json.loads(stdout) if rc == 0 else {}

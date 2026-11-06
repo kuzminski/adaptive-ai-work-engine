@@ -34,6 +34,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+# One parallelism ceiling for every execution path (workflow DAG and adaptive orchestration).
+MAX_PARALLEL_WORKERS_DEFAULT = 2
+MAX_PARALLEL_WORKERS_HARD_CEILING = 4
+
 
 CONTRACT_VERSION = "AAW_MULTIROUTING_RUNTIME_CONTRACT_V0.1"
 JOURNAL_SCHEMA_VERSION = "AAW_ROUTING_JOURNAL_V0.1"

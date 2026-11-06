@@ -1,4 +1,7 @@
 # AAW P3 ADAPTIVE POLICY ENGINE: SHADOW MODE GATING REPORT
+
+> **STATUS CORRECTION (2026-11, roadmap 0.4).** The verdicts below are historical. Current facts: `CONTROLLED_ADAPTIVE` / `ACTIVE` are **LOCKED** (`adaptive_policy.verify_controlled_mode_authorization` never authorizes; unlock needs a signed authorization, roadmap 4.1) - only SHADOW is active. Benchmark numbers in this report come from the **strategy simulator (SIMULATED)**, not from measurements; after the single price source change (roadmap 0.2) its cost-reduction claims no longer hold. Live status: `docs/STATUS.md`.
+
 **Document Reference:** `AAW_P3_SHADOW_MODE_REPORT.md`  
 **Base Commit Reference:** `a50735dc`  
 **Execution Worktree:** `feat/aaw-p24-p25-p3-adaptive-reliability`  

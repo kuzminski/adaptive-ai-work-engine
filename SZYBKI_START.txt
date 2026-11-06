@@ -38,3 +38,5 @@ STOP SAFELY / STOP NOW / RESUME — na stronie zadania; przerwane zadania widać
 Dane (zadania, dowody, kopie robocze, logi): %LOCALAPPDATA%\AAW
 Zamykanie: Ustawienia → Zamknij AAW (trwające zadania pracują dalej w tle).
 Więcej (w tym samym folderze co AAW.exe): QUICK_START.md, README.md, CHANGELOG.md, folder EXAMPLES
+
+Nawigacja w Studio (lewy panel): Live Command Center (zadania w toku i czekające na Ciebie), New Task Wizard (kreator), Task Runs (historia), Benchmark z prawdziwej pracy (wyniki Twoich własnych uruchomień z liczbą próbek i pewnością; nigdy nie pokazuje liczb symulowanych), Settings.

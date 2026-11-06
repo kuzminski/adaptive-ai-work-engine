@@ -38,10 +38,11 @@ import product_home
 import product_providers
 import product_recommendations
 import product_runs
+import product_version
 import product_view
 
 SERVER_NAME = "aaw-mcp"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = product_version.RELEASE
 PROTOCOL_VERSION = "2024-11-05"
 
 HUMAN_GATE_INVARIANT_MESSAGE = (

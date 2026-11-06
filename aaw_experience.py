@@ -29,6 +29,9 @@ import aaw_benchstats as stats
 import aaw_telemetry as tel
 
 SCHEMA = "AAW_EXPERIENCE_V1"
+BENCHMARK_KIND = "REAL_WORK"
+DISPLAY_NAME = "Benchmark z prawdziwej pracy"
+PROVENANCE = "REAL_MEASURED"
 ROW_SCHEMA = "AAW_EXPERIENCE_ROW_V1"
 MIN_N = 3                 # trials of a profile in a cell before it may be compared
 GOOD_N = 8                # ... before the comparison is called reliable
@@ -335,7 +338,8 @@ def benchmark(rows: Sequence[Mapping[str, Any]], *, scope: str = "implementation
                        "best": best["profile_id"] if best else None,
                        "confidence": _confidence(max((p["n"] for p in points), default=0))}
     overall = _overall(kinds, mix, names)
-    return {"schema": SCHEMA, "scope": scope, "basis": basis, "unit": "USD" if basis == "usd" else "proxy",
+    return {"schema": SCHEMA, "benchmark_kind": BENCHMARK_KIND, "display_name": DISPLAY_NAME,
+            "provenance": PROVENANCE, "scope": scope, "basis": basis, "unit": "USD" if basis == "usd" else "proxy",
             "rows": len(decided), "mix": mix, "kinds": kinds, "overall": overall,
             "warnings": _warnings(basis, decided)}
 

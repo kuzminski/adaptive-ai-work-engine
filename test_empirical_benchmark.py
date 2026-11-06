@@ -142,3 +142,14 @@ def test_simulator_cost_uses_single_price_source():
         expected = tel.estimate_cost(tokens, tel.price_row(pricing, model))
         assert eb.calculate_cost(profile, 2000, 1000, 500) == pytest.approx(expected, abs=1e-6)
     assert not hasattr(eb, "MODEL_PRICING")
+
+
+def test_simulator_and_real_benchmark_never_share_name_or_provenance():
+    """Roadmap 0.3: the strategy simulator is SIMULATED, the experience benchmark is real work; never mixed."""
+    import aaw_experience as ex
+    sim = eb.run_empirical_benchmark(eb.CORPUS_TASKS[:1])
+    real = ex.benchmark([], scope="all")
+    assert sim["provenance"] == "SIMULATED" and sim["display_name"] == "Symulator strategii"
+    assert real["provenance"] == "REAL_MEASURED" and real["display_name"] == "Benchmark z prawdziwej pracy"
+    assert sim["benchmark_kind"] != real["benchmark_kind"] and sim["display_name"] != real["display_name"]
+    assert "prawdziwej pracy" not in sim["display_name"] and "Symulator" not in real["display_name"]

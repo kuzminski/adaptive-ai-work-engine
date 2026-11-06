@@ -1,6 +1,6 @@
 # AAW — Quick Start (Windows)
 
-Release `0.4.0` · the app UI is in Polish; button names are quoted as they appear.
+Release `0.5.0` · the app UI is in Polish; button names are quoted as they appear.
 
 **Before you start (outside AAW, one time):**
 - **Git for Windows** — <https://git-scm.com/downloads>
@@ -33,3 +33,5 @@ Release `0.4.0` · the app UI is in Polish; button names are quoted as they appe
 **„Akceptuj"** (Accept) = `READY_FOR_EXTERNAL_INTEGRATION`. AAW **never merges or pushes**: the result waits in the folder shown, for you to review and integrate.
 
 Data, logs and runs: `%LOCALAPPDATA%\AAW`. Close the app: **„Ustawienia" → „Zamknij AAW"** (running tasks continue in the background).
+
+**Studio navigation (left rail):** *Live Command Center* (runs that need you or are in progress), *New Task Wizard* (the 7 steps above), *Task Runs* (history), *Benchmark z prawdziwej pracy* (what your own runs measured: per-task-kind model results with sample size and confidence; it never shows simulated numbers), *Settings*. The strategy simulator is a developer tool and is not part of the app UI.

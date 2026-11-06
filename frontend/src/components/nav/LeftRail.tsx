@@ -46,7 +46,7 @@ export const LeftRail: React.FC<LeftRailProps> = ({
     { id: "command-center", label: "Live Command Center", icon: Activity },
     { id: "new-task", label: "New Task Wizard", icon: PlusCircle },
     { id: "runs", label: "Task Runs", icon: History },
-    { id: "experience", label: "Experience & Benchmark", icon: BarChart3 },
+    { id: "experience", label: "Benchmark z prawdziwej pracy", icon: BarChart3 },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 

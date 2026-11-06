@@ -587,7 +587,7 @@ export const ExperienceView: React.FC = () => {
             <Database className="w-3.5 h-3.5" />
             <span>Doświadczenie • benchmark z własnych uruchomień</span>
           </div>
-          <h2 className="text-xl font-bold tracking-tight text-white">Doświadczenie i benchmark</h2>
+          <h2 className="text-xl font-bold tracking-tight text-white">Benchmark z prawdziwej pracy</h2>
           <p className="text-xs text-slate-400 mt-1 max-w-2xl">
             Benchmark buduje się sam z prawdziwych uruchomień na tym komputerze. Nic nie trzeba uruchamiać osobno.
           </p>
