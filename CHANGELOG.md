@@ -1,5 +1,16 @@
 # Changelog — AAW product app
 
+## 0.5.0 — one telemetry record, honest benchmarks, one version
+
+- One `AAW_TELEMETRY_V1` record per executor call (with SHADOW summary); analytics index V3 reads it, incl. cost; one
+  price source `MODEL_PRICING.json`.
+- Gate decisions become labels (`VERIFIED_PRODUCTION_RUNS.jsonl`) with an evidence report (`/api/adaptive/evidence`);
+  `CONTROLLED_ADAPTIVE` / `ACTIVE` stay locked.
+- Strategy simulator (`SIMULATED`) and the real-work benchmark (`REAL_MEASURED`) are named and stamped apart.
+- One version (0.5.0) in product, pyproject, package.json, MCP server; generated `docs/STATUS.md`; historical
+  P2.4/P2.5/P3 reports carry a status correction.
+- Fix: Human Gate view is built from the state the status was classified from (race when the worker exits as the gate opens).
+
 ## Unreleased — known risks set the planner charter's risk floors
 
 Details: `AAW_RISK_REGISTER_CHARTER_V0_1.md`.

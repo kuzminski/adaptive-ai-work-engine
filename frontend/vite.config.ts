@@ -8,7 +8,7 @@ export default defineConfig({
   base: "/static/",
   build: {
     outDir: "../PRODUCT_UI",
-    emptyOutDir: false,
+    emptyOutDir: true,
   },
   resolve: {
     alias: {

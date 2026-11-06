@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import provider_adapters as pa
+import provider_cli
 import work_packet as wp
 import workflow_runner as wr
 import autonomy_contract as ac
@@ -486,11 +487,9 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
     """
     read_only = name in READ_ONLY_EXECUTORS
     if runtime["harness"] == "codex":
-        sandbox = "read-only" if read_only else "workspace-write"
-        return [str(runtime["executable"]), "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", sandbox,
-                "--model", runtime["model"], "--config", f'model_reasoning_effort="{runtime["effort"]}"',
-                "--cd", worktree, "--output-schema", str(schema_path), "--output-last-message", str(final_path),
-                "--json", "-"], True
+        return provider_cli.codex_argv(runtime["executable"], model=runtime["model"], effort=runtime["effort"],
+                                       worktree=worktree, schema_path=schema_path, final_path=final_path,
+                                       read_only=read_only), True
     if runtime["harness"] == "agy":
         # Headless Antigravity CLI. Read-only roles keep the default permission mode: workspace reads are
         # granted, edits and commands need an approval nobody can give in print mode, so they are denied.
@@ -502,16 +501,8 @@ def _argv(runtime: Mapping[str, Any], name: str, worktree: str, schema_path: Pat
         if not read_only:
             argv.append("--dangerously-skip-permissions")
         return argv + ["--print", AGY_HEADLESS_PROMPT.format(path=prompt_path)], False
-    argv = [str(runtime["executable"]), "--print", "--no-session-persistence",
-            "--permission-mode", "plan" if read_only else "acceptEdits",
-            "--model", runtime["model"], "--effort", runtime["effort"], "--output-format", "json",
-            "--json-schema", json.dumps(schema, separators=(",", ":")), "--max-turns", str(max_turns)]
-    if not read_only:
-        # Checks need a shell; integration commands stay denied (the Git
-        # boundary check after the phase is the authority, this is defence).
-        argv += ["--allowedTools", "Bash", "Read", "Edit", "Write", "Glob", "Grep",
-                 "--disallowedTools", "Bash(git push:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
-                 "Bash(git pull:*)", "Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git reset:*)"]
+    argv = provider_cli.claude_argv(runtime["executable"], model=runtime["model"], effort=runtime["effort"],
+                                    schema=schema, max_turns=max_turns, read_only=read_only, guard_write_tools=True)
     return argv, True
 
 

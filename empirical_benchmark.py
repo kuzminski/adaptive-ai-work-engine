@@ -834,6 +834,13 @@ def execute_strategy_run(
 # 3. Benchmark Execution Harness & Aggregate Analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
+BENCHMARK_KIND = "STRATEGY_SIMULATOR"
+DISPLAY_NAME = "Symulator strategii"
+PROVENANCE = "SIMULATED"
+PROVENANCE_NOTE = ("Wyniki pochodzą z modelu symulacyjnego (stałe czasy i tokeny na podzadanie), nie z prawdziwych "
+                   "wywołań. Nie wolno ich przedstawiać jako pomiaru; prawdziwe dane: „Benchmark z prawdziwej pracy”.")
+
+
 def run_empirical_benchmark(
     corpus: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -950,6 +957,10 @@ def run_empirical_benchmark(
     elapsed_harness_s = round(time.perf_counter() - start_time, 3)
 
     return {
+        "benchmark_kind": BENCHMARK_KIND,
+        "display_name": DISPLAY_NAME,
+        "provenance": PROVENANCE,
+        "provenance_note": PROVENANCE_NOTE,
         "corpus_id": CORPUS_ID,
         "corpus_version": CORPUS_VERSION,
         "base_commit": CORPUS_BASE_COMMIT,
@@ -979,7 +990,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="docs/reports/p25_benchmark_results.json", help="Output JSON path")
     args = parser.parse_args()
 
-    print(f"[*] Running AAW P2.5 Empirical Benchmark ({len(CORPUS_TASKS)} tasks across 4 strategies)...")
+    print(f"[*] Running {DISPLAY_NAME} [{PROVENANCE}] ({len(CORPUS_TASKS)} tasks across 4 strategies)...")
     res = run_empirical_benchmark()
     saved = save_benchmark_results(res, args.output)
     print(f"[+] Benchmark completed in {res['harness_duration_s']}s.")
