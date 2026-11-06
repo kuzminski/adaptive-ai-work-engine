@@ -37,14 +37,16 @@ CORPUS_ID = "AAW-BENCH-CORPUS-V1"
 CORPUS_VERSION = "1.0.0"
 CORPUS_BASE_COMMIT = "a50735dc"
 
-# Model pricing table ($ / 1,000 tokens)
-MODEL_PRICING: dict[str, dict[str, float]] = {
-    "OPUS_5_5_HIGH": {"prompt": 0.015, "cached": 0.003, "completion": 0.075},
-    "SONNET_5_5_MEDIUM": {"prompt": 0.003, "cached": 0.0006, "completion": 0.015},
-    "GPT6_LUNA_HIGH": {"prompt": 0.0025, "cached": 0.0005, "completion": 0.010},
-    "AGY_GEMINI_3_1_PRO": {"prompt": 0.00125, "cached": 0.0003, "completion": 0.005},
-    "AGY_GEMINI_FLASH": {"prompt": 0.0001, "cached": 0.000025, "completion": 0.0004},
+# Profile -> model id. Prices are NOT defined here: the single source is MODEL_PRICING.json
+# (read through aaw_telemetry). All costs from this module are SIMULATED.
+PROFILE_MODEL: dict[str, str] = {
+    "OPUS_5_5_HIGH": "claude-opus-5-5",
+    "SONNET_5_5_MEDIUM": "claude-sonnet-5-5",
+    "GPT6_LUNA_HIGH": "gpt-6-luna",
+    "AGY_GEMINI_3_1_PRO": "gemini-3.1-pro",
+    "AGY_GEMINI_FLASH": "gemini-flash",
 }
+_DEFAULT_PROFILE = "GPT6_LUNA_HIGH"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Benchmark Task Corpus (24 tasks across 8 categories)
@@ -583,13 +585,15 @@ class RunTelemetry:
 
 
 def calculate_cost(profile_id: str, prompt: int, cached: int, completion: int) -> float:
-    pricing = MODEL_PRICING.get(profile_id, MODEL_PRICING["GPT6_LUNA_HIGH"])
-    cost = (
-        (prompt / 1000.0) * pricing["prompt"]
-        + (cached / 1000.0) * pricing["cached"]
-        + (completion / 1000.0) * pricing["completion"]
-    )
-    return round(cost, 6)
+    """SIMULATED cost in USD from MODEL_PRICING.json (USD per million tokens). Unknown profile -> default profile."""
+    import aaw_telemetry as tel
+    pricing = tel.load_pricing()
+    row = tel.price_row(pricing, PROFILE_MODEL.get(profile_id, PROFILE_MODEL[_DEFAULT_PROFILE]))
+    if row is None:
+        raise ValueError(f"no price in MODEL_PRICING.json for profile {profile_id!r}")
+    cached_price = row["cached_input"] if row.get("cached_input") is not None else row["input"]
+    usd = prompt * row["input"] + cached * cached_price + completion * row["output"]
+    return round(usd / 1_000_000, 6)
 
 
 def execute_strategy_run(

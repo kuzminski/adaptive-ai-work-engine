@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import adaptive_evidence as aev
 import aaw_experience as ex
 import aaw_telemetry as tel
 import autonomy_contract as ac
@@ -166,9 +167,11 @@ def classify(run_id: str, state: Mapping[str, Any] | None = None) -> dict[str, A
         if fresh_state and fresh_state.get("status") != ac.RUNNING:
             state = fresh_state
             status = state.get("status")
+            info["effective_state"] = state
         elif exit_record.get("status") in (ac.AWAITING_HUMAN, ac.HUMAN_APPROVED, ac.PROMOTED, ac.REJECTED):
             status = exit_record.get("status")
             state = {**(fresh_state or {}), "status": status}
+            info["effective_state"] = state      # the gate must be built from the state this status came from
         else:
             events = _journal(run_id)
             last = next((e for e in reversed(events) if e.get("event_type") in
@@ -612,6 +615,9 @@ def run_view(run_id: str, *, include_live: bool = True) -> dict[str, Any]:
     task = prun.load_task(run_id)
     state = _state(run_id)
     status = classify(run_id, state or {})  # one read: status and gate always describe the same state
+    effective = status.pop("effective_state", None)
+    if isinstance(effective, dict) and effective.get("mandate"):
+        state = effective                   # classify re-read/overrode the state (worker exited as the gate opened)
     form = task.get("form") or {}
     base = {"run_id": run_id, "status": status["status"], "status_label": STATUS_LABEL[status["status"]],
             "section": HOME_SECTION[status["status"]], "project": (task.get("workspace") or {}).get("project_name"),
@@ -702,6 +708,11 @@ def _compute_live_and_settlement(run_id: str, state: Mapping[str, Any], events: 
         everything = history + rows
         settlement = ex.settlement(rows, ex.benchmark(everything, names=_names(everything)))
     return live, settlement
+
+
+def adaptive_evidence_view(query: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Roadmap 1.2: SHADOW vs Gate outcomes and progress to the stage-4 gates. Read-only; never changes the mode."""
+    return aev.evaluate(prun.runs_root())
 
 
 def experience_view(query: Mapping[str, str] | None = None) -> dict[str, Any]:

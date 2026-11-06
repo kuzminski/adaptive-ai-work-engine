@@ -109,6 +109,22 @@ def estimate_cost(tokens: Mapping[str, Any], row: Mapping[str, Any] | None) -> f
     return round(usd / 1_000_000, 6)
 
 
+def shadow_summary(diff: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Compact adaptive-policy SHADOW recommendation vs execution, carried inside the telemetry record
+    (the single per-call record; `adaptive_policy` no longer needs a parallel store). None when no shadow ran."""
+    if not isinstance(diff, Mapping):
+        return None
+    keys = ("divergence", "recommended_rule_id", "recommended_strategy", "recommended_workers", "recommended_model",
+            "executed_strategy", "executed_workers", "executed_model")
+    out = {k: diff.get(k) for k in keys}
+    benefits = diff.get("predicted_benefits") if isinstance(diff.get("predicted_benefits"), Mapping) else {}
+    for name in ("predicted_speedup", "predicted_cost_ratio"):
+        item = benefits.get(name)
+        if isinstance(item, Mapping):
+            out[name] = {"value": item.get("value"), "provenance": item.get("provenance")}
+    return out
+
+
 # -- records ----------------------------------------------------------------------------
 
 def build_record(*, run_id: str, execution: Mapping[str, Any], result: Mapping[str, Any] | None = None,
@@ -144,6 +160,7 @@ def build_record(*, run_id: str, execution: Mapping[str, Any], result: Mapping[s
         "iteration_index": (iteration or {}).get("index"), "chain_id": chain.get("chain_id"),
         "chain_position": chain.get("position"), "review_mode": chain.get("review_mode"),
         "complexity": (((iteration or {}).get("plan") or {}).get("implementation_complexity")),
+        "shadow": shadow_summary((iteration or {}).get("shadow_diff")),
     }
 
 

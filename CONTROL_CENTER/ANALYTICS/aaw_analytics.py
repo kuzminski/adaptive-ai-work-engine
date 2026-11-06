@@ -58,8 +58,8 @@ if str(_MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(_MODULE_ROOT))
 from aaw_paths import ANALYTICS_DB_PATH, STATS_ROOT
 
-SCHEMA_VERSION = "AAW_ANALYTICS_INDEX_V2"
-PRIOR_SCHEMA_VERSIONS = ("AAW_ANALYTICS_INDEX_V1", "AAW_ANALYTICS_INDEX_V1.1")
+SCHEMA_VERSION = "AAW_ANALYTICS_INDEX_V3"
+PRIOR_SCHEMA_VERSIONS = ("AAW_ANALYTICS_INDEX_V1", "AAW_ANALYTICS_INDEX_V1.1", "AAW_ANALYTICS_INDEX_V2")
 IDENTITY_CONTRACT = "AAW_EXECUTION_DESCRIPTOR_V0.4A"
 LEDGER_SCHEMA_VERSION = "AAW_EXECUTION_LEDGER_V0.4B"
 
@@ -434,6 +434,9 @@ CREATE TABLE execution (
     cached_input_tokens INTEGER,
     output_tokens INTEGER,
     reasoning_tokens INTEGER,
+    cost_usd REAL,                  -- from AAW_TELEMETRY_V1 only; NULL = unknown, never 0
+    cost_basis TEXT,                -- REPORTED | ESTIMATED | UNPRICED (as recorded by telemetry)
+    proxy_units REAL,               -- price-independent cost proxy from telemetry
     usage_observed INTEGER NOT NULL DEFAULT 0,
     telemetry_status TEXT,
     execution_mode TEXT,
@@ -711,6 +714,8 @@ def classify(path: Path, stats_root: Path) -> tuple[str, str]:
     name = path.name
     parts = path.relative_to(stats_root).parts
     if path.suffix.lower() != ".json":
+        if name == "telemetry.jsonl" and "AUTONOMY" in parts:
+            return "TELEMETRY_V1", "TELEMETRY"
         if "LEDGER" in parts and name.endswith(".jsonl"):
             return "LEDGER", "LEDGER"
         if "LEDGER" in parts:
@@ -799,7 +804,8 @@ def _blank_execution(run_id: str) -> dict[str, Any]:
         "outcome": None, "outcome_source": None,
         "wall_time_s": None, "wall_time_basis": "NONE",
         "input_tokens": None, "cached_input_tokens": None, "output_tokens": None,
-        "reasoning_tokens": None, "usage_observed": 0,
+        "reasoning_tokens": None, "cost_usd": None, "cost_basis": None, "proxy_units": None,
+        "usage_observed": 0,
         "telemetry_status": None, "execution_mode": None,
         "input_contract_hash": None, "selection_reason": None, "policy_version": None,
         "descriptor_status": None,
@@ -1916,6 +1922,56 @@ _PREPROCESS_DECISION = {
 }
 
 
+def ingest_telemetry_v1(builder: RunBuilder, ref: SourceRef) -> None:
+    """Read the single per-call record (``AAW_TELEMETRY_V1``, written by the autonomy controller).
+
+    It is the authority for usage / wall time / model of the executions it names. It only enriches rows that
+    an identity source (descriptor / state) already created; a record naming no known execution is a
+    diagnostic, never a synthesised row. The file is parsed by ``aaw_telemetry`` itself.
+    """
+    try:
+        if str(AAW_ROOT) not in sys.path:
+            sys.path.insert(0, str(AAW_ROOT))
+        import aaw_telemetry  # type: ignore[import-not-found]
+        records = aaw_telemetry.read_records(ref.path)
+    except Exception as exc:  # noqa: BLE001 - analytics must degrade, not crash
+        builder.diag("TELEMETRY_READ_ERROR", f"{type(exc).__name__}: {exc}", ref.path)
+        return
+    for index, record in enumerate(records):
+        if record.get("schema") != "AAW_TELEMETRY_V1":
+            builder.diag("TELEMETRY_UNKNOWN_SCHEMA", f"record {index}: {record.get('schema')!r}", ref.path)
+            continue
+        execution_id = _text(record.get("execution_id"))
+        row = builder.execution_by_id(execution_id) if execution_id else None
+        if row is None:
+            builder.diag("TELEMETRY_UNMATCHED_EXECUTION",
+                         f"record {index}: execution_id {execution_id!r} has no identity source", ref.path)
+            continue
+        tokens = record.get("tokens") if isinstance(record.get("tokens"), Mapping) else {}
+        usage = {"input_tokens": tokens.get("input_total"), "cached_input_tokens": tokens.get("input_cached"),
+                 "output_tokens": tokens.get("output"), "reasoning_tokens": tokens.get("reasoning")}
+        builder.observe_usage(
+            row,
+            {"wall_time_s": record.get("wall_s"), "harness": record.get("harness"), "model": record.get("model"),
+             "effort": record.get("effort"), "implementer_profile": record.get("profile_id"),
+             "telemetry_status": "TELEMETRY_V1"},
+            usage=usage, source_label="TELEMETRY_V1", ref=ref)
+        # observe_usage only fills gaps; this record is the authority for wall time / model, so replace them.
+        wall = _as_float(record.get("wall_s"))
+        if wall is not None:
+            row["wall_time_s"], row["wall_time_basis"] = wall, "TELEMETRY_V1"
+        for field, key in (("model", "model"), ("harness", "harness"), ("effort", "effort"),
+                           ("profile", "profile_id")):
+            value = _text(record.get(key))
+            if value is not None:
+                row[field] = value
+        cost = record.get("cost_usd")
+        row["cost_usd"] = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+        row["cost_basis"] = _text(record.get("cost_basis")) or ("UNPRICED" if row["cost_usd"] is None else None)
+        units = record.get("proxy_units")
+        row["proxy_units"] = float(units) if isinstance(units, (int, float)) and not isinstance(units, bool) else None
+
+
 def ingest_preprocess(builder: RunBuilder, data: Mapping[str, Any], ref: SourceRef,
                       known_node_ids: set[str]) -> None:
     """Preprocess decision. A SKIPPED decision is not an LLM invocation.
@@ -2119,7 +2175,8 @@ _EXECUTION_COLUMNS = ("execution_id", "row_locator", "run_id", "node_id", "node_
                       "original_review_execution_id", "created_at", "started_at", "ended_at",
                       "started_day", "started_day_basis", "outcome", "outcome_source",
                       "wall_time_s", "wall_time_basis", "input_tokens", "cached_input_tokens",
-                      "output_tokens", "reasoning_tokens", "usage_observed", "telemetry_status",
+                      "output_tokens", "reasoning_tokens", "cost_usd", "cost_basis", "proxy_units",
+                      "usage_observed", "telemetry_status",
                       "execution_mode", "input_contract_hash", "selection_reason",
                       "policy_version", "descriptor_status", "identity_authority",
                       "identity_contract", "evidence_grain", "fixture_class", "fixture_evidence",
@@ -2357,7 +2414,7 @@ _LAYOUT_ORDER = {
     "EXECUTION_DESCRIPTOR": 0,
     "CUSTOM_JOB_STATE": 1, "WORKFLOW_STATE": 1,
     "CANDIDATE": 2, "HUMAN_DECISION": 3,
-    "LEDGER": 4, "PREPROCESS": 5,
+    "LEDGER": 4, "PREPROCESS": 5, "TELEMETRY_V1": 6,
 }
 
 _SKIP_DETAIL = {
@@ -2432,7 +2489,7 @@ def _known_node_ids(builder: RunBuilder) -> set[str]:
 
 def _status_for(layout: str, source_type: str, run_kind: str | None) -> tuple[str, str | None]:
     if layout in ("EXECUTION_DESCRIPTOR", "CUSTOM_JOB_STATE", "WORKFLOW_STATE", "CANDIDATE",
-                  "HUMAN_DECISION", "LEDGER", "PREPROCESS", "LEGACY_FLAT"):
+                  "HUMAN_DECISION", "LEDGER", "PREPROCESS", "LEGACY_FLAT", "TELEMETRY_V1"):
         return "INDEXED", None
     if layout in ("SINGLE_TASK_NODE", "CLASSIFIER"):
         if run_kind == "SINGLE_TASK":
@@ -2463,7 +2520,7 @@ def ingest_unit(conn: sqlite3.Connection, unit_key: str, paths: Sequence[Path],
                         layout, source_type, None)
         status, detail = _status_for(layout, source_type, run_kind)
         payload: Any = None
-        if status == "INDEXED" and layout != "LEDGER":
+        if status == "INDEXED" and layout not in ("LEDGER", "TELEMETRY_V1"):
             try:
                 payload = _load_json(path)
                 if isinstance(payload, Mapping):
@@ -2535,6 +2592,8 @@ def ingest_unit(conn: sqlite3.Connection, unit_key: str, paths: Sequence[Path],
         try:
             if ref.layout == "LEDGER":
                 ingest_ledger(builder, ref)
+            elif ref.layout == "TELEMETRY_V1":
+                ingest_telemetry_v1(builder, ref)
             elif ref.layout == "EXECUTION_DESCRIPTOR":
                 ingest_descriptor(builder, payload, ref)
             elif ref.layout == "CUSTOM_JOB_STATE":
@@ -3073,7 +3132,9 @@ class Analytics:
                            SUM(e.input_tokens) AS input_tokens,
                            SUM(e.cached_input_tokens) AS cached_input_tokens,
                            SUM(e.output_tokens) AS output_tokens,
-                           SUM(e.reasoning_tokens) AS reasoning_tokens
+                           SUM(e.reasoning_tokens) AS reasoning_tokens,
+                           SUM(e.cost_usd) AS cost_usd,
+                           SUM(CASE WHEN e.cost_usd IS NULL THEN 1 ELSE 0 END) AS calls_unpriced
                     FROM execution e JOIN run r ON r.run_id=e.run_id
                     WHERE {where} AND e.started_day IS NOT NULL
                     GROUP BY e.started_day ORDER BY e.started_day""", params).fetchall()
@@ -3361,7 +3422,7 @@ class Analytics:
                            e.outcome, e.outcome_source,
                            l.lifecycle_state, l.close_reason, l.effect_certainty,
                            e.input_tokens, e.cached_input_tokens, e.output_tokens,
-                           e.reasoning_tokens, e.usage_observed,
+                           e.reasoning_tokens, e.cost_usd, e.cost_basis, e.proxy_units, e.usage_observed,
                            e.wall_time_s, e.wall_time_basis, e.conflict
                     FROM execution e
                     JOIN run r ON r.run_id=e.run_id
