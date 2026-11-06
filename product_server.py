@@ -68,6 +68,7 @@ class App:
                 "data_home": str(product_home.home()), "frozen": product_home.is_frozen(),
                 "control_center_available": self._control_center_path() is not None,
                 "slot_labels": pr.SLOT_LABELS, "presets": product_presets.list_presets(),
+                "templates": product_presets.list_templates(),
                 "limits": {"max_field_chars": prun.MAX_FIELD_CHARS, "max_roadmap_chars": prun.MAX_ROADMAP_CHARS, "max_directions": prun.MAX_DIRECTIONS,
                            "default_max_iterations": ac.DEFAULT_MAX_ITERATIONS,
                            "hard_max_iterations": ac.HARD_MAX_ITERATIONS,

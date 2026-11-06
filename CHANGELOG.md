@@ -1,5 +1,10 @@
 # Changelog — AAW product app
 
+## Unreleased — project templates (roadmap 2.5)
+
+- Four editable templates (CLI, web API, library, app with UI) with goal, first iteration, roadmap, acceptance criteria and
+  evidence; `templates` in bootstrap, "Szablon projektu" picker in the wizard (pick, review, START). Nothing starts on click.
+
 ## 0.5.0 — one telemetry record, honest benchmarks, one version
 
 - One `AAW_TELEMETRY_V1` record per executor call (with SHADOW summary); analytics index V3 reads it, incl. cost; one

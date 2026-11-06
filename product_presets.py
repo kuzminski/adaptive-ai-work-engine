@@ -72,3 +72,81 @@ def list_presets() -> list[dict[str, Any]]:
 
 def get_preset(preset_id: str) -> dict[str, Any] | None:
     return next((dict(p) for p in PRESETS if p["id"] == preset_id), None)
+
+
+# --- Project templates (roadmap 2.5) -------------------------------------------------------------------------------
+# A template is a ready-made, editable starting point for a KIND of project: goal, a small first iteration, a roadmap
+# and sensible acceptance criteria / evidence / forbidden areas. Like presets it is plain data copied into the wizard;
+# nothing in it is validated differently from hand-typed text and the user may change every field before START.
+
+PROJECT_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "id": "tpl_cli",
+        "kind": "cli",
+        "title": "Narzędzie CLI",
+        "description": "Program uruchamiany w terminalu: polecenia, argumenty, kody wyjścia.",
+        "goal": "Działające narzędzie wiersza poleceń z czytelnym --help, jednoznacznymi kodami wyjścia i testami.",
+        "first_iteration": "Szkielet CLI (parser argumentów, jedno działające polecenie) z testami uruchamiającymi program jako proces.",
+        "directions": "- kolejne polecenia, od najważniejszych\n- czytelne komunikaty błędów i kody wyjścia\n- plik konfiguracji lub zmienne środowiskowe\n- README z przykładami użycia",
+        "advanced": {
+            "acceptance_criteria": "`--help` opisuje każde polecenie\nzły argument kończy się niezerowym kodem wyjścia i komunikatem na stderr\nkażde polecenie ma test uruchamiający program jako proces",
+            "required_evidence": "testy jednostkowe\ntest uruchomienia procesu CLI",
+            "forbidden_areas": "",
+            "risks": [],
+        },
+    },
+    {
+        "id": "tpl_web_api",
+        "kind": "web_api",
+        "title": "API webowe (HTTP)",
+        "description": "Usługa HTTP z punktami końcowymi, walidacją wejścia i testami kontraktu.",
+        "goal": "Usługa HTTP z udokumentowanymi punktami końcowymi, walidacją danych wejściowych i spójnym formatem błędów.",
+        "first_iteration": "Jeden punkt końcowy zdrowia (/health) i jeden zasób z odczytem i zapisem, z testami żądań HTTP.",
+        "directions": "- pozostałe operacje na zasobach (CRUD)\n- walidacja wejścia i spójne kody statusu\n- trwałe przechowywanie danych\n- uwierzytelnianie, jeśli wymagane\n- opis API (README lub OpenAPI)",
+        "advanced": {
+            "acceptance_criteria": "każdy punkt końcowy ma test żądania i odpowiedzi\nbłędne dane wejściowe zwracają 4xx z opisem błędu\n/health zwraca 200",
+            "required_evidence": "testy jednostkowe\ntesty integracyjne żądań HTTP",
+            "forbidden_areas": "pliki z sekretami i konfiguracją produkcyjną",
+            "risks": [{"description": "Uwierzytelnianie i dane użytkowników wymagają przeglądu przez człowieka.",
+                       "severity": "MEDIUM", "item_ids": [], "source": "TEMPLATE"}],
+        },
+    },
+    {
+        "id": "tpl_library",
+        "kind": "library",
+        "title": "Biblioteka",
+        "description": "Moduł do użycia w innych projektach: stabilne API publiczne i testy.",
+        "goal": "Biblioteka ze stabilnym, opisanym API publicznym, pełnym zestawem testów i przykładami użycia.",
+        "first_iteration": "Zdefiniuj API publiczne (sygnatury i dokumentacja) oraz zaimplementuj jedną funkcję z testami jednostkowymi.",
+        "directions": "- pozostałe funkcje API publicznego\n- przypadki brzegowe i obsługa błędów\n- przykłady użycia w README\n- pakowanie i numer wersji",
+        "advanced": {
+            "acceptance_criteria": "każda funkcja publiczna ma dokumentację i test\nprzypadki brzegowe są pokryte testami\nAPI publiczne nie zmienia się bez zmiany wersji",
+            "required_evidence": "testy jednostkowe",
+            "forbidden_areas": "",
+            "risks": [],
+        },
+    },
+    {
+        "id": "tpl_ui_app",
+        "kind": "ui_app",
+        "title": "Aplikacja z interfejsem",
+        "description": "Aplikacja z ekranami: stany puste, błędy, dostępność i test w przeglądarce.",
+        "goal": "Aplikacja z działającym interfejsem: ekrany główne, czytelne stany puste i błędów oraz podstawowa dostępność.",
+        "first_iteration": "Jeden działający ekran główny z danymi przykładowymi i testem, który otwiera go i sprawdza kluczowe elementy.",
+        "directions": "- pozostałe ekrany i nawigacja\n- stany puste, ładowania i błędów\n- dostępność (etykiety, fokus, kontrast)\n- układ na wąskim ekranie\n- krótka instrukcja użytkownika",
+        "advanced": {
+            "acceptance_criteria": "każdy ekran ma stan pusty i stan błędu\nkluczowe ścieżki użytkownika mają test w przeglądarce lub test komponentu\nukład nie psuje się na wąskim ekranie",
+            "required_evidence": "testy komponentów lub test w przeglądarce\nbuild bez błędów",
+            "forbidden_areas": "",
+            "risks": [],
+        },
+    },
+]
+
+
+def list_templates() -> list[dict[str, Any]]:
+    return [dict(t) for t in PROJECT_TEMPLATES]
+
+
+def get_template(template_id: str) -> dict[str, Any] | None:
+    return next((dict(t) for t in PROJECT_TEMPLATES if t["id"] == template_id), None)
