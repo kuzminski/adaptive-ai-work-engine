@@ -28,6 +28,7 @@ import { client } from "../../api/client";
 import { RepoInspectResult } from "../../api/types";
 import { useEngineStore } from "../../store/engineStore";
 import { IdeaIntakePanel, IntakePrefill } from "../intake/IdeaIntakePanel";
+import { TemplatePicker } from "../intake/TemplatePicker";
 import { StartForecast } from "../intake/StartForecast";
 
 const IMPLEMENTER_STATIC_OPTIONS = ["", "claude-3-5-sonnet", "gemini-2.5-flash", "claude-3-5-haiku"];
@@ -358,6 +359,8 @@ export const NewTaskWizardView: React.FC = () => {
               required
             />
           </div>
+
+          <TemplatePicker templates={bootstrap?.templates || []} onApply={applyIntake} />
 
           <IdeaIntakePanel repoPath={repoPath} chainMode={chainMode} onApply={applyIntake} />
 

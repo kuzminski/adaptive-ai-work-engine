@@ -180,6 +180,7 @@ export interface BootstrapData {
   control_center_available: boolean;
   slot_labels: Record<string, string>;
   presets: PolicyPreset[];
+  templates?: ProjectTemplate[];
   limits: {
     max_field_chars: number;
     max_roadmap_chars: number;
@@ -455,4 +456,22 @@ export class ApiError extends Error {
     this.status = status;
     this.details = details;
   }
+}
+
+// ── Project templates (roadmap 2.5) ────────────────────────────────────────
+
+export interface ProjectTemplate {
+  id: string;
+  kind: "cli" | "web_api" | "library" | "ui_app" | string;
+  title: string;
+  description: string;
+  goal: string;
+  first_iteration: string;
+  directions: string;
+  advanced: {
+    acceptance_criteria: string;
+    required_evidence: string;
+    forbidden_areas: string;
+    risks: any[];
+  };
 }
