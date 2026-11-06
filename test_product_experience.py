@@ -112,3 +112,17 @@ def test_adaptive_evidence_view_is_read_only_and_never_unlocks(home):
     assert data["schema"] == "AAW_ADAPTIVE_EVIDENCE_REPORT_V1" and data["runs_total"] == 0
     assert data["unlock_allowed"] is False and data["stage4_entry_met"] is False
     json.dumps(data)
+
+
+def test_gate_is_built_from_the_same_state_the_status_came_from(home, monkeypatch):
+    """Worker exited as the gate opened: state.json still says RUNNING, worker_exit.json says AWAITING_HUMAN.
+    The status is READY_FOR_DECISION, so the gate must exist too (regression: gate was None on slow runners)."""
+    seed_run("AAW_TASK_RACE01", ["Napraw błąd A", "Dodaj B"])
+    real = pv._state("AAW_TASK_RACE01")
+    stale = {**real, "status": "RUNNING"}
+    monkeypatch.setattr(pv, "_state", lambda run_id: stale)
+    monkeypatch.setattr(pv.prun, "worker_alive", lambda run_id: False)
+    product_home.write_json(prun.product_dir("AAW_TASK_RACE01") / "worker_exit.json", {"status": "AWAITING_HUMAN"})
+    view = pv.run_view("AAW_TASK_RACE01")
+    assert view["status"] == pv.S_GATE
+    assert view["gate"] is not None and view["gate"]["accept_meaning"].startswith("Akceptuj")
