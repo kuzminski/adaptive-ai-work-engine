@@ -9,6 +9,7 @@ import { useSyncExternalStore } from "react";
 import { client as defaultClient, ApiClient } from "../api/client";
 import {
   BootstrapData,
+  ContinuationDraft,
   DecisionAction,
   DrawerTab,
   EvidenceView,
@@ -39,6 +40,7 @@ export interface EngineStoreState {
   pollingActive: boolean;
   activeNav: NavItem;
   activePolicyPreset: AutonomyPreset;
+  continuationDraft: ContinuationDraft | null;
   mcpModalOpen: boolean;
   rightDrawerOpen: boolean;
 }
@@ -57,6 +59,7 @@ const initialState: EngineStoreState = {
   pollingActive: false,
   activeNav: "command-center",
   activePolicyPreset: "balanced",
+  continuationDraft: null,
   mcpModalOpen: false,
   rightDrawerOpen: true,
 };
@@ -441,6 +444,26 @@ export function createEngineStore(api: ApiClient = defaultClient) {
 
     setActiveNav: (nav: NavItem): void => {
       setState({ activeNav: nav });
+    },
+
+    /**
+     * Roadmap 2.2: ask the backend for an editable continuation (same goal, unfinished points) and open the wizard with it.
+     * Accepts the candidate at the Human Gate first when it is promotable (same as "Kontynuuj"); starts nothing.
+     */
+    prepareRoadmapEdit: async (): Promise<void> => {
+      if (!state.activeRunId) return;
+      setState({ loading: true, error: null });
+      try {
+        const result = await api.postDecision(state.activeRunId, "CONTINUE", undefined, { mode: "roadmap" });
+        if (!result?.prefill) throw new Error("Brak wersji roboczej kontynuacji");
+        setState({ continuationDraft: result.prefill, activeNav: "new-task", loading: false });
+      } catch (err: any) {
+        setState({ loading: false, error: err?.message || "Nie udało się przygotować edycji roadmapy" });
+      }
+    },
+
+    clearContinuationDraft: (): void => {
+      setState({ continuationDraft: null });
     },
 
     setActivePolicyPreset: (preset: AutonomyPreset): void => {

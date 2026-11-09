@@ -475,3 +475,23 @@ export interface ProjectTemplate {
     risks: any[];
   };
 }
+
+// ── Edited roadmap continuation (roadmap 2.2) ──────────────────────────────
+
+export interface RoadmapDiff {
+  added: string[];
+  removed: string[];
+  kept: string[];
+  human_changed: string[];
+  reordered: boolean;
+  changed: boolean;
+  summary: string;
+}
+
+/** Draft returned by POST /api/runs/<id>/decision (CONTINUE, mode "roadmap"). */
+export interface ContinuationDraft {
+  goal: string;
+  directions: string[];
+  roadmap_parent?: { run_id: string; previous_directions: string[] };
+  [key: string]: any;
+}
