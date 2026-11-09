@@ -29,6 +29,7 @@ import { RepoInspectResult } from "../../api/types";
 import { useEngineStore } from "../../store/engineStore";
 import { IdeaIntakePanel, IntakePrefill } from "../intake/IdeaIntakePanel";
 import { TemplatePicker } from "../intake/TemplatePicker";
+import { RoadmapDiffCard } from "../intake/RoadmapDiffCard";
 import { StartForecast } from "../intake/StartForecast";
 
 const IMPLEMENTER_STATIC_OPTIONS = ["", "claude-3-5-sonnet", "gemini-2.5-flash", "claude-3-5-haiku"];
@@ -40,6 +41,8 @@ export const NewTaskWizardView: React.FC = () => {
     setActivePolicyPreset,
     startRun,
     setActiveNav,
+    continuationDraft,
+    clearContinuationDraft,
   } = useEngineStore();
 
   // Form State
@@ -72,6 +75,22 @@ export const NewTaskWizardView: React.FC = () => {
   const [modelOverride, setModelOverride] = useState<{ profileId: string; rec: any } | null>(null);
   // Risks / acceptance criteria / forbidden areas copied from an accepted "Od pomysłu" proposal.
   const [intakeAdvanced, setIntakeAdvanced] = useState<IntakePrefill["advanced"] | null>(null);
+
+  // Edited continuation (roadmap 2.2): the run being continued, its accepted commit and its previous roadmap points.
+  const [roadmapParent, setRoadmapParent] = useState<{ run_id: string; previous_directions: string[] } | null>(null);
+  const [continuationBase, setContinuationBase] = useState<any>(null);
+
+  useEffect(() => {
+    if (!continuationDraft) return;
+    setGoal(continuationDraft.goal || "");
+    setFirstIteration("");
+    setDirectionsText((continuationDraft.directions || []).join("\n"));
+    setRoadmapParent(continuationDraft.roadmap_parent || null);
+    setContinuationBase(continuationDraft.base || null);
+    if (continuationDraft.repo) setRepoPath(continuationDraft.repo);
+    setIntakeAdvanced(continuationDraft.risks?.length ? { risks: continuationDraft.risks } : null);
+    clearContinuationDraft();
+  }, [continuationDraft]);
 
   const parsedDirections = directionsText
     .split("\n")
@@ -180,6 +199,8 @@ export const NewTaskWizardView: React.FC = () => {
       planning: planningModel || undefined,
       implementation: implementerModel || undefined,
       preset: activePolicyPreset,
+      ...(roadmapParent ? { roadmap_parent: roadmapParent } : {}),
+      ...(continuationBase ? { base: continuationBase } : {}),
       advanced: {
         ...(intakeAdvanced || {}),
         max_iterations: Number(maxIterations),
@@ -389,6 +410,10 @@ export const NewTaskWizardView: React.FC = () => {
               placeholder="1. Punkt pierwszy&#10;2. Punkt drugi&#10;3. Punkt trzeci"
               className="w-full bg-elevated border border-subtle rounded-lg p-3 text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 leading-relaxed"
             />
+            <div className="text-[11px] text-slate-500">
+              Zmień kolejność, dodaj lub usuń punkty. Punkt zaczynający się od [człowiek] AAW zostawi do Human Gate.
+            </div>
+            {roadmapParent && <RoadmapDiffCard previous={roadmapParent.previous_directions} current={parsedDirections} />}
           </div>
         </div>
 

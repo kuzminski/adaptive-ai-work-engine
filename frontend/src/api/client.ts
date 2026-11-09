@@ -15,6 +15,7 @@ import {
   MCPConfigureResponse,
   MCPStatus,
   RepoInspectResult,
+  RoadmapDiff,
   RunDetail,
   RunsResponse,
   StartTaskPayload,
@@ -397,6 +398,16 @@ export class ApiClient {
     return this.request<any>("/api/intake/propose", {
       method: "POST",
       body: JSON.stringify(body),
+    });
+  }
+
+  /**
+   * POST /api/roadmap/diff — explicit diff between the previous run's roadmap points and the edited ones (roadmap 2.2).
+   */
+  public async roadmapDiff(previous: string[], current: string[]): Promise<RoadmapDiff> {
+    return this.request<RoadmapDiff>("/api/roadmap/diff", {
+      method: "POST",
+      body: JSON.stringify({ previous, current }),
     });
   }
 

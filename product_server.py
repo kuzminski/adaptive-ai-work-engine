@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlparse
 import autonomy_contract as ac
 import product_home
 import product_presets
+import roadmap_edit
 import product_providers as pp
 import product_recommendations as pr
 import product_runs as prun
@@ -219,6 +220,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         "/api/repo/inspect": lambda b: prun.inspect_repo(str(b.get("path") or "")),
         "/api/repo/init": lambda b: prun.init_git_repo(str(b.get("path") or "")),
         "/api/pick-folder": app.pick_folder,
+        "/api/roadmap/diff": lambda b: roadmap_edit.diff_roadmaps(
+            [str(x) for x in (b.get("previous") or [])][:prun.MAX_DIRECTIONS], prun.split_directions(b.get("current") or [])),
         "/api/tasks/preview": lambda b: prun.public_preview(prun.preview_task(b.get("form") or {})),
         "/api/tasks/start": lambda b: prun.start_task(b.get("form") or {}),
         "/api/start": lambda b: prun.start_task(b.get("form") if "form" in b else b),
@@ -335,12 +338,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                         return prun.reject(run_id, reason=reason)
                     if decision_act == "continue":
                         mode = str(body.get("mode") or "").strip()
-                        if mode not in ("direction", "new_goal"):
+                        if mode not in ("direction", "new_goal", "roadmap"):
                             mode = "direction"
                         return prun.prepare_continuation(run_id, mode=mode)
                     raise prun.ProductError(f"Nieobsługiwana decyzja: {decision_act}")
                 mode = str(body.get("mode") or "").strip()
-                if mode not in ("direction", "new_goal"):
+                if mode not in ("direction", "new_goal", "roadmap"):
                     mode = "direction"
                 return prun.prepare_continuation(run_id, mode=mode)
             self._api(act)

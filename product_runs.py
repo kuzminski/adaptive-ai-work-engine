@@ -44,6 +44,7 @@ import aaw_experience as ex
 import autonomy_contract as ac
 import autonomy_run_lock as rl
 import product_home
+import roadmap_edit
 import product_providers as pp
 import product_recommendations as pr
 import run_cancellation as rc
@@ -445,6 +446,15 @@ def _clean_chain(value: Any) -> list[str] | None:
     return [str(v).strip() for v in value if str(v).strip()] or None
 
 
+def _clean_roadmap_parent(value: Any) -> dict[str, Any] | None:
+    """Edited-continuation link (roadmap 2.2): the run it continues and that run's points, for the roadmap diff."""
+    if not isinstance(value, Mapping) or not str(value.get("run_id") or "").strip():
+        return None
+    prev = value.get("previous_directions")
+    prev = [str(p) for p in prev if str(p).strip()][:MAX_DIRECTIONS] if isinstance(prev, (list, tuple)) else []
+    return {"run_id": str(value["run_id"]).strip()[:120], "previous_directions": prev}
+
+
 def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
     goal = str(form.get("goal") or "").strip()
     if len(goal) < 5:
@@ -489,6 +499,7 @@ def normalize_form(form: Mapping[str, Any]) -> dict[str, Any]:
             "risks": normalize_risks(risks_raw, len(directions)),
         },
         "base": form.get("base") if isinstance(form.get("base"), dict) else None,
+        "roadmap_parent": _clean_roadmap_parent(form.get("roadmap_parent")),
     }
 
 
@@ -760,6 +771,8 @@ def preview_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | N
             "(limit iteracji, eskalacja, błąd Git) lub gdy planista uzasadni brak dalszej pracy.",
             "Nie zmieniaj plików w głównym folderze repozytorium w trakcie pracy AAW — AAW to wykryje i zatrzyma się.",
         ],
+        **({"roadmap_diff": roadmap_edit.diff_roadmaps(form["roadmap_parent"]["previous_directions"], form["directions"])}
+           if form.get("roadmap_parent") else {}),
         "_form": form, "_resolution": resolution, "_mandate": mandate,
     }
 
@@ -833,6 +846,9 @@ def start_task(form_in: Mapping[str, Any], *, detection: Mapping[str, Any] | Non
     task = {
         "schema_version": TASK_SCHEMA, "run_id": run_id, "created_at": now(),
         "form": form, "mandate_input": mandate,
+        **({"roadmap_diff": {"parent_run_id": form["roadmap_parent"]["run_id"],
+                             **roadmap_edit.diff_roadmaps(form["roadmap_parent"]["previous_directions"], form["directions"])}}
+           if form.get("roadmap_parent") else {}),
         "workspace": {"repo": str(repo_top), "worktree": str(worktree), "branch": branch,
                       "base_commit": base_commit, "project_name": repo_top.name},
         "resolution": {k: resolution[k] for k in ("choices", "catalog_version", "catalog_source", "slots",
@@ -1098,7 +1114,7 @@ def prepare_continuation(run_id: str, *, mode: str) -> dict[str, Any]:
     repository's current HEAD. Never merges, never pushes.
     """
     import autonomy_controller as ctl
-    if mode not in ("direction", "new_goal"):
+    if mode not in ("direction", "new_goal", "roadmap"):
         raise ProductError("nieznany tryb kontynuacji")
     task = load_task(run_id)
     state = ctl.load_state(run_id, runs_root())
@@ -1129,7 +1145,25 @@ def prepare_continuation(run_id: str, *, mode: str) -> dict[str, Any]:
                # the run mode the user chose stays the mode of the follow-up (chain vs. classic review, exploration)
                "advanced": {"chain_mode": (form.get("advanced") or {}).get("chain_mode") is not False,
                             "exploration": (form.get("advanced") or {}).get("exploration")}}
-    if mode == "direction":
+    if mode == "roadmap":
+        # Roadmap 2.2: same goal, the previous roadmap carried over WITHOUT the points already done, to be edited
+        # (add / remove / reorder / mark [człowiek]) before START. The previous full list travels as `roadmap_parent`
+        # so the new run records an explicit diff. Risks for the whole run still apply.
+        mandate_items = {i["item_id"]: i for i in state["mandate"]["roadmap_mandate"]["items"]}
+        statuses = state.get("roadmap") or {}
+        carried: list[str] = []
+        previous: list[str] = []
+        for item_id, item in mandate_items.items():
+            if item_id == "STEP_1" or item.get("recurring"):
+                continue
+            text = ("[człowiek] " if item.get("human_required") else "") + str(item.get("title") or "")
+            previous.append(text)
+            if (statuses.get(item_id) or {}).get("status") != ac.R_DONE:
+                carried.append(text)
+        prefill.update(goal=form["goal"], first_iteration="", directions=carried,
+                       risks=[r for r in (form.get("advanced") or {}).get("risks") or [] if not r.get("item_ids")],
+                       roadmap_parent={"run_id": run_id, "previous_directions": previous})
+    elif mode == "direction":
         # Same goal, new direction: risks for the whole run still apply; point-scoped ones named old points.
         prefill.update(goal=form["goal"], first_iteration="", directions=[],
                        risks=[r for r in (form.get("advanced") or {}).get("risks") or [] if not r.get("item_ids")])

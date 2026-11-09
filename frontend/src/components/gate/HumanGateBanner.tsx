@@ -23,6 +23,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { DecisionAction, RunDetail } from "../../api/types";
+import { useEngineStore } from "../../store/engineStore";
 import { GateDecisionModal } from "./GateDecisionModal";
 import { SettlementCard } from "./SettlementCard";
 
@@ -75,6 +76,7 @@ export const HumanGateBanner: React.FC<HumanGateBannerProps> = ({
   className = "",
   isModalOpen = false,
 }) => {
+  const { prepareRoadmapEdit } = useEngineStore();
   const [internalModalMode, setInternalModalMode] = useState<DecisionAction | null>(null);
 
   const isActive = isHumanGateState(run);
@@ -312,6 +314,17 @@ export const HumanGateBanner: React.FC<HumanGateBannerProps> = ({
               </span>
               <Play className="w-3.5 h-3.5 text-sky-200" />
               <span>Kontynuuj</span>
+            </button>
+
+            {/* Roadmap 2.2: continue as a NEW run with the unfinished roadmap points opened for editing. */}
+            <button
+              type="button"
+              onClick={() => prepareRoadmapEdit()}
+              data-testid="gate-btn-edit-roadmap"
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-elevated hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-lg border border-subtle flex items-center justify-center gap-2 transition"
+              title="Przygotuj nowe zadanie z roadmapą do edycji (nic nie startuje)"
+            >
+              <span>Edytuj roadmapę</span>
             </button>
           </div>
         </div>
